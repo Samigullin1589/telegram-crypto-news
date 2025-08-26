@@ -11,7 +11,7 @@ import re
 import google.generativeai as genai
 from openai import OpenAI
 
-print("✅ [INIT] Запуск финальной версии бота v4.1 (Persistent Memory)...")
+print("✅ [INIT] Запуск финальной версии бота v4.2 (Anti-Spam)...")
 
 # --- 1. Конфигурация ---
 try:
@@ -35,9 +35,6 @@ RSS_FEEDS = {
     'Мировая Экономика 🌍': 'https://feeds.reuters.com/reuters/businessNews'
 }
 
-# --- НОВОЕ: Логика для постоянного хранилища ---
-# Render предоставляет путь к диску через переменную окружения.
-# Если ее нет (локальный запуск), используем текущую папку.
 DATA_DIR = os.environ.get('RENDER_DISK_MOUNT_PATH', '.')
 POSTED_URLS_FILE = os.path.join(DATA_DIR, 'posted_urls.txt')
 print(f"💾 [INFO] Файл памяти будет храниться по пути: {POSTED_URLS_FILE}")
@@ -105,8 +102,8 @@ def sanitize_markdown(text):
 
 # --- 3. Функции для работы с AI ---
 
-async def summarize_with_gemini(title, text, category_emoji):
-    print(f"🤖 [AI] Отправляю в Gemini: {title}")
+async def get_ai_summary(title, text, category):
+    category_emoji = category.split()[-1]
     prompt = f"""
     Ты — ведущий аналитик издания 'Bloomberg Crypto'. Твоя задача — проанализировать текст новости и подготовить профессиональный, структурированный пост для Telegram-канала 'Crypto Compass'.
     Твой ответ должен быть исключительно на русском языке и строго следовать формату Markdown ниже. Не добавляй никаких комментариев или вводных фраз. Твой ответ должен начинаться сразу с заголовка.
@@ -122,38 +119,18 @@ async def summarize_with_gemini(title, text, category_emoji):
 
     *(Сгенерируй 3 релевантных хэштега на русском, например: #майнинг #россия #закон)*
     """
-    response = await gemini_model.generate_content_async(f"{prompt}\n\nТЕКСТ СТАТЬИ ДЛЯ АНАЛИЗА:\n{text}")
-    return response.text
-
-async def summarize_with_gpt(title, text, category_emoji):
-    print(f"🤖 [AI] Отправляю в GPT (резерв): {title}")
-    system_prompt = f"""Ты — ведущий аналитик издания 'Bloomberg Crypto'. Твоя задача — проанализировать текст новости и подготовить профессиональный, структурированный пост для Telegram-канала 'Crypto Compass'. Ответ должен быть исключительно на русском языке и строго следовать формату Markdown ниже. Не добавляй никаких комментариев или вводных фраз. Твой ответ должен начинаться сразу с заголовка.
-
-    {category_emoji} **Заголовок новости**
-
-    *Главная суть новости в 2-3 предложениях. Объясни, почему это важно.*
-
-    **Детали:**
-    - Ключевой факт или цифра.
-    - Контекст или причина.
-    - Возможные последствия.
-
-    #хэштег1 #хэштег2 #хэштег3
-    """
-    user_prompt = f"Заголовок: {title}\n\nПолный текст статьи:\n{text}"
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(None, lambda: openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]))
-    return response.choices[0].message.content
-
-async def get_ai_summary(title, text, category):
-    category_emoji = category.split()[-1]
     try:
-        summary = await summarize_with_gemini(title, text, category_emoji)
-        return sanitize_markdown(summary)
+        print(f"🤖 [AI] Отправляю в Gemini: {title}")
+        response = await gemini_model.generate_content_async(f"{prompt}\n\nТЕКСТ СТАТЬИ ДЛЯ АНАЛИЗА:\n{text}")
+        return sanitize_markdown(response.text)
     except Exception as e:
         print(f"⚠️ [WARN] Ошибка Gemini: {e}. Переключаюсь на GPT...")
         try:
-            summary = await summarize_with_gpt(title, text, category_emoji)
+            print(f"🤖 [AI] Отправляю в GPT (резерв): {title}")
+            user_prompt = f"Заголовок: {title}\n\nПолный текст статьи:\n{text}"
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, lambda: openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": prompt}, {"role": "user", "content": user_prompt}]))
+            summary = response.choices[0].message.content
             return sanitize_markdown(summary)
         except Exception as e_gpt:
             print(f"❌ [ERROR] Ошибка GPT: {e_gpt}. Оба AI провайдера недоступны.")
@@ -177,10 +154,20 @@ async def send_message_to_channel(bot, message, link, image_url):
 async def main_loop():
     bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
     posted_urls = load_posted_urls()
+
+    # --- ГЛАВНОЕ ИЗМЕНЕНИЕ: УСТАНОВКА БАЗОВОЙ ЛИНИИ ---
+    if not posted_urls:
+        print("🔥 [FIRST RUN] Первый запуск с пустой памятью. Устанавливаю базовую линию новостей, чтобы не спамить.")
+        for category, url in RSS_FEEDS.items():
+            feed = feedparser.parse(url)
+            for entry in feed.entries:
+                if entry.link not in posted_urls:
+                    posted_urls.add(entry.link)
+                    save_posted_url(entry.link)
+        print(f"✅ [BASELINE] Базовая линия установлена. Проигнорировано {len(posted_urls)} старых статей.")
+
     print(f"✅ [START] Бот в рабочем режиме. Загружено {len(posted_urls)} ранее опубликованных ссылок.")
     
-    is_backlog_cleared = False
-
     while True:
         print(f"\n--- [CYCLE] Новая итерация проверки: {time.ctime()} ---")
         all_new_entries = []
@@ -193,12 +180,9 @@ async def main_loop():
         
         if all_new_entries:
             sorted_entries = sorted(all_new_entries, key=lambda x: x[0].get('published_parsed', time.gmtime()))
-            print(f"🔥 [BACKLOG] Найдено {len(sorted_entries)} новых статей для публикации.")
+            print(f"🔥 [QUEUE] Найдено {len(sorted_entries)} новых статей для публикации.")
             
             for entry, category in sorted_entries:
-                if entry.link in posted_urls:
-                    continue
-
                 print(f"🔍 [PROCESS] Обрабатываю: {entry.title}")
                 
                 content = get_article_content(entry.link, entry)
@@ -212,14 +196,11 @@ async def main_loop():
                         posted_urls.add(entry.link)
                         save_posted_url(entry.link)
                         
-                        pause_duration = 20 if not is_backlog_cleared else 900
-                        print(f"🕒 [PAUSE] Пауза {pause_duration} секунд.")
-                        await asyncio.sleep(pause_duration)
+                        print(f"🕒 [PAUSE] Публикация успешна. Следующая возможна через 15 минут.")
+                        await asyncio.sleep(900) # 15 минут паузы в штатном режиме
                 else:
                     print("❌ [SKIP] Не удалось обработать новость.")
                     await asyncio.sleep(5)
-            
-            is_backlog_cleared = True
         else:
             print("👍 [INFO] Новых статей не найдено.")
 
