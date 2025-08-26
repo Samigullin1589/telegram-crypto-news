@@ -11,7 +11,7 @@ import re
 import google.generativeai as genai
 from openai import OpenAI
 
-print("✅ [INIT] Запуск финальной версии бота v4.0 (Industrial Edition)...")
+print("✅ [INIT] Запуск финальной версии бота v4.1 (Persistent Memory)...")
 
 # --- 1. Конфигурация ---
 try:
@@ -35,7 +35,13 @@ RSS_FEEDS = {
     'Мировая Экономика 🌍': 'https://feeds.reuters.com/reuters/businessNews'
 }
 
-POSTED_URLS_FILE = 'posted_urls.txt'
+# --- НОВОЕ: Логика для постоянного хранилища ---
+# Render предоставляет путь к диску через переменную окружения.
+# Если ее нет (локальный запуск), используем текущую папку.
+DATA_DIR = os.environ.get('RENDER_DISK_MOUNT_PATH', '.')
+POSTED_URLS_FILE = os.path.join(DATA_DIR, 'posted_urls.txt')
+print(f"💾 [INFO] Файл памяти будет храниться по пути: {POSTED_URLS_FILE}")
+
 
 # --- 2. Функции-помощники ---
 
@@ -88,24 +94,16 @@ def get_article_content(url, entry):
         return {'text': None, 'image_url': image_url}
 
 def sanitize_markdown(text):
-    """
-    НОВАЯ ФУНКЦИЯ: Проверяет и исправляет 'битую' Markdown разметку, чтобы избежать ошибок Telegram API.
-    """
-    # Исправляем незакрытые жирные и курсивные теги
     for char in ['*', '_']:
-        # Для двойных символов (жирный)
         double_char = char * 2
         if text.count(double_char) % 2 != 0:
-            text = text.rsplit(double_char, 1)[0] # Удаляем последнее вхождение
-        # Для одинарных символов (курсив)
+            text = text.rsplit(double_char, 1)[0]
         if text.count(char) % 2 != 0:
             text = text.rsplit(char, 1)[0]
-
-    # Можно добавить и другие правила очистки при необходимости
     return text
 
 
-# --- 3. Функции для работы с AI (без изменений) ---
+# --- 3. Функции для работы с AI ---
 
 async def summarize_with_gemini(title, text, category_emoji):
     print(f"🤖 [AI] Отправляю в Gemini: {title}")
@@ -198,7 +196,6 @@ async def main_loop():
             print(f"🔥 [BACKLOG] Найдено {len(sorted_entries)} новых статей для публикации.")
             
             for entry, category in sorted_entries:
-                # Проверяем еще раз, на случай если ссылка была добавлена в параллельном потоке
                 if entry.link in posted_urls:
                     continue
 
@@ -215,15 +212,14 @@ async def main_loop():
                         posted_urls.add(entry.link)
                         save_posted_url(entry.link)
                         
-                        # Если мы все еще разгребаем бэклог, пауза короткая
-                        pause_duration = 20 if not is_backlog_cleared else 900 # 20 секунд для бэклога, 15 минут в штатном режиме
+                        pause_duration = 20 if not is_backlog_cleared else 900
                         print(f"🕒 [PAUSE] Пауза {pause_duration} секунд.")
                         await asyncio.sleep(pause_duration)
                 else:
                     print("❌ [SKIP] Не удалось обработать новость.")
                     await asyncio.sleep(5)
             
-            is_backlog_cleared = True # Считаем, что после полной обработки бэклог разгребен
+            is_backlog_cleared = True
         else:
             print("👍 [INFO] Новых статей не найдено.")
 
