@@ -1,4 +1,4 @@
-# main.py v8.3
+# main.py v8.4
 import os
 import telegram
 import asyncio
@@ -15,17 +15,19 @@ import google.generativeai as genai
 from openai import OpenAI
 
 # ==============================================================================
-# --- ВЕРСИЯ 8.3 - FINAL POLISHED ---
+# --- ВЕРСИЯ 8.4 - REDIRECT FIX & SOURCE SWAP ---
 #
 # ИЗМЕНЕНИЯ:
-# 1. ПОЛНЫЙ КОД: Убраны все сокращения и заглушки ("pass").
-# 2. НАДЁЖНЫЙ ПОИСК ИЗОБРАЖЕНИЙ: Логика преобразования относительных URL
-#    в абсолютные теперь применяется ко всем источникам изображений
-#    (внутри статьи, из RSS-фида и из мета-тегов), обеспечивая
-#    максимальную надёжность.
+# 1. ИСПРАВЛЕНА ОШИБКА TELEGRAM: Бот теперь определяет финальный URL статьи
+#    после всех редиректов (например, в feedburner) и использует его.
+#    Это решает проблему "Failed to get http url content".
+# 2. ЗАМЕНЁН ИСТОЧНИК РБК: Нестабильный на данной платформе источник РБК
+#    заменён на более надёжный RSS-поток от "Ведомостей".
+# 3. ВСЕ ПРЕДЫДУЩИЕ УЛУЧШЕНИЯ СОХРАНЕНЫ: Параллельная загрузка, SQLite,
+#    защита от спама при первом запуске, умная обработка квот AI.
 # ==============================================================================
 
-print("✅ [INIT] Запуск улучшенной версии бота v8.3 (Final Polished)...")
+print("✅ [INIT] Запуск улучшенной версии бота v8.4 (Redirect Fix & Source Swap)...")
 
 # --- 1. Конфигурация ---
 try:
@@ -41,7 +43,8 @@ except KeyError as e:
 genai.configure(api_key=GEMINI_API_KEY)
 
 RSS_FEEDS = {
-    'Майнинг РФ и Мир 🇷🇺': 'https://static.feed.rbc.ru/rbc/logical/footer/news.rss?categories=crypto',
+    # ИЗМЕНЕНО: РБК заменён на Ведомости из-за проблем с доступностью
+    'Экономика и Бизнес 🇷🇺': 'https://www.vedomosti.ru/rss/news',
     'Новости Майнинга ⚙️': 'https://cointelegraph.com/rss/tag/mining',
     'Крипто-новости СНГ 💡': 'https://forklog.com/feed',
     'Мировая Экономика 🌍': 'https://feeds.feedburner.com/reuters/businessNews',
@@ -120,7 +123,6 @@ class AIHandler:
         category_emoji = category.split()[-1]
         prompt = self.prompt_template.format(emoji=category_emoji, title=title)
 
-        # Попытки с Gemini
         for attempt in range(max_retries):
             try:
                 print(f"🤖 [AI] Попытка {attempt + 1}/{max_retries}. Отправляю в Gemini: {title}")
@@ -137,7 +139,6 @@ class AIHandler:
                     print(f"⏳ [AI] Пауза на {delay} секунд перед следующей попыткой.")
                     await asyncio.sleep(delay)
         
-        # Резервный вызов GPT
         print("🤖 [AI] Переключаюсь на GPT (резерв).")
         try:
             user_prompt = f"Заголовок: {title}\n\nПолный текст статьи:\n{text}"
@@ -199,23 +200,22 @@ class NewsProcessor:
     def _is_likely_logo(self, image_url):
         if not image_url:
             return True
-        lower_url = image_url.lower()
-        if any(keyword in lower_url for keyword in ['logo', 'brand', 'icon', 'sprite', 'avatar']):
-            return True
-        return False
+        return any(keyword in image_url.lower() for keyword in ['logo', 'brand', 'icon', 'sprite', 'avatar'])
 
     async def _get_article_content(self, url, entry):
         main_image_url = None
         article_text = entry.summary
+        final_url = url
 
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
             async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(url, timeout=15) as response:
                     response.raise_for_status()
+                    final_url = str(response.url)
                     html_text = await response.text()
-            soup = BeautifulSoup(html_text, 'lxml')
             
+            soup = BeautifulSoup(html_text, 'lxml')
             article_body = soup.find('article') or soup.find('div', class_='post-content') or soup.find('body')
 
             if article_body:
@@ -224,39 +224,36 @@ class NewsProcessor:
                 
                 article_text = ' '.join(article_body.get_text().split())[:12000]
 
-                # ПРИОРИТЕТ 1: Изображения в тексте статьи
                 for img_tag in article_body.find_all('img', src=True):
                     src = img_tag.get('src')
                     if src and not self._is_likely_logo(src):
-                        main_image_url = urljoin(url, src)
+                        main_image_url = urljoin(final_url, src)
                         break
             
-            # ПРИОРИТЕТ 2: Изображения из RSS-фида
             if not main_image_url:
                 if 'media_content' in entry and entry.media_content:
                     rss_img_candidate = entry.media_content[0].get('url')
                     if rss_img_candidate and not self._is_likely_logo(rss_img_candidate):
-                        main_image_url = urljoin(url, rss_img_candidate)
+                        main_image_url = urljoin(final_url, rss_img_candidate)
                 elif 'enclosures' in entry and entry.enclosures:
                     for enc in entry.enclosures:
                         if 'image' in enc.type:
                             rss_img_candidate = enc.href
                             if rss_img_candidate and not self._is_likely_logo(rss_img_candidate):
-                                main_image_url = urljoin(url, rss_img_candidate)
+                                main_image_url = urljoin(final_url, rss_img_candidate)
                                 break
             
-            # ПРИОРИТЕТ 3: og:image (последний шанс)
             if not main_image_url:
                 og_image = soup.find('meta', property='og:image')
                 if og_image and og_image.get('content'):
                     og_img_candidate = og_image['content']
                     if not self._is_likely_logo(og_img_candidate):
-                        main_image_url = urljoin(url, og_img_candidate)
+                        main_image_url = urljoin(final_url, og_img_candidate)
             
-            return {'text': article_text, 'image_url': main_image_url}
+            return {'text': article_text, 'image_url': main_image_url, 'final_url': final_url}
         except Exception as e:
             print(f"🕸️ [WARN] Не удалось получить полный текст/картинку для {url}: {e}")
-            return {'text': article_text, 'image_url': None}
+            return {'text': entry.summary, 'image_url': None, 'final_url': url}
 
     async def _fetch_and_parse_feed(self, category, url, session):
         try:
@@ -275,7 +272,7 @@ class NewsProcessor:
             
             new_entries = []
             for entry in feed.entries:
-                if entry.link and entry.link not in self.posted_urls_cache:
+                if hasattr(entry, 'link') and entry.link and entry.link not in self.posted_urls_cache:
                     new_entries.append((entry, category))
             
             print(f"📰 [FETCH] Проверено: {category}. Найдено новых статей: {len(new_entries)}")
@@ -293,7 +290,7 @@ class NewsProcessor:
             results = await asyncio.gather(*tasks)
             all_new_entries = [entry for feed_result in results for entry in feed_result]
 
-        baseline_links = {entry[0].link for entry in all_new_entries if entry[0].link}
+        baseline_links = {entry[0].link for entry in all_new_entries if hasattr(entry[0], 'link') and entry[0].link}
         
         if baseline_links:
             self.db.save_links_bulk(baseline_links)
@@ -324,15 +321,17 @@ class NewsProcessor:
                 print(f"🔥 [QUEUE] Найдено {len(sorted_entries)} новых статей. Начинаю публикацию по очереди.")
                 
                 for entry, category in sorted_entries:
-                    if entry.link in self.posted_urls_cache:
+                    if not hasattr(entry, 'link') or not entry.link or entry.link in self.posted_urls_cache:
                         continue
 
                     print(f"\n🔍 [PROCESS] Обрабатываю: {entry.title} ({category})")
                     content = await self._get_article_content(entry.link, entry)
+                    
+                    final_link_for_post = content.get('final_url', entry.link)
                     formatted_post = await self.ai.get_summary(entry.title, content['text'], category)
 
                     if formatted_post:
-                        success = await self.poster.post(formatted_post, entry.link, content['image_url'])
+                        success = await self.poster.post(formatted_post, final_link_for_post, content['image_url'])
                         if success:
                             self.db.save_link(entry.link)
                             self.posted_urls_cache.add(entry.link)
