@@ -1,4 +1,4 @@
-# main.py v8.4
+# main.py v8.5
 import os
 import telegram
 import asyncio
@@ -15,19 +15,17 @@ import google.generativeai as genai
 from openai import OpenAI
 
 # ==============================================================================
-# --- ВЕРСИЯ 8.4 - REDIRECT FIX & SOURCE SWAP ---
+# --- ВЕРСИЯ 8.5 - MAXIMUM STABILITY ---
 #
 # ИЗМЕНЕНИЯ:
-# 1. ИСПРАВЛЕНА ОШИБКА TELEGRAM: Бот теперь определяет финальный URL статьи
-#    после всех редиректов (например, в feedburner) и использует его.
-#    Это решает проблему "Failed to get http url content".
-# 2. ЗАМЕНЁН ИСТОЧНИК РБК: Нестабильный на данной платформе источник РБК
-#    заменён на более надёжный RSS-поток от "Ведомостей".
-# 3. ВСЕ ПРЕДЫДУЩИЕ УЛУЧШЕНИЯ СОХРАНЕНЫ: Параллельная загрузка, SQLite,
-#    защита от спама при первом запуске, умная обработка квот AI.
+# 1. ИСПРАВЛЕН КРАШ AttributeError: Бот больше не падает, если в RSS-статье
+#    отсутствуют необязательные поля (например, 'summary' или 'title').
+#    Используется безопасный доступ к данным через .get().
+# 2. ПОВЫШЕНА ОБЩАЯ НАДЁЖНОСТЬ: Код стал устойчив к неполным или
+#    нестандартным данным от любых RSS-источников.
 # ==============================================================================
 
-print("✅ [INIT] Запуск улучшенной версии бота v8.4 (Redirect Fix & Source Swap)...")
+print("✅ [INIT] Запуск улучшенной версии бота v8.5 (Maximum Stability)...")
 
 # --- 1. Конфигурация ---
 try:
@@ -43,7 +41,6 @@ except KeyError as e:
 genai.configure(api_key=GEMINI_API_KEY)
 
 RSS_FEEDS = {
-    # ИЗМЕНЕНО: РБК заменён на Ведомости из-за проблем с доступностью
     'Экономика и Бизнес 🇷🇺': 'https://www.vedomosti.ru/rss/news',
     'Новости Майнинга ⚙️': 'https://cointelegraph.com/rss/tag/mining',
     'Крипто-новости СНГ 💡': 'https://forklog.com/feed',
@@ -121,6 +118,11 @@ class AIHandler:
         max_retries = 3
         backoff_factor = 10
         category_emoji = category.split()[-1]
+        
+        if not text:
+            print("⚠️ [AI] Текст для анализа пуст. Пропускаю саммари.")
+            return None
+        
         prompt = self.prompt_template.format(emoji=category_emoji, title=title)
 
         for attempt in range(max_retries):
@@ -204,7 +206,8 @@ class NewsProcessor:
 
     async def _get_article_content(self, url, entry):
         main_image_url = None
-        article_text = entry.summary
+        # ИСПРАВЛЕНО: Безопасно получаем summary, если его нет - будет пустая строка
+        article_text = entry.get('summary', '')
         final_url = url
 
         try:
@@ -222,7 +225,9 @@ class NewsProcessor:
                 for element in (article_body.find_all("script") + article_body.find_all("style")):
                     element.decompose()
                 
-                article_text = ' '.join(article_body.get_text().split())[:12000]
+                parsed_text = ' '.join(article_body.get_text().split())
+                if parsed_text: # Используем распарсенный текст только если он не пустой
+                    article_text = parsed_text[:12000]
 
                 for img_tag in article_body.find_all('img', src=True):
                     src = img_tag.get('src')
@@ -253,7 +258,7 @@ class NewsProcessor:
             return {'text': article_text, 'image_url': main_image_url, 'final_url': final_url}
         except Exception as e:
             print(f"🕸️ [WARN] Не удалось получить полный текст/картинку для {url}: {e}")
-            return {'text': entry.summary, 'image_url': None, 'final_url': url}
+            return {'text': article_text, 'image_url': None, 'final_url': url}
 
     async def _fetch_and_parse_feed(self, category, url, session):
         try:
@@ -272,7 +277,8 @@ class NewsProcessor:
             
             new_entries = []
             for entry in feed.entries:
-                if hasattr(entry, 'link') and entry.link and entry.link not in self.posted_urls_cache:
+                # ИСПРАВЛЕНО: Проверяем наличие 'link' безопасно
+                if entry.get('link') and entry.get('link') not in self.posted_urls_cache:
                     new_entries.append((entry, category))
             
             print(f"📰 [FETCH] Проверено: {category}. Найдено новых статей: {len(new_entries)}")
@@ -290,7 +296,7 @@ class NewsProcessor:
             results = await asyncio.gather(*tasks)
             all_new_entries = [entry for feed_result in results for entry in feed_result]
 
-        baseline_links = {entry[0].link for entry in all_new_entries if hasattr(entry[0], 'link') and entry[0].link}
+        baseline_links = {entry[0].get('link') for entry in all_new_entries if entry[0].get('link')}
         
         if baseline_links:
             self.db.save_links_bulk(baseline_links)
@@ -321,20 +327,23 @@ class NewsProcessor:
                 print(f"🔥 [QUEUE] Найдено {len(sorted_entries)} новых статей. Начинаю публикацию по очереди.")
                 
                 for entry, category in sorted_entries:
-                    if not hasattr(entry, 'link') or not entry.link or entry.link in self.posted_urls_cache:
+                    link = entry.get('link')
+                    title = entry.get('title', 'Без заголовка')
+
+                    if not link or link in self.posted_urls_cache:
                         continue
 
-                    print(f"\n🔍 [PROCESS] Обрабатываю: {entry.title} ({category})")
-                    content = await self._get_article_content(entry.link, entry)
+                    print(f"\n🔍 [PROCESS] Обрабатываю: {title} ({category})")
+                    content = await self._get_article_content(link, entry)
                     
-                    final_link_for_post = content.get('final_url', entry.link)
-                    formatted_post = await self.ai.get_summary(entry.title, content['text'], category)
+                    final_link_for_post = content.get('final_url', link)
+                    formatted_post = await self.ai.get_summary(title, content['text'], category)
 
                     if formatted_post:
                         success = await self.poster.post(formatted_post, final_link_for_post, content['image_url'])
                         if success:
-                            self.db.save_link(entry.link)
-                            self.posted_urls_cache.add(entry.link)
+                            self.db.save_link(link)
+                            self.posted_urls_cache.add(link)
                             print(f"🕒 [PAUSE] Публикация успешна. Следующая через {POST_DELAY_SECONDS / 60:.0f} минут.")
                             await asyncio.sleep(POST_DELAY_SECONDS)
                     else:
