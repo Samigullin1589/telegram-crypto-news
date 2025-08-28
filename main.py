@@ -1,4 +1,4 @@
-# main.py v8.1
+# main.py v8.3
 import os
 import telegram
 import asyncio
@@ -8,25 +8,24 @@ from bs4 import BeautifulSoup
 import re
 import sqlite3
 import aiohttp
+from urllib.parse import urljoin
 
 # --- AI Провайдеры ---
 import google.generativeai as genai
 from openai import OpenAI
 
 # ==============================================================================
-# --- ВЕРСИЯ 8.1 - STABILITY AND FIRST RUN FIX ---
+# --- ВЕРСИЯ 8.3 - FINAL POLISHED ---
 #
 # ИЗМЕНЕНИЯ:
-# 1. ИСПРАВЛЕН "СПАМ-ШТОРМ": Реализована корректная логика первого запуска.
-#    При пустой БД бот сперва наполняет ее текущими статьями без публикации.
-# 2. ИСПРАВЛЕНЫ RSS-ИСТОЧНИКИ: Обновлены URL для РБК (https) и Reuters для
-#    стабильной работы.
-# 3. УМНЫЙ ОБРАБОТЧИК КВОТЫ AI: При получении ошибки о превышении квоты (429)
-#    бот больше не делает бессмысленных повторных попыток, а сразу переключается
-#    на резервный AI (GPT).
+# 1. ПОЛНЫЙ КОД: Убраны все сокращения и заглушки ("pass").
+# 2. НАДЁЖНЫЙ ПОИСК ИЗОБРАЖЕНИЙ: Логика преобразования относительных URL
+#    в абсолютные теперь применяется ко всем источникам изображений
+#    (внутри статьи, из RSS-фида и из мета-тегов), обеспечивая
+#    максимальную надёжность.
 # ==============================================================================
 
-print("✅ [INIT] Запуск улучшенной версии бота v8.1 (Stability and First Run Fix)...")
+print("✅ [INIT] Запуск улучшенной версии бота v8.3 (Final Polished)...")
 
 # --- 1. Конфигурация ---
 try:
@@ -42,19 +41,18 @@ except KeyError as e:
 genai.configure(api_key=GEMINI_API_KEY)
 
 RSS_FEEDS = {
-    # ИЗМЕНЕНО: http -> https для стабильности
     'Майнинг РФ и Мир 🇷🇺': 'https://static.feed.rbc.ru/rbc/logical/footer/news.rss?categories=crypto',
     'Новости Майнинга ⚙️': 'https://cointelegraph.com/rss/tag/mining',
     'Крипто-новости СНГ 💡': 'https://forklog.com/feed',
-    # ИЗМЕНЕНО: Найден новый, рабочий URL
     'Мировая Экономика 🌍': 'https://feeds.feedburner.com/reuters/businessNews',
     'Технологии и Оборудование 💻': 'https://www.cnews.ru/inc/rss/telecom.xml'
 }
 
 # --- КОНСТАНТЫ ---
-POST_DELAY_SECONDS = 900  # 15 минут
-IDLE_DELAY_SECONDS = 300  # 5 минут
+POST_DELAY_SECONDS = 900
+IDLE_DELAY_SECONDS = 300
 DB_PATH = os.path.join(os.environ.get('RENDER_DISK_MOUNT_PATH', '.'), 'news_database.sqlite')
+
 
 # --- 2. Управляющий класс для Базы Данных ---
 class DatabaseManager:
@@ -78,14 +76,12 @@ class DatabaseManager:
         return sqlite3.connect(self.db_path)
 
     def save_link(self, link):
-        """Сохраняет одну ссылку в базу данных."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("INSERT OR IGNORE INTO posted_articles (link) VALUES (?)", (link,))
             conn.commit()
-            
+
     def save_links_bulk(self, links):
-        """Массово сохраняет список ссылок (для базовой линии)."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.executemany("INSERT OR IGNORE INTO posted_articles (link) VALUES (?)", [(link,) for link in links])
@@ -131,7 +127,6 @@ class AIHandler:
                 response = await self.gemini_model.generate_content_async(f"{prompt}\n\nТЕКСТ СТАТЬИ ДЛЯ АНАЛИЗА:\n{text}")
                 return self._sanitize_markdown(response.text)
             except Exception as e:
-                # ИЗМЕНЕНО: Умный обработчик квоты
                 if "429" in str(e) or "quota" in str(e).lower():
                     print(f"🚨 [AI] Квота Gemini исчерпана. Немедленное переключение на GPT.")
                     break
@@ -201,15 +196,18 @@ class NewsProcessor:
         self.poster = TelegramPoster(TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID)
         self.posted_urls_cache = set()
 
+    def _is_likely_logo(self, image_url):
+        if not image_url:
+            return True
+        lower_url = image_url.lower()
+        if any(keyword in lower_url for keyword in ['logo', 'brand', 'icon', 'sprite', 'avatar']):
+            return True
+        return False
+
     async def _get_article_content(self, url, entry):
-        image_url = None
-        if 'media_content' in entry and entry.media_content:
-            image_url = entry.media_content[0].get('url')
-        elif 'enclosures' in entry and entry.enclosures:
-            for enc in entry.enclosures:
-                if 'image' in enc.type:
-                    image_url = enc.href
-                    break
+        main_image_url = None
+        article_text = entry.summary
+
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
             async with aiohttp.ClientSession(headers=headers) as session:
@@ -217,20 +215,48 @@ class NewsProcessor:
                     response.raise_for_status()
                     html_text = await response.text()
             soup = BeautifulSoup(html_text, 'lxml')
-            if not image_url:
-                og_image = soup.find('meta', property='og:image')
-                if og_image and og_image.get('content'):
-                    image_url = og_image['content']
+            
             article_body = soup.find('article') or soup.find('div', class_='post-content') or soup.find('body')
-            text = entry.summary
+
             if article_body:
                 for element in (article_body.find_all("script") + article_body.find_all("style")):
                     element.decompose()
-                text = ' '.join(article_body.get_text().split())[:12000]
-            return {'text': text, 'image_url': image_url}
+                
+                article_text = ' '.join(article_body.get_text().split())[:12000]
+
+                # ПРИОРИТЕТ 1: Изображения в тексте статьи
+                for img_tag in article_body.find_all('img', src=True):
+                    src = img_tag.get('src')
+                    if src and not self._is_likely_logo(src):
+                        main_image_url = urljoin(url, src)
+                        break
+            
+            # ПРИОРИТЕТ 2: Изображения из RSS-фида
+            if not main_image_url:
+                if 'media_content' in entry and entry.media_content:
+                    rss_img_candidate = entry.media_content[0].get('url')
+                    if rss_img_candidate and not self._is_likely_logo(rss_img_candidate):
+                        main_image_url = urljoin(url, rss_img_candidate)
+                elif 'enclosures' in entry and entry.enclosures:
+                    for enc in entry.enclosures:
+                        if 'image' in enc.type:
+                            rss_img_candidate = enc.href
+                            if rss_img_candidate and not self._is_likely_logo(rss_img_candidate):
+                                main_image_url = urljoin(url, rss_img_candidate)
+                                break
+            
+            # ПРИОРИТЕТ 3: og:image (последний шанс)
+            if not main_image_url:
+                og_image = soup.find('meta', property='og:image')
+                if og_image and og_image.get('content'):
+                    og_img_candidate = og_image['content']
+                    if not self._is_likely_logo(og_img_candidate):
+                        main_image_url = urljoin(url, og_img_candidate)
+            
+            return {'text': article_text, 'image_url': main_image_url}
         except Exception as e:
             print(f"🕸️ [WARN] Не удалось получить полный текст/картинку для {url}: {e}")
-            return {'text': entry.summary, 'image_url': image_url}
+            return {'text': article_text, 'image_url': None}
 
     async def _fetch_and_parse_feed(self, category, url, session):
         try:
@@ -259,7 +285,6 @@ class NewsProcessor:
             return []
 
     async def _run_initial_baseline(self):
-        """НОВАЯ ФУНКЦИЯ: Заполняет БД при первом запуске, чтобы избежать спама."""
         print("🔥 [FIRST RUN] База данных пуста. Заполняю ее текущими статьями...")
         
         all_new_entries = []
@@ -278,7 +303,6 @@ class NewsProcessor:
             print("ℹ️ [BASELINE] Не найдено статей для установки базовой линии.")
 
     async def run(self):
-        """Основной цикл работы бота."""
         self.posted_urls_cache = self.db.get_all_links()
         
         if not self.posted_urls_cache:
@@ -316,7 +340,7 @@ class NewsProcessor:
                             await asyncio.sleep(POST_DELAY_SECONDS)
                     else:
                         print("❌ [SKIP] Не удалось сгенерировать саммари. Пропускаю новость.")
-                        await asyncio.sleep(5) # Короткая пауза, чтобы не долбить API в случае массовых сбоев
+                        await asyncio.sleep(5)
             else:
                 print("👍 [INFO] Новых статей не найдено.")
 
