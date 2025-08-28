@@ -11,7 +11,7 @@ import re
 import google.generativeai as genai
 from openai import OpenAI
 
-print("✅ [INIT] Запуск финальной версии бота v7.0 (Priority Queue)...")
+print("✅ [INIT] Запуск улучшенной версии бота v7.1 (Full Queue Processing)...")
 
 # --- 1. Конфигурация ---
 try:
@@ -34,6 +34,13 @@ RSS_FEEDS = {
     'Крипто-новости СНГ 💡': 'https://forklog.com/feed',
     'Мировая Экономика 🌍': 'https://feeds.reuters.com/reuters/businessNews'
 }
+
+# --- КОНСТАНТЫ ДЛЯ УПРАВЛЕНИЯ ПАУЗАМИ ---
+# Пауза между публикациями, чтобы не спамить (в секундах)
+POST_DELAY_SECONDS = 900 # 15 минут
+
+# Пауза, когда нет новых статей (в секундах)
+IDLE_DELAY_SECONDS = 300 # 5 минут
 
 DATA_DIR = os.environ.get('RENDER_DISK_MOUNT_PATH', '.')
 POSTED_URLS_FILE = os.path.join(DATA_DIR, 'posted_urls.txt')
@@ -81,22 +88,29 @@ def get_article_content(url, entry):
             for element in (article_body.find_all("script") + article_body.find_all("style")):
                 element.decompose()
             text = ' '.join(article_body.get_text().split())
-            text = text[:8000] if len(text) > 200 else None
-        
+            # Оставляем больше текста для качественного анализа
+            text = text[:12000] if len(text) > 200 else entry.summary
+        else:
+            text = entry.summary
+            
         return {'text': text, 'image_url': image_url}
         
     except requests.RequestException as e:
-        print(f"🕸️ [WARN] Не удалось получить полный текст/картинку: {e}")
-        return {'text': None, 'image_url': image_url}
+        print(f"🕸️ [WARN] Не удалось получить полный текст/картинку для {url}: {e}")
+        # Возвращаем краткое описание из RSS, если парсинг не удался
+        return {'text': entry.summary, 'image_url': image_url}
 
 def sanitize_markdown(text):
+    # Эта функция пытается исправить незакрытые теги Markdown, которые ломают парсинг в Telegram
+    # Проверяем каждый символ отдельно
     for char in ['*', '_', '`']:
-        triple_char = char * 3
-        if text.count(triple_char) % 2 != 0:
-            text = text.rsplit(triple_char, 1)[0]
-        double_char = char * 2
-        if text.count(double_char) % 2 != 0:
-            text = text.rsplit(double_char, 1)[0]
+        # Проверка тройных символов (```, ***, ___)
+        if text.count(char * 3) % 2 != 0:
+            text = text.rsplit(char * 3, 1)[0]
+        # Проверка двойных символов (**, __)
+        if text.count(char * 2) % 2 != 0:
+            text = text.rsplit(char * 2, 1)[0]
+        # Проверка одинарных символов (*, _)
         if text.count(char) % 2 != 0:
             text = text.rsplit(char, 1)[0]
     return text
@@ -147,10 +161,24 @@ async def send_message_to_channel(bot, message, link, image_url):
             await bot.send_photo(chat_id=TELEGRAM_CHANNEL_ID, photo=image_url, caption=full_message[:1024], parse_mode='Markdown')
         else:
             await bot.send_message(chat_id=TELEGRAM_CHANNEL_ID, text=full_message, parse_mode='Markdown', disable_web_page_preview=True)
-        print(f"✅ [POST] Новость успешно опубликована.")
+        print(f"✅ [POST] Новость '{link}' успешно опубликована.")
         return True
+    except telegram.error.BadRequest as e:
+        print(f"❌ [ERROR] Ошибка форматирования Markdown при отправке в Telegram: {e}")
+        print("ℹ️ [INFO] Попытка отправить сообщение без форматирования...")
+        try:
+            plain_text_message = re.sub(r'[*_`\[\]()~>#+\-=|{}.!]', '', full_message) # Убираем все спецсимволы
+            if image_url:
+                await bot.send_photo(chat_id=TELEGRAM_CHANNEL_ID, photo=image_url, caption=plain_text_message[:1024])
+            else:
+                await bot.send_message(chat_id=TELEGRAM_CHANNEL_ID, text=plain_text_message, disable_web_page_preview=True)
+            print("✅ [POST] Сообщение успешно отправлено в текстовом виде.")
+            return True
+        except Exception as e_plain:
+            print(f"❌ [FATAL] Повторная отправка также не удалась: {e_plain}")
+            return False
     except Exception as e:
-        print(f"❌ [ERROR] Ошибка при отправке в Telegram: {e}")
+        print(f"❌ [ERROR] Неизвестная ошибка при отправке в Telegram: {e}")
         return False
 
 async def main_loop():
@@ -178,6 +206,10 @@ async def main_loop():
         for category, url in RSS_FEEDS.items():
             try:
                 feed = feedparser.parse(url)
+                if feed.bozo:
+                    # `bozo` - признак того, что RSS-лента может быть некорректной
+                    print(f"🕸️ [WARN] RSS-лента для '{category}' может быть некорректной или временно недоступна.")
+                
                 new_count = 0
                 for entry in feed.entries:
                     if entry.link not in posted_urls:
@@ -185,40 +217,47 @@ async def main_loop():
                         new_count += 1
                 print(f"📰 [FETCH] Проверено: {category}. Найдено новых статей: {new_count}")
             except Exception as e:
-                print(f"🕸️ [WARN] Не удалось проверить RSS-ленту {url}: {e}")
+                print(f"🕸️ [CRITICAL] Не удалось проверить RSS-ленту {url}: {e}")
 
         if all_new_entries:
-            # Сортируем все найденные новости от старых к новым
+            # Сортируем все найденные новости от старых к новым, чтобы публиковать в хронологическом порядке
             sorted_entries = sorted(all_new_entries, key=lambda x: x[0].get('published_parsed', time.gmtime()))
             
-            # --- ФИНАЛЬНАЯ ЛОГИКА: ПУБЛИКУЕМ ТОЛЬКО ОДНУ, САМУЮ СВЕЖУЮ ---
-            entry_to_post, category = sorted_entries[-1] # Берем последнюю (самую свежую) новость
+            print(f"🔥 [QUEUE] Найдено {len(sorted_entries)} новых статей. Начинаю публикацию по очереди.")
             
-            print(f"🔥 [SELECT] Найдено {len(sorted_entries)} новых статей. Выбрана самая свежая для публикации: {entry_to_post.title}")
-            
-            content = get_article_content(entry_to_post.link, entry_to_post)
-            full_text = content['text'] if content['text'] else entry_to_post.summary
+            # --- ГЛАВНОЕ ИЗМЕНЕНИЕ: ОБРАБАТЫВАЕМ КАЖДУЮ НОВОСТЬ В ОЧЕРЕДИ ---
+            for entry, category in sorted_entries:
+                # Проверяем еще раз, вдруг за время обработки предыдущих новостей эта ссылка уже была добавлена
+                if entry.link in posted_urls:
+                    continue
 
-            formatted_post = await get_ai_summary(entry_to_post.title, full_text, category)
+                print(f"\n🔍 [PROCESS] Обрабатываю: {entry.title} ({category})")
+                
+                content = get_article_content(entry.link, entry)
+                
+                formatted_post = await get_ai_summary(entry.title, content['text'], category)
 
-            if formatted_post:
-                success = await send_message_to_channel(bot, formatted_post, entry_to_post.link, content['image_url'])
-                if success:
-                    # Отмечаем ТОЛЬКО ОДНУ опубликованную новость как просмотренную
-                    posted_urls.add(entry_to_post.link)
-                    save_posted_url(entry_to_post.link)
-                    
-                    print(f"🕒 [PAUSE] Публикация успешна. Следующая проверка через 15 минут.")
-                    await asyncio.sleep(900)
+                if formatted_post:
+                    success = await send_message_to_channel(bot, formatted_post, entry.link, content['image_url'])
+                    if success:
+                        # Отмечаем новость как опубликованную ТОЛЬКО после успешной отправки
+                        posted_urls.add(entry.link)
+                        save_posted_url(entry.link)
+                        
+                        # Пауза МЕЖДУ публикациями, чтобы не затопить канал сообщениями
+                        print(f"🕒 [PAUSE] Публикация успешна. Следующая через {POST_DELAY_SECONDS / 60:.0f} минут.")
+                        await asyncio.sleep(POST_DELAY_SECONDS)
                 else:
-                    await asyncio.sleep(60) # Короткая пауза если отправка не удалась
-            else:
-                print("❌ [SKIP] Не удалось обработать новость. Короткая пауза.")
-                await asyncio.sleep(60)
+                    print("❌ [SKIP] Не удалось сгенерировать саммари. Пропускаю новость.")
+                    await asyncio.sleep(5) # Короткая пауза на всякий случай
+
+            print("✅ [QUEUE] Все новости из текущей пачки обработаны.")
         else:
             print("👍 [INFO] Новых статей не найдено.")
-            # Если новостей нет, проверяем чаще
-            await asyncio.sleep(300) # 5 минут паузы до следующей проверки
+
+        # Если новостей не было, проверяем чаще. Если были - цикл начнется сразу после последней публикации.
+        print(f"--- [PAUSE] Следующая проверка через {IDLE_DELAY_SECONDS / 60:.0f} минут. ---")
+        await asyncio.sleep(IDLE_DELAY_SECONDS)
 
 if __name__ == '__main__':
     try:
