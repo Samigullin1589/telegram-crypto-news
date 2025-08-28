@@ -1,4 +1,4 @@
-# main.py v8.5
+# main.py v9.1
 import os
 import telegram
 import asyncio
@@ -9,23 +9,26 @@ import re
 import sqlite3
 import aiohttp
 from urllib.parse import urljoin
+import io
+from PIL import Image
 
 # --- AI Провайдеры ---
 import google.generativeai as genai
 from openai import OpenAI
 
 # ==============================================================================
-# --- ВЕРСИЯ 8.5 - MAXIMUM STABILITY ---
+# --- ВЕРСИЯ 9.1 - GOLD STANDARD (FINAL OPTIMIZATIONS) ---
 #
-# ИЗМЕНЕНИЯ:
-# 1. ИСПРАВЛЕН КРАШ AttributeError: Бот больше не падает, если в RSS-статье
-#    отсутствуют необязательные поля (например, 'summary' или 'title').
-#    Используется безопасный доступ к данным через .get().
-# 2. ПОВЫШЕНА ОБЩАЯ НАДЁЖНОСТЬ: Код стал устойчив к неполным или
-#    нестандартным данным от любых RSS-источников.
+# ФИНАЛЬНЫЕ ИЗМЕНЕНИЯ:
+# 1. ОПТИМИЗАЦИЯ ПЕРВОГО ЗАПУСКА: Устранена двойная загрузка RSS-лент
+#    при создании "базовой линии". Бот теперь работает быстрее при старте.
+# 2. ОПТИМИЗАЦИЯ СЕТИ: Улучшена проверка изображений — теперь используется
+#    единое сетевое подключение, что ускоряет обработку страниц.
+# 3. ПОВЫШЕНИЕ НАДЁЖНОСТИ: Добавлены дополнительные проверки на наличие
+#    атрибутов у RSS-записей для максимальной стабильности.
 # ==============================================================================
 
-print("✅ [INIT] Запуск улучшенной версии бота v8.5 (Maximum Stability)...")
+print("✅ [INIT] Запуск улучшенной версии бота v9.1 (Gold Standard)...")
 
 # --- 1. Конфигурация ---
 try:
@@ -37,23 +40,13 @@ except KeyError as e:
     print(f"❌ [CRITICAL] Не найдена переменная окружения {e}. Завершение работы.")
     exit()
 
-# Настройка клиентов AI
 genai.configure(api_key=GEMINI_API_KEY)
 
 RSS_FEEDS = {
-    # 1. Глубокая аналитика и лонгриды из РФ/СНГ от тех. сообщества
     'Крипто и Блокчейн РФ/СНГ 🇷🇺': 'https://habr.com/ru/rss/hubs/cryptocurrency/',
-    
-    # 2. Глобальные новости ИСКЛЮЧИТЕЛЬНО о майнинге
     'Новости Майнинга (Мир) ⚙️': 'https://cointelegraph.com/rss/tag/mining',
-    
-    # 3. Оперативные "горячие" новости из СНГ
     'Крипто-новости СНГ 💡': 'https://forklog.com/feed',
-    
-    # 4. Глобальные новости крипто-индустрии и рынков (замена Reuters)
     'Мировые Крипто-новости 🌍': 'https://www.coindesk.com/arc/outboundfeeds/rss/',
-    
-    # 5. Новости майнинга и оборудования в СНГ (замена CNews)
     'Майнинг и Железо (СНГ) 💻': 'https://forklog.com/hub/mining/feed'
 }
 
@@ -61,7 +54,8 @@ RSS_FEEDS = {
 POST_DELAY_SECONDS = 900
 IDLE_DELAY_SECONDS = 300
 DB_PATH = os.path.join(os.environ.get('RENDER_DISK_MOUNT_PATH', '.'), 'news_database.sqlite')
-
+MIN_IMAGE_WIDTH = 400
+MIN_IMAGE_HEIGHT = 200
 
 # --- 2. Управляющий класс для Базы Данных ---
 class DatabaseManager:
@@ -86,21 +80,17 @@ class DatabaseManager:
 
     def save_link(self, link):
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO posted_articles (link) VALUES (?)", (link,))
+            conn.execute("INSERT OR IGNORE INTO posted_articles (link) VALUES (?)", (link,))
             conn.commit()
 
     def save_links_bulk(self, links):
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.executemany("INSERT OR IGNORE INTO posted_articles (link) VALUES (?)", [(link,) for link in links])
+            conn.executemany("INSERT OR IGNORE INTO posted_articles (link) VALUES (?)", [(link,) for link in links])
             conn.commit()
 
     def get_all_links(self):
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT link FROM posted_articles")
-            return {row[0] for row in cursor.fetchall()}
+            return {row[0] for row in conn.execute("SELECT link FROM posted_articles")}
 
 # --- 3. Класс для работы с AI ---
 class AIHandler:
@@ -209,65 +199,79 @@ class NewsProcessor:
         self.posted_urls_cache = set()
 
     def _is_likely_logo(self, image_url):
-        if not image_url:
-            return True
+        if not image_url: return True
         return any(keyword in image_url.lower() for keyword in ['logo', 'brand', 'icon', 'sprite', 'avatar'])
 
-    async def _get_article_content(self, url, entry):
-        main_image_url = None
-        # ИСПРАВЛЕНО: Безопасно получаем summary, если его нет - будет пустая строка
+    async def _get_valid_image_url(self, image_candidates, session):
+        for url in image_candidates:
+            if not url or self._is_likely_logo(url):
+                continue
+            
+            try:
+                async with session.get(url, timeout=10) as response:
+                    if response.status != 200: continue
+                    image_data = await response.content.read(4096)
+                    if not image_data: continue
+
+                    img = Image.open(io.BytesIO(image_data))
+                    if img.width >= MIN_IMAGE_WIDTH and img.height >= MIN_IMAGE_HEIGHT:
+                        print(f"🖼️ [IMG] Найдено подходящее изображение: {url} ({img.width}x{img.height})")
+                        return url
+                    else:
+                        print(f"🖼️ [IMG] Изображение отклонено (слишком маленькое): {url} ({img.width}x{img.height})")
+            except Exception as e:
+                print(f"🖼️ [IMG] Не удалось проверить изображение {url}: {e}")
+                continue
+        return None
+
+    async def _get_article_content(self, url, entry, session):
         article_text = entry.get('summary', '')
         final_url = url
-
+        image_candidates = []
+        main_image_url = None
         try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(url, timeout=15) as response:
-                    response.raise_for_status()
-                    final_url = str(response.url)
-                    html_text = await response.text()
+            async with session.get(url, timeout=15) as response:
+                response.raise_for_status()
+                final_url = str(response.url)
+                html_text = await response.text()
             
             soup = BeautifulSoup(html_text, 'lxml')
             article_body = soup.find('article') or soup.find('div', class_='post-content') or soup.find('body')
-
             if article_body:
                 for element in (article_body.find_all("script") + article_body.find_all("style")):
                     element.decompose()
                 
                 parsed_text = ' '.join(article_body.get_text().split())
-                if parsed_text: # Используем распарсенный текст только если он не пустой
+                if parsed_text:
                     article_text = parsed_text[:12000]
 
                 for img_tag in article_body.find_all('img', src=True):
-                    src = img_tag.get('src')
-                    if src and not self._is_likely_logo(src):
-                        main_image_url = urljoin(final_url, src)
-                        break
+                    if src := img_tag.get('src'):
+                        image_candidates.append(urljoin(final_url, src))
             
-            if not main_image_url:
-                if 'media_content' in entry and entry.media_content:
-                    rss_img_candidate = entry.media_content[0].get('url')
-                    if rss_img_candidate and not self._is_likely_logo(rss_img_candidate):
-                        main_image_url = urljoin(final_url, rss_img_candidate)
-                elif 'enclosures' in entry and entry.enclosures:
-                    for enc in entry.enclosures:
-                        if 'image' in enc.type:
-                            rss_img_candidate = enc.href
-                            if rss_img_candidate and not self._is_likely_logo(rss_img_candidate):
-                                main_image_url = urljoin(final_url, rss_img_candidate)
-                                break
+            if 'media_content' in entry and entry.media_content:
+                if media_url := entry.media_content[0].get('url'):
+                    image_candidates.append(urljoin(final_url, media_url))
+            elif 'enclosures' in entry and entry.enclosures:
+                for enc in entry.enclosures:
+                    if 'image' in enc.type and enc.href:
+                        image_candidates.append(urljoin(final_url, enc.href))
             
-            if not main_image_url:
-                og_image = soup.find('meta', property='og:image')
-                if og_image and og_image.get('content'):
-                    og_img_candidate = og_image['content']
-                    if not self._is_likely_logo(og_img_candidate):
-                        main_image_url = urljoin(final_url, og_img_candidate)
+            if og_image := soup.find('meta', property='og:image'):
+                if content := og_image.get('content'):
+                    image_candidates.append(urljoin(final_url, content))
+            
+            main_image_url = await self._get_valid_image_url(image_candidates, session)
             
             return {'text': article_text, 'image_url': main_image_url, 'final_url': final_url}
         except Exception as e:
             print(f"🕸️ [WARN] Не удалось получить полный текст/картинку для {url}: {e}")
             return {'text': article_text, 'image_url': None, 'final_url': url}
+
+    async def _fetch_feed_entries(self, session):
+        tasks = [self._fetch_and_parse_feed(cat, url, session) for cat, url in RSS_FEEDS.items()]
+        results = await asyncio.gather(*tasks)
+        return [entry for feed_result in results for entry in feed_result]
 
     async def _fetch_and_parse_feed(self, category, url, session):
         try:
@@ -277,90 +281,75 @@ class NewsProcessor:
                     print(f"🕸️ [WARN] Источник '{category}' вернул статус {response.status}")
                     return []
                 feed_text = await response.text()
-            
             loop = asyncio.get_event_loop()
             feed = await loop.run_in_executor(None, feedparser.parse, feed_text)
-
             if feed.bozo:
                 print(f"🕸️ [WARN] RSS-лента для '{category}' может быть некорректной.")
-            
-            new_entries = []
-            for entry in feed.entries:
-                # ИСПРАВЛЕНО: Проверяем наличие 'link' безопасно
-                if entry.get('link') and entry.get('link') not in self.posted_urls_cache:
-                    new_entries.append((entry, category))
-            
+            new_entries = [(entry, category) for entry in feed.entries if entry.get('link') and entry.get('link') not in self.posted_urls_cache]
             print(f"📰 [FETCH] Проверено: {category}. Найдено новых статей: {len(new_entries)}")
             return new_entries
         except Exception as e:
             print(f"❌ [CRITICAL] Не удалось обработать RSS-ленту {category}: {e}")
             return []
 
-    async def _run_initial_baseline(self):
-        print("🔥 [FIRST RUN] База данных пуста. Заполняю ее текущими статьями...")
-        
-        all_new_entries = []
-        async with aiohttp.ClientSession() as session:
-            tasks = [self._fetch_and_parse_feed(cat, url, session) for cat, url in RSS_FEEDS.items()]
-            results = await asyncio.gather(*tasks)
-            all_new_entries = [entry for feed_result in results for entry in feed_result]
-
-        baseline_links = {entry[0].get('link') for entry in all_new_entries if entry[0].get('link')}
-        
-        if baseline_links:
-            self.db.save_links_bulk(baseline_links)
-            self.posted_urls_cache.update(baseline_links)
-            print(f"✅ [BASELINE] Базовая линия установлена. В базу добавлено {len(baseline_links)} существующих статей.")
-        else:
-            print("ℹ️ [BASELINE] Не найдено статей для установки базовой линии.")
-
     async def run(self):
         self.posted_urls_cache = self.db.get_all_links()
+        all_new_entries = []
         
+        # ОПТИМИЗАЦИЯ: Логика первого запуска теперь вынесена сюда
         if not self.posted_urls_cache:
-            await self._run_initial_baseline()
+            print("🔥 [FIRST RUN] База данных пуста. Заполняю ее текущими статьями...")
+            async with aiohttp.ClientSession() as session:
+                all_new_entries = await self._fetch_feed_entries(session)
+            
+            baseline_links = {entry[0].get('link') for entry in all_new_entries if entry[0].get('link')}
+            if baseline_links:
+                self.db.save_links_bulk(baseline_links)
+                self.posted_urls_cache.update(baseline_links)
+                print(f"✅ [BASELINE] Базовая линия установлена. В базу добавлено {len(baseline_links)} статей.")
         
-        print(f"✅ [START] Бот в рабочем режиме. Загружено {len(self.posted_urls_cache)} ранее опубликованных ссылок.")
+        print(f"✅ [START] Бот в рабочем режиме. Загружено {len(self.posted_urls_cache)} ссылок.")
 
         while True:
-            print(f"\n--- [CYCLE] Новая итерация проверки: {time.ctime()} ---")
-            
-            all_new_entries = []
-            async with aiohttp.ClientSession() as session:
-                tasks = [self._fetch_and_parse_feed(cat, url, session) for cat, url in RSS_FEEDS.items()]
-                results = await asyncio.gather(*tasks)
-                all_new_entries = [entry for feed_result in results for entry in feed_result]
+            # ОПТИМИЗАЦИЯ: Не делаем лишний запрос, если уже есть данные с baseline
+            if not all_new_entries:
+                print(f"\n--- [CYCLE] Новая итерация проверки: {time.ctime()} ---")
+                async with aiohttp.ClientSession() as session:
+                    all_new_entries = await self._fetch_feed_entries(session)
 
             if all_new_entries:
                 sorted_entries = sorted(all_new_entries, key=lambda x: x[0].get('published_parsed', time.gmtime()))
                 print(f"🔥 [QUEUE] Найдено {len(sorted_entries)} новых статей. Начинаю публикацию по очереди.")
                 
-                for entry, category in sorted_entries:
-                    link = entry.get('link')
-                    title = entry.get('title', 'Без заголовка')
+                # ОПТИМИЗАЦИЯ: Единая сессия для обработки всей очереди
+                async with aiohttp.ClientSession() as session:
+                    for entry, category in sorted_entries:
+                        link = entry.get('link')
+                        title = entry.get('title', 'Без заголовка')
 
-                    if not link or link in self.posted_urls_cache:
-                        continue
+                        if not link or link in self.posted_urls_cache:
+                            continue
 
-                    print(f"\n🔍 [PROCESS] Обрабатываю: {title} ({category})")
-                    content = await self._get_article_content(link, entry)
-                    
-                    final_link_for_post = content.get('final_url', link)
-                    formatted_post = await self.ai.get_summary(title, content['text'], category)
+                        print(f"\n🔍 [PROCESS] Обрабатываю: {title} ({category})")
+                        content = await self._get_article_content(link, entry, session)
+                        
+                        final_link = content.get('final_url', link)
+                        formatted_post = await self.ai.get_summary(title, content['text'], category)
 
-                    if formatted_post:
-                        success = await self.poster.post(formatted_post, final_link_for_post, content['image_url'])
-                        if success:
-                            self.db.save_link(link)
-                            self.posted_urls_cache.add(link)
-                            print(f"🕒 [PAUSE] Публикация успешна. Следующая через {POST_DELAY_SECONDS / 60:.0f} минут.")
-                            await asyncio.sleep(POST_DELAY_SECONDS)
-                    else:
-                        print("❌ [SKIP] Не удалось сгенерировать саммари. Пропускаю новость.")
-                        await asyncio.sleep(5)
+                        if formatted_post:
+                            success = await self.poster.post(formatted_post, final_link, content['image_url'])
+                            if success:
+                                self.db.save_link(link)
+                                self.posted_urls_cache.add(link)
+                                print(f"🕒 [PAUSE] Публикация успешна. Следующая через {POST_DELAY_SECONDS / 60:.0f} минут.")
+                                await asyncio.sleep(POST_DELAY_SECONDS)
+                        else:
+                            print("❌ [SKIP] Не удалось сгенерировать саммари. Пропускаю новость.")
+                            await asyncio.sleep(5)
             else:
                 print("👍 [INFO] Новых статей не найдено.")
 
+            all_new_entries = [] # Очищаем очередь после обработки
             print(f"--- [PAUSE] Следующая проверка через {IDLE_DELAY_SECONDS / 60:.0f} минут. ---")
             await asyncio.sleep(IDLE_DELAY_SECONDS)
 
