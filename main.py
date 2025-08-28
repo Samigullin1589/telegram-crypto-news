@@ -11,7 +11,7 @@ import re
 import google.generativeai as genai
 from openai import OpenAI
 
-print("✅ [INIT] Запуск финальной версии бота v4.2 (Anti-Spam)...")
+print("✅ [INIT] Запуск финальной версии бота v5.1 (Bugfix)...")
 
 # --- 1. Конфигурация ---
 try:
@@ -74,7 +74,6 @@ def get_article_content(url, entry):
             og_image = soup.find('meta', property='og:image')
             if og_image and og_image.get('content'):
                 image_url = og_image['content']
-                print(f"🖼️ [IMG] Изображение найдено через og:image.")
 
         article_body = soup.find('article') or soup.find('div', class_='post-content') or soup.find('body')
         text = None
@@ -91,7 +90,10 @@ def get_article_content(url, entry):
         return {'text': None, 'image_url': image_url}
 
 def sanitize_markdown(text):
-    for char in ['*', '_']:
+    for char in ['*', '_', '`']:
+        triple_char = char * 3
+        if text.count(triple_char) % 2 != 0:
+            text = text.rsplit(triple_char, 1)[0]
         double_char = char * 2
         if text.count(double_char) % 2 != 0:
             text = text.rsplit(double_char, 1)[0]
@@ -155,15 +157,17 @@ async def main_loop():
     bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
     posted_urls = load_posted_urls()
 
-    # --- ГЛАВНОЕ ИЗМЕНЕНИЕ: УСТАНОВКА БАЗОВОЙ ЛИНИИ ---
     if not posted_urls:
-        print("🔥 [FIRST RUN] Первый запуск с пустой памятью. Устанавливаю базовую линию новостей, чтобы не спамить.")
+        print("🔥 [FIRST RUN] Первый запуск. Устанавливаю базовую линию новостей, чтобы не спамить.")
         for category, url in RSS_FEEDS.items():
-            feed = feedparser.parse(url)
-            for entry in feed.entries:
-                if entry.link not in posted_urls:
-                    posted_urls.add(entry.link)
-                    save_posted_url(entry.link)
+            try:
+                feed = feedparser.parse(url)
+                for entry in feed.entries:
+                    if entry.link not in posted_urls:
+                        posted_urls.add(entry.link)
+                        save_posted_url(entry.link)
+            except Exception as e:
+                print(f"🕸️ [WARN] Не удалось обработать RSS-ленту {url} при первом запуске: {e}")
         print(f"✅ [BASELINE] Базовая линия установлена. Проигнорировано {len(posted_urls)} старых статей.")
 
     print(f"✅ [START] Бот в рабочем режиме. Загружено {len(posted_urls)} ранее опубликованных ссылок.")
@@ -172,35 +176,45 @@ async def main_loop():
         print(f"\n--- [CYCLE] Новая итерация проверки: {time.ctime()} ---")
         all_new_entries = []
         for category, url in RSS_FEEDS.items():
-            print(f"📰 [FETCH] Проверяю RSS-ленту: {category}")
-            feed = feedparser.parse(url)
-            for entry in feed.entries:
-                if entry.link not in posted_urls:
-                    all_new_entries.append((entry, category))
-        
+            try:
+                feed = feedparser.parse(url)
+                new_count = 0
+                for entry in feed.entries:
+                    if entry.link not in posted_urls:
+                        all_new_entries.append((entry, category))
+                        new_count += 1
+                print(f"📰 [FETCH] Проверено: {category}. Найдено новых статей: {new_count}")
+            except Exception as e:
+                print(f"🕸️ [WARN] Не удалось проверить RSS-ленту {url}: {e}")
+
         if all_new_entries:
+            # Сортируем все найденные новости от старых к новым
             sorted_entries = sorted(all_new_entries, key=lambda x: x[0].get('published_parsed', time.gmtime()))
-            print(f"🔥 [QUEUE] Найдено {len(sorted_entries)} новых статей для публикации.")
             
-            for entry, category in sorted_entries:
-                print(f"🔍 [PROCESS] Обрабатываю: {entry.title}")
-                
-                content = get_article_content(entry.link, entry)
-                full_text = content['text'] if content['text'] else entry.summary
+            # --- ИСПРАВЛЕННАЯ ЛОГИКА: ПУБЛИКУЕМ ПО ОДНОЙ, НАЧИНАЯ С САМОЙ СТАРОЙ ИЗ НОВЫХ ---
+            entry_to_post, category = sorted_entries[0] # Берем первую (самую старую из новых) новость
+            
+            print(f"🔥 [SELECT] Найдено {len(sorted_entries)} новых статей. Выбрана самая ранняя для публикации: {entry_to_post.title}")
+            
+            content = get_article_content(entry_to_post.link, entry_to_post)
+            full_text = content['text'] if content['text'] else entry_to_post.summary
 
-                formatted_post = await get_ai_summary(entry.title, full_text, category)
+            formatted_post = await get_ai_summary(entry_to_post.title, full_text, category)
 
-                if formatted_post:
-                    success = await send_message_to_channel(bot, formatted_post, entry.link, content['image_url'])
-                    if success:
-                        posted_urls.add(entry.link)
-                        save_posted_url(entry.link)
-                        
-                        print(f"🕒 [PAUSE] Публикация успешна. Следующая возможна через 15 минут.")
-                        await asyncio.sleep(900) # 15 минут паузы в штатном режиме
+            if formatted_post:
+                success = await send_message_to_channel(bot, formatted_post, entry_to_post.link, content['image_url'])
+                if success:
+                    # Отмечаем ТОЛЬКО ОДНУ опубликованную новость как просмотренную
+                    posted_urls.add(entry_to_post.link)
+                    save_posted_url(entry_to_post.link)
+                    
+                    print(f"🕒 [PAUSE] Публикация успешна. Следующая проверка через 15 минут.")
+                    await asyncio.sleep(900)
                 else:
-                    print("❌ [SKIP] Не удалось обработать новость.")
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(60)
+            else:
+                print("❌ [SKIP] Не удалось обработать новость. Короткая пауза.")
+                await asyncio.sleep(60)
         else:
             print("👍 [INFO] Новых статей не найдено.")
 
