@@ -280,11 +280,14 @@ class NewsProcessor:
                 if response.status != 200:
                     print(f"🕸️ [WARN] Источник '{category}' вернул статус {response.status}")
                     return []
-                feed_text = await response.text()
+                feed_bytes = await response.read()
+            
             loop = asyncio.get_event_loop()
-            feed = await loop.run_in_executor(None, feedparser.parse, feed_text)
+            feed = await loop.run_in_executor(None, feedparser.parse, feed_bytes)
+            
             if feed.bozo:
-                print(f"🕸️ [WARN] RSS-лента для '{category}' может быть некорректной.")
+                print(f"🕸️ [WARN] RSS-лента для '{category}' может быть некорректной. Причина: {feed.bozo_exception}")
+            
             new_entries = [(entry, category) for entry in feed.entries if entry.get('link') and entry.get('link') not in self.posted_urls_cache]
             print(f"📰 [FETCH] Проверено: {category}. Найдено новых статей: {len(new_entries)}")
             return new_entries
@@ -296,7 +299,6 @@ class NewsProcessor:
         self.posted_urls_cache = self.db.get_all_links()
         all_new_entries = []
         
-        # ОПТИМИЗАЦИЯ: Логика первого запуска теперь вынесена сюда
         if not self.posted_urls_cache:
             print("🔥 [FIRST RUN] База данных пуста. Заполняю ее текущими статьями...")
             async with aiohttp.ClientSession() as session:
@@ -311,7 +313,6 @@ class NewsProcessor:
         print(f"✅ [START] Бот в рабочем режиме. Загружено {len(self.posted_urls_cache)} ссылок.")
 
         while True:
-            # ОПТИМИЗАЦИЯ: Не делаем лишний запрос, если уже есть данные с baseline
             if not all_new_entries:
                 print(f"\n--- [CYCLE] Новая итерация проверки: {time.ctime()} ---")
                 async with aiohttp.ClientSession() as session:
@@ -321,7 +322,6 @@ class NewsProcessor:
                 sorted_entries = sorted(all_new_entries, key=lambda x: x[0].get('published_parsed', time.gmtime()))
                 print(f"🔥 [QUEUE] Найдено {len(sorted_entries)} новых статей. Начинаю публикацию по очереди.")
                 
-                # ОПТИМИЗАЦИЯ: Единая сессия для обработки всей очереди
                 async with aiohttp.ClientSession() as session:
                     for entry, category in sorted_entries:
                         link = entry.get('link')
@@ -349,7 +349,7 @@ class NewsProcessor:
             else:
                 print("👍 [INFO] Новых статей не найдено.")
 
-            all_new_entries = [] # Очищаем очередь после обработки
+            all_new_entries = []
             print(f"--- [PAUSE] Следующая проверка через {IDLE_DELAY_SECONDS / 60:.0f} минут. ---")
             await asyncio.sleep(IDLE_DELAY_SECONDS)
 
