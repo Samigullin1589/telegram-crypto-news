@@ -19,10 +19,12 @@ class NewsProcessor:
         self.posted_urls_cache = set()
     
     def _normalize_url(self, url):
+        """Очищает URL от всех query-параметров (UTM и т.д.)."""
         parts = urlparse(url)
         return urlunparse((parts.scheme, parts.netloc, parts.path, '', '', ''))
     
     async def _fetch_and_parse_feed(self, category, url, session):
+        """Асинхронно загружает и парсит одну RSS-ленту."""
         try:
             print(f"📡 [FETCH] Запрашиваю: {category}")
             async with session.get(url, timeout=20) as response:
@@ -30,17 +32,22 @@ class NewsProcessor:
                     print(f"🕸️ [WARN] Источник '{category}' вернул статус {response.status}")
                     return []
                 feed_bytes = await response.read()
+            
             loop = asyncio.get_event_loop()
             feed = await loop.run_in_executor(None, feedparser.parse, feed_bytes)
+            
             if feed.bozo:
                 print(f"🕸️ [WARN] RSS-лента для '{category}' может быть некорректной. Причина: {feed.bozo_exception}")
+            
             new_entries = []
             for entry in feed.entries:
                 original_link = entry.get('link')
                 if not original_link: continue
+                
                 normalized_link = self._normalize_url(original_link)
                 if normalized_link not in self.posted_urls_cache:
                     new_entries.append((entry, category))
+            
             print(f"📰 [FETCH] Проверено: {category}. Найдено новых статей: {len(new_entries)}")
             return new_entries
         except Exception as e:
@@ -48,30 +55,39 @@ class NewsProcessor:
             return []
 
     async def _fetch_feed_entries(self, session):
+        """Параллельно запускает загрузку всех RSS-лент."""
         tasks = [self._fetch_and_parse_feed(cat, url, session) for cat, url in config.RSS_FEEDS.items()]
         results = await asyncio.gather(*tasks)
         return [entry for feed_result in results for entry in feed_result]
 
     async def run(self):
+        """Основной цикл работы бота с короткоживущими сессиями."""
         self.posted_urls_cache = self.db.get_all_links()
-        all_new_entries = []
         
-        async with aiohttp.ClientSession() as session:
-            if not self.posted_urls_cache:
-                print("🔥 [FIRST RUN] База данных пуста. Заполняю ее текущими статьями...")
-                all_new_entries = await self._fetch_feed_entries(session)
-                baseline_links = {self._normalize_url(entry[0].get('link')) for entry in all_new_entries if entry[0].get('link')}
-                if baseline_links:
-                    self.db.save_links_bulk(baseline_links)
-                    self.posted_urls_cache.update(baseline_links)
-                    print(f"✅ [BASELINE] Базовая линия установлена. В базу добавлено {len(baseline_links)} статей.")
-            
-            print(f"✅ [START] Бот в рабочем режиме. Загружено {len(self.posted_urls_cache)} ссылок.")
+        # Флаг для однократного выполнения логики первого запуска
+        is_first_run = not self.posted_urls_cache
+        
+        print(f"✅ [START] Бот в рабочем режиме. Загружено {len(self.posted_urls_cache)} ссылок.")
 
-            while True:
-                if not all_new_entries:
-                    print(f"\n--- [CYCLE] Новая итерация проверки: {time.ctime()} ---")
-                    all_new_entries = await self._fetch_feed_entries(session)
+        while True:
+            all_new_entries = []
+            
+            # --- ГЛАВНОЕ ИЗМЕНЕНИЕ: Сессия создаётся для каждого цикла ---
+            async with aiohttp.ClientSession(headers=config.COMMON_HEADERS) as session:
+                if is_first_run:
+                    print("🔥 [FIRST RUN] База данных пуста. Заполняю ее текущими статьями...")
+                    # Получаем статьи для baseline, но не публикуем их сразу
+                    baseline_entries = await self._fetch_feed_entries(session)
+                    baseline_links = {self._normalize_url(entry[0].get('link')) for entry in baseline_entries if entry[0].get('link')}
+                    if baseline_links:
+                        self.db.save_links_bulk(baseline_links)
+                        self.posted_urls_cache.update(baseline_links)
+                        print(f"✅ [BASELINE] Базовая линия установлена. В базу добавлено {len(baseline_links)} статей.")
+                    is_first_run = False # Выключаем флаг
+                
+                # Основная проверка
+                print(f"\n--- [CYCLE] Новая итерация проверки: {time.ctime()} ---")
+                all_new_entries = await self._fetch_feed_entries(session)
 
                 if all_new_entries:
                     sorted_entries = sorted(all_new_entries, key=lambda x: x[0].get('published_parsed', time.gmtime()))
@@ -81,6 +97,7 @@ class NewsProcessor:
                         original_link = entry.get('link')
                         title = entry.get('title', 'Без заголовка')
                         if not original_link: continue
+
                         normalized_link = self._normalize_url(original_link)
                         if normalized_link in self.posted_urls_cache: continue
 
@@ -103,6 +120,7 @@ class NewsProcessor:
                 else:
                     print("👍 [INFO] Новых статей не найдено.")
 
-                all_new_entries = []
-                print(f"--- [PAUSE] Следующая проверка через {config.IDLE_DELAY_SECONDS / 60:.0f} минут. ---")
-                await asyncio.sleep(config.IDLE_DELAY_SECONDS)
+            # Сессия автоматически закрывается здесь после каждого цикла
+            
+            print(f"--- [PAUSE] Следующая проверка через {config.IDLE_DELAY_SECONDS / 60:.0f} минут. ---")
+            await asyncio.sleep(config.IDLE_DELAY_SECONDS)
