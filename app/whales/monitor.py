@@ -253,10 +253,9 @@ class BlockchainMonitor:
             }
             
             return event
-            
         except Exception as e:
             return None
-        def _get_evm_api_config(self, chain: str) -> Optional[Dict]:
+    def _get_evm_api_config(self, chain: str) -> Optional[Dict]:
         """Конфигурация API для EVM сетей"""
         configs = {
             "ethereum": {
