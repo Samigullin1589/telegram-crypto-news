@@ -98,49 +98,112 @@ class WhaleScheduler:
                 await asyncio.sleep(300)
     
     async def _process_events(self, events: List[WhaleEvent]):
-        """Обрабатывает события через pipeline"""
+        """Обрабатывает события через pipeline с детальным логированием"""
         print(f"🔄 [PIPELINE] Обработка {len(events)} событий")
         
         async with aiohttp.ClientSession() as session:
             qualified_events = []
             
+            # Статистика фильтрации
+            filter_stats = {
+                "dedup": 0,
+                "asset_not_allowed": 0,
+                "internal_bridge": 0,
+                "price_failed": 0,
+                "below_threshold": 0,
+                "passed": 0
+            }
+            
             for event in events:
+                if settings.DEBUG_FILTERS:
+                    print(f"\n🔍 [FILTER] Проверяю: {event.asset} {event.amount_native:,.2f} ≈ ${event.amount_usd:,.0f}")
+                
+                # 1. Дедупликация
                 dedup_key = event.get_dedup_key()
                 if dedup_key in self.seen_keys:
+                    filter_stats["dedup"] += 1
+                    if settings.DEBUG_FILTERS:
+                        print(f"  ❌ Дубликат (dedup_key уже в seen_keys)")
                     continue
                 
+                # 2. Проверка разрешённости актива
                 if not self._is_asset_allowed(event):
+                    filter_stats["asset_not_allowed"] += 1
+                    if settings.DEBUG_FILTERS:
+                        print(f"  ❌ Актив не разрешён (не в watchlist/allowlist)")
                     continue
                 
+                # 3. Проверка флагов internal/bridge/reorg
                 if event.is_internal or event.is_bridge or event.is_reorg:
+                    filter_stats["internal_bridge"] += 1
+                    if settings.DEBUG_FILTERS:
+                        print(f"  ❌ Внутренний перевод / bridge / reorg")
                     continue
+                
+                # 4. Обогащение рыночными данными (КРИТИЧЕСКИЙ ШАГ)
+                if settings.DEBUG_FILTERS:
+                    print(f"  💵 До обогащения: amount_usd=${event.amount_usd:,.0f}, threshold=${event.min_usd_threshold:,.0f}")
                 
                 await self.price_provider.enrich_event_with_market_data(event, session)
                 
+                if settings.DEBUG_FILTERS:
+                    print(f"  💵 После обогащения: amount_usd=${event.amount_usd:,.0f}, threshold=${event.min_usd_threshold:,.0f}")
+                
+                # Проверка на провал обогащения
+                if not event.market.price or not event.market.volume_24h_usd:
+                    filter_stats["price_failed"] += 1
+                    if settings.DEBUG_FILTERS:
+                        print(f"  ⚠️  Не удалось получить цену/объём (будет пропущено позже в scorer)")
+                    # НЕ фильтруем здесь, пусть scorer решит
+                
+                # 5. Проверка порога USD
                 if event.amount_usd < event.min_usd_threshold:
+                    filter_stats["below_threshold"] += 1
+                    if settings.DEBUG_FILTERS:
+                        print(f"  ❌ Ниже порога: ${event.amount_usd:,.0f} < ${event.min_usd_threshold:,.0f}")
                     continue
                 
+                # ✅ Прошло все фильтры!
+                filter_stats["passed"] += 1
                 qualified_events.append(event)
                 self.seen_keys.add(dedup_key)
+                
+                if settings.DEBUG_FILTERS:
+                    print(f"  ✅ ПРОШЛО ФИЛЬТРЫ!")
             
+            # Итоговая статистика
             print(f"✅ [QUALIFY] Прошло фильтры: {len(qualified_events)} событий")
+            
+            if settings.DEBUG_FILTERS:
+                print(f"📊 [FILTER STATS] "
+                      f"Дубликаты: {filter_stats['dedup']}, "
+                      f"Не разрешён: {filter_stats['asset_not_allowed']}, "
+                      f"Internal/Bridge: {filter_stats['internal_bridge']}, "
+                      f"Нет цены: {filter_stats['price_failed']}, "
+                      f"Ниже порога: {filter_stats['below_threshold']}, "
+                      f"✅ Прошло: {filter_stats['passed']}")
             
             if not qualified_events:
                 return
             
+            # Определение фаз
             qualified_events = self.scorer.detect_phase(qualified_events)
             
+            # Скоринг и добавление в очередь публикации
             for event in qualified_events:
                 verdict, confidence = self.scorer.calculate_verdict_and_confidence(event)
                 
                 if not self.scorer.should_publish(event, verdict, confidence):
-                    print(f"⏭️  [SKIP] {event.asset}: не проходит критерии")
+                    if settings.DEBUG_FILTERS:
+                        print(f"⏭️  [SKIP] {event.asset}: не проходит критерии публикации (confidence={confidence})")
                     continue
                 
+                # Поиск похожих событий в истории
                 history_hint = await self.history_manager.find_similar_event(event, session)
                 if history_hint:
                     event.history_hint = history_hint
                 
+                # Расчёт приоритета
                 priority = self.scorer.calculate_priority(event, confidence)
                 
                 self.publication_queue.append({
@@ -151,6 +214,7 @@ class WhaleScheduler:
                     "queued_at": datetime.utcnow()
                 })
             
+            # Сортировка по приоритету
             self.publication_queue.sort(key=lambda x: x["priority"], reverse=True)
             
             print(f"📋 [QUEUE] В очереди: {len(self.publication_queue)} событий")
@@ -158,13 +222,17 @@ class WhaleScheduler:
     async def _publish_from_queue(self):
         """Публикует события из очереди"""
         now = datetime.utcnow()
+        
+        # Очистка старых записей из recent_publications
         while self.recent_publications and (now - self.recent_publications[0]).seconds > 3600:
             self.recent_publications.popleft()
         
+        # Проверка лимита публикаций в час
         if len(self.recent_publications) >= settings.POSTS_PER_HOUR_CAP:
             print(f"⏸️  [RATE] Достигнут лимит {settings.POSTS_PER_HOUR_CAP} публикаций/час")
             return
         
+        # Публикация событий из очереди
         while self.publication_queue and len(self.recent_publications) < settings.POSTS_PER_HOUR_CAP:
             item = self.publication_queue.pop(0)
             
@@ -174,8 +242,10 @@ class WhaleScheduler:
             
             try:
                 async with aiohttp.ClientSession() as session:
+                    # Получение релевантных новостей
                     news = await self.news_gate.get_relevant_news(event, session)
                     
+                    # Создание графика
                     chart_path = None
                     if settings.ENABLE_IMAGES:
                         chart_path = f"/tmp/chart_{event.asset}_{int(datetime.utcnow().timestamp())}.png"
@@ -183,6 +253,7 @@ class WhaleScheduler:
                         if not success:
                             chart_path = None
                     
+                    # Публикация
                     published = await self.publisher.publish_whale_event(
                         event, verdict, confidence, news, chart_path
                     )
@@ -190,44 +261,52 @@ class WhaleScheduler:
                     if published:
                         self.recent_publications.append(datetime.utcnow())
                         self.history_manager.save_event(event, verdict)
+                        print(f"✅ [PUBLISHED] {event.asset} ${event.amount_usd:,.0f}")
                     
+                    # Задержка между публикациями
                     await asyncio.sleep(120)
                     
             except Exception as e:
-                print(f"❌ [PUBLISH] Ошибка: {e}")
+                print(f"❌ [PUBLISH] Ошибка публикации: {e}")
     
     def _is_asset_allowed(self, event: WhaleEvent) -> bool:
         """Проверяет разрешён ли актив"""
         if settings.ASSETS == '*':
+            # Discovery режим: проверяем наличие в watchlist
             return self.discovery.is_in_watchlist(event.chain, event.asset)
         else:
+            # Allowlist режим: проверяем наличие в списке
             return event.asset in settings.ASSETS_LIST
     
     def _load_state(self):
-        """Загружает состояние"""
+        """Загружает состояние из файла"""
         try:
             with open(settings.STATE_FILE, 'r') as f:
                 state = json.load(f)
                 self.seen_keys = set(state.get("seen_keys", []))
                 print(f"📂 [STATE] Загружено {len(self.seen_keys)} dedupe ключей")
         except FileNotFoundError:
-            print("📂 [STATE] Файл состояния не найден")
+            print("📂 [STATE] Файл состояния не найден, начинаем с чистого листа")
+            self.seen_keys = set()
+        except Exception as e:
+            print(f"⚠️  [STATE] Ошибка загрузки состояния: {e}")
             self.seen_keys = set()
     
     def _save_state(self):
-        """Сохраняет состояние"""
+        """Сохраняет состояние в файл"""
         try:
             state = {
                 "last_seen_timestamp": datetime.utcnow().isoformat(),
-                "seen_keys": list(self.seen_keys)[-10000:]
+                "seen_keys": list(self.seen_keys)[-10000:]  # Сохраняем последние 10K
             }
             with open(settings.STATE_FILE, 'w') as f:
                 json.dump(state, f, indent=2)
+            print(f"💾 [STATE] Сохранено {len(state['seen_keys'])} ключей")
         except Exception as e:
-            print(f"⚠️  [STATE] Не удалось сохранить: {e}")
+            print(f"⚠️  [STATE] Не удалось сохранить состояние: {e}")
     
     async def shutdown(self):
-        """Корректное завершение"""
+        """Корректное завершение работы"""
         print("\n⏹️  [SHUTDOWN] Остановка системы...")
         self._save_state()
-        print("✅ [SHUTDOWN] Состояние сохранено")
+        print("✅ [SHUTDOWN] Состояние сохранено. Завершение.")

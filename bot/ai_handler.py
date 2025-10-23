@@ -32,20 +32,29 @@ class AIHandler:
             print("⚠️ [AI] Текст для анализа пуст. Пропускаю саммари.")
             return None
         prompt = self.prompt_template.format(emoji=category_emoji, title=title)
+        
         for attempt in range(max_retries):
             try:
                 print(f"🤖 [AI] Попытка {attempt + 1}/{max_retries}. Отправляю в Gemini: {title}")
                 response = await self.gemini_model.generate_content_async(f"{prompt}\n\nТЕКСТ СТАТЬИ ДЛЯ АНАЛИЗА:\n{text}")
                 return self._sanitize_markdown(response.text)
             except Exception as e:
-                if "429" in str(e) or "quota" in str(e).lower():
-                    print("🚨 [AI] Квота Gemini исчерпана. Немедленное переключение на GPT.")
+                error_str = str(e)
+                
+                # Немедленное переключение на GPT при критических ошибках
+                if any(keyword in error_str for keyword in ["404", "not found", "quota", "429"]):
+                    print(f"🚨 [AI] Критическая ошибка Gemini ({error_str[:100]}). Немедленное переключение на GPT.")
                     break
+                
                 print(f"⚠️ [WARN] Ошибка Gemini: {e}. Попытка {attempt + 1} не удалась.")
+                
+                # Retry только для временных ошибок (сеть, timeout)
                 if attempt + 1 < max_retries:
                     delay = backoff_factor * (2 ** attempt)
                     print(f"⏳ [AI] Пауза на {delay} секунд перед следующей попыткой.")
                     await asyncio.sleep(delay)
+        
+        # Fallback на GPT
         print("🤖 [AI] Переключаюсь на GPT (резерв).")
         try:
             user_prompt = f"Заголовок: {title}\n\nПолный текст статьи:\n{text}"

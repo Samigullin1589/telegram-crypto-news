@@ -27,7 +27,8 @@ class PriceProvider:
             
             coin_id = self._get_coingecko_id(asset)
             if not coin_id:
-                print(f"⚠️  [PRICE] Неизвестный актив: {asset}")
+                if settings.DEBUG_FILTERS:
+                    print(f"⚠️  [PRICE] Неизвестный актив для CoinGecko: {asset}")
                 return None
             
             params = {
@@ -42,7 +43,7 @@ class PriceProvider:
             
             async with session.get(url, params=params, timeout=10) as resp:
                 if resp.status != 200:
-                    print(f"⚠️  [PRICE] CoinGecko вернул {resp.status}")
+                    print(f"⚠️  [PRICE] CoinGecko вернул {resp.status} для {asset}")
                     return None
                 
                 data = await resp.json()
@@ -63,6 +64,9 @@ class PriceProvider:
                     "data": market_info,
                     "timestamp": datetime.utcnow()
                 }
+                
+                if settings.DEBUG_FILTERS:
+                    print(f"💵 [PRICE] {asset}: ${market_info.price:,.2f}, Vol 24h: ${market_info.volume_24h_usd:,.0f}")
                 
                 return market_info
                 
@@ -89,27 +93,43 @@ class PriceProvider:
             "WETH": "weth",
             "WBTC": "wrapped-bitcoin",
             "DAI": "dai",
+            "TRX": "tron",
         }
         
         return mapping.get(asset.upper())
     
     async def enrich_event_with_market_data(self, event, session: aiohttp.ClientSession):
         """Обогащает событие рыночными данными"""
+        
+        old_usd = event.amount_usd
+        
         market_info = await self.get_market_info(event.asset, session)
         
         if market_info:
             event.market = market_info
             
-            # Пересчитываем USD если цена доступна
-            if market_info.price and event.amount_usd == 0:
+            # ИСПРАВЛЕНО: ВСЕГДА пересчитываем USD если есть реальная цена
+            # Раньше было: if market_info.price and event.amount_usd == 0
+            # Теперь: ВСЕГДА пересчитываем
+            if market_info.price:
                 event.amount_usd = event.amount_native * market_info.price
+                
+                if settings.DEBUG_FILTERS and old_usd != event.amount_usd:
+                    print(f"🔄 [PRICE] {event.asset}: пересчёт ${old_usd:,.0f} → ${event.amount_usd:,.0f}")
             
             # В Discovery режиме пересчитываем порог
             if settings.ASSETS == '*':
+                old_threshold = event.min_usd_threshold
                 event.min_usd_threshold = self.calculate_dynamic_threshold(
                     event.asset,
                     market_info.volume_24h_usd
                 )
+                
+                if settings.DEBUG_FILTERS and old_threshold != event.min_usd_threshold:
+                    print(f"📊 [THRESHOLD] {event.asset}: ${old_threshold:,.0f} → ${event.min_usd_threshold:,.0f}")
+        else:
+            if settings.DEBUG_FILTERS:
+                print(f"⚠️  [PRICE] Не удалось получить рыночные данные для {event.asset}")
     
     def calculate_dynamic_threshold(self, asset: str, volume_24h_usd: Optional[float]) -> float:
         """Динамический порог для Discovery режима"""

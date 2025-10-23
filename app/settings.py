@@ -25,9 +25,9 @@ TELEGRAM_CHANNEL_ID = CHAT_ID
 ASSETS = os.getenv('ASSETS', '*')
 ASSETS_LIST = [] if ASSETS == '*' else [a.strip() for a in ASSETS.split(',')]
 
-# Базовые пороги
-MIN_USD = float(os.getenv('MIN_USD', '1500000'))  # для ALLOWLIST режима
-MIN_USD_FLOOR = float(os.getenv('MIN_USD_FLOOR', '300000'))
+# Базовые пороги (ИСПРАВЛЕНО: снижены для реальной работы)
+MIN_USD = float(os.getenv('MIN_USD', '500000'))  # для ALLOWLIST режима
+MIN_USD_FLOOR = float(os.getenv('MIN_USD_FLOOR', '50000'))  # БЫЛО 300000 → СТАЛО 50000
 MIN_USD_K = float(os.getenv('MIN_USD_K', '0.02'))
 MIN_USD_PCTL = float(os.getenv('MIN_USD_PCTL', '75'))
 
@@ -52,8 +52,9 @@ CHART_WIDTH = int(os.getenv('CHART_WIDTH', '800'))
 CHART_HEIGHT = int(os.getenv('CHART_HEIGHT', '600'))
 EXCHANGE_PREFERENCE = [e.strip() for e in os.getenv('EXCHANGE_PREFERENCE', 'binance,okx,bybit,coinbase').split(',')]
 
-# Логирование
+# Логирование (НОВОЕ: детальное логирование фильтров)
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+DEBUG_FILTERS = int(os.getenv('DEBUG_FILTERS', '1')) == 1  # Включить детальное логирование фильтрации
 
 # ============================================================================
 # API КЛЮЧИ - BLOCKCHAIN
@@ -108,6 +109,7 @@ def validate_config():
         raise ValueError(f"Ошибки конфигурации:\n" + "\n".join(f"- {e}" for e in errors))
     
     print(f"✅ Конфигурация валидна. Режим: {'DISCOVERY (весь рынок)' if ASSETS == '*' else f'ALLOWLIST ({len(ASSETS_LIST)} активов)'}")
+    print(f"💰 MIN_USD_FLOOR: ${MIN_USD_FLOOR:,.0f} (порог фильтрации)")
 
 # Запуск валидации при импорте
 validate_config()
