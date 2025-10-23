@@ -30,6 +30,9 @@ class BlockchainMonitor:
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
         self.watchlist_cache: Dict = {}
+        # НОВОЕ: Кэш цен
+        self.price_cache: Dict[str, float] = {}
+        self.price_cache_time: Optional[datetime] = None
         
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
@@ -53,8 +56,91 @@ class BlockchainMonitor:
             print("⚠️  [MONITOR] Watchlist не найден")
             self.watchlist_cache = {}
     
+    # =========================================================================
+    # НОВОЕ: Методы для получения реальных цен
+    # =========================================================================
+    
+    async def _get_quick_price(self, symbol: str) -> float:
+        """Быстрое получение цены из кэша (обновляется каждые 5 минут)"""
+        
+        # Проверяем кэш
+        if self.price_cache_time and (datetime.utcnow() - self.price_cache_time).seconds < 300:
+            if symbol in self.price_cache:
+                return self.price_cache[symbol]
+        
+        # Обновляем кэш если старый
+        if not self.price_cache or not self.price_cache_time or \
+           (datetime.utcnow() - self.price_cache_time).seconds >= 300:
+            await self._refresh_price_cache()
+        
+        return self.price_cache.get(symbol, 0.0)
+    
+    async def _refresh_price_cache(self):
+        """Обновляет кэш цен для основных активов через Binance API"""
+        try:
+            # Binance API - быстрый и без rate limits для публичных данных
+            url = "https://api.binance.com/api/v3/ticker/price"
+            
+            async with self.session.get(url, timeout=5) as resp:
+                if resp.status != 200:
+                    print(f"⚠️  [PRICE CACHE] Binance вернул {resp.status}")
+                    self._set_fallback_prices()
+                    return
+                
+                data = await resp.json()
+                
+                # Парсим цены
+                for item in data:
+                    symbol = item.get("symbol", "")
+                    
+                    # BTCUSDT -> BTC
+                    if symbol.endswith("USDT"):
+                        base = symbol[:-4]
+                        price = float(item.get("price", 0))
+                        if price > 0:
+                            self.price_cache[base] = price
+                
+                self.price_cache_time = datetime.utcnow()
+                
+                print(f"💰 [PRICE CACHE] Обновлено {len(self.price_cache)} цен: "
+                      f"BTC=${self.price_cache.get('BTC', 0):,.0f}, "
+                      f"ETH=${self.price_cache.get('ETH', 0):,.0f}, "
+                      f"SOL=${self.price_cache.get('SOL', 0):,.0f}")
+                
+        except Exception as e:
+            print(f"⚠️  [PRICE CACHE] Ошибка обновления: {e}")
+            self._set_fallback_prices()
+    
+    def _set_fallback_prices(self):
+        """Устанавливает fallback цены при недоступности API"""
+        self.price_cache = {
+            "BTC": 95000,
+            "ETH": 3500,
+            "BNB": 600,
+            "SOL": 180,
+            "MATIC": 0.8,
+            "AVAX": 40,
+            "ARB": 1.2,
+            "OP": 2.5,
+            "LINK": 15,
+            "UNI": 8,
+            "AAVE": 180,
+            "WETH": 3500,
+            "WBTC": 95000,
+        }
+        self.price_cache_time = datetime.utcnow()
+        print(f"⚠️  [PRICE CACHE] Используются fallback цены")
+    
+    # =========================================================================
+    # Основной метод сбора событий
+    # =========================================================================
+    
     async def fetch_events(self, start_time: datetime) -> List[WhaleEvent]:
         """Собирает события со всех цепей (нативные + токены)"""
+        
+        # НОВОЕ: Обновляем кэш цен при старте
+        await self._refresh_price_cache()
+        
         events = []
         
         tasks = [
@@ -255,6 +341,7 @@ class BlockchainMonitor:
             return event
         except Exception as e:
             return None
+    
     def _get_evm_api_config(self, chain: str) -> Optional[Dict]:
         """Конфигурация API для EVM сетей"""
         configs = {
@@ -348,7 +435,7 @@ class BlockchainMonitor:
             return []
     
     def _parse_evm_transactions(self, txs: List[Dict], chain: str, wallet_info: Dict, flow_type: str, api_config: Dict) -> List[WhaleEvent]:
-        """Парсит нативные транзакции"""
+        """Парсит нативные транзакции с РЕАЛЬНЫМИ ценами"""
         events = []
         
         for tx in txs[:10]:
@@ -359,8 +446,28 @@ class BlockchainMonitor:
                 
                 value_native = value_wei / 1e18
                 
-                usd_estimates = {"ETH": 3500, "BNB": 600, "MATIC": 0.8, "AVAX": 40}
-                price_estimate = usd_estimates.get(api_config["native_symbol"], 1)
+                # УЛУЧШЕНО: Получаем реальную цену из кэша
+                native_symbol = api_config["native_symbol"]
+                
+                # Для обёрнутых токенов используем базовый актив
+                if native_symbol == "ETH" and chain in ["arbitrum", "base"]:
+                    price_symbol = "ETH"
+                else:
+                    price_symbol = native_symbol
+                
+                # Получаем цену из кэша (синхронный доступ)
+                price_estimate = self.price_cache.get(price_symbol, 0)
+                
+                # Fallback на старые значения если цена не найдена
+                if price_estimate == 0:
+                    fallback_prices = {
+                        "ETH": 3500,
+                        "BNB": 600,
+                        "MATIC": 0.8,
+                        "AVAX": 40
+                    }
+                    price_estimate = fallback_prices.get(native_symbol, 1)
+                
                 usd_estimate = value_native * price_estimate
                 
                 if usd_estimate < settings.MIN_USD_FLOOR:
@@ -427,10 +534,13 @@ class BlockchainMonitor:
                 
                 txs = await resp.json()
                 
+                # Получаем реальную цену BTC
+                btc_price = self.price_cache.get("BTC", 95000)
+                
                 for tx in txs[:30]:
                     vout_sum = sum(out.get("value", 0) for out in tx.get("vout", []))
                     btc_amount = vout_sum / 100_000_000
-                    usd_estimate = btc_amount * 95000
+                    usd_estimate = btc_amount * btc_price
                     
                     if usd_estimate < settings.MIN_USD_FLOOR:
                         continue
@@ -480,6 +590,9 @@ class BlockchainMonitor:
                 "2ojv9BAiHUrvsm9gxDe7fJSzbNZSJcxZvf8dqmWGHG8S",
             ]
             
+            # Получаем реальную цену SOL
+            sol_price = self.price_cache.get("SOL", 180)
+            
             for wallet in known_sol_wallets:
                 try:
                     url = f"https://api.helius.xyz/v0/addresses/{wallet}/transactions"
@@ -495,7 +608,7 @@ class BlockchainMonitor:
                             # Нативный SOL
                             sol_amount = self._extract_sol_amount(tx)
                             if sol_amount and sol_amount > 100:
-                                event = self._create_sol_event(tx, wallet, "SOL", sol_amount, sol_amount * 180)
+                                event = self._create_sol_event(tx, wallet, "SOL", sol_amount, sol_amount * sol_price)
                                 if event:
                                     events.append(event)
                             
