@@ -1,9 +1,10 @@
 # bot/content_parser.py
 import aiohttp
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs, unquote
 from PIL import Image
 import io
+import re
 from . import config
 
 class ContentParser:
@@ -51,44 +52,177 @@ class ContentParser:
         return entry.get('summary', '')
 
     def _extract_image_candidates(self, soup, entry, final_url):
+        """Извлекает кандидатов на изображение с умной обработкой"""
         image_candidates = []
         if not soup: return image_candidates
+        
         article_body = soup.find('article') or soup.find('div', class_='post-content') or soup.find('body')
         if article_body:
             for img_tag in article_body.find_all('img', src=True):
                 if src := img_tag.get('src'):
-                    image_candidates.append(urljoin(final_url, src))
+                    full_url = urljoin(final_url, src)
+                    # Исправляем thumbnail URLs
+                    fixed_url = self._extract_full_size_image_url(full_url)
+                    image_candidates.append(fixed_url)
+        
         if 'media_content' in entry and entry.media_content:
             if media_url := entry.media_content[0].get('url'):
-                image_candidates.append(urljoin(final_url, media_url))
+                full_url = urljoin(final_url, media_url)
+                fixed_url = self._extract_full_size_image_url(full_url)
+                image_candidates.append(fixed_url)
+        
         elif 'enclosures' in entry and entry.enclosures:
             for enc in entry.enclosures:
                 if 'image' in enc.type and enc.href:
-                    image_candidates.append(urljoin(final_url, enc.href))
+                    full_url = urljoin(final_url, enc.href)
+                    fixed_url = self._extract_full_size_image_url(full_url)
+                    image_candidates.append(fixed_url)
+        
         if og_image := soup.find('meta', property='og:image'):
             if content := og_image.get('content'):
-                image_candidates.append(urljoin(final_url, content))
+                full_url = urljoin(final_url, content)
+                fixed_url = self._extract_full_size_image_url(full_url)
+                image_candidates.append(fixed_url)
+        
         return image_candidates
 
-    async def _get_valid_image_url(self, image_candidates, session):
-        for url in image_candidates:
-            if not url or self._is_likely_logo(url): continue
+    def _extract_full_size_image_url(self, url):
+        """
+        Извлекает полноразмерное изображение из различных форматов URL
+        
+        Обрабатывает:
+        1. Next.js Image Optimization: /_next/image?url=...&w=32
+        2. WordPress thumbnails: image-150x150.jpg
+        3. Query parameters: ?w=32&h=32
+        """
+        if not url:
+            return url
+        
+        # 1. Next.js Image Optimization (CoinDesk, многие современные сайты)
+        # URL вида: https://site.com/_next/image?url=https%3A%2F%2Freal-image.png&w=32&q=75
+        if '/_next/image' in url and 'url=' in url:
             try:
+                parsed = urlparse(url)
+                params = parse_qs(parsed.query)
+                
+                # Извлекаем оригинальный URL из параметра 'url'
+                if 'url' in params:
+                    original_url = unquote(params['url'][0])
+                    print(f"🔧 [IMG] Извлечён оригинальный URL из Next.js: {original_url[:80]}...")
+                    return original_url
+                
+                # Если не получилось извлечь - меняем размер на максимальный
+                url = re.sub(r'&w=\d+', '&w=1920', url)
+                url = re.sub(r'&h=\d+', '&h=1080', url)
+                print(f"🔧 [IMG] Увеличен размер Next.js изображения до 1920x1080")
+                return url
+                
+            except Exception as e:
+                print(f"⚠️  [IMG] Не удалось обработать Next.js URL: {e}")
+        
+        # 2. WordPress/CDN thumbnails
+        # image-150x150.jpg -> image.jpg
+        # image-300x200.jpg -> image.jpg
+        thumbnail_pattern = r'-\d+x\d+(\.[a-z]{3,4})$'
+        if re.search(thumbnail_pattern, url):
+            original_url = re.sub(thumbnail_pattern, r'\1', url)
+            print(f"🔧 [IMG] Удалён WordPress thumbnail суффикс: {original_url[-50:]}")
+            return original_url
+        
+        # 3. Query parameters размера (общий случай)
+        # ?w=32&h=32 или &width=100&height=100
+        if any(param in url.lower() for param in ['?w=', '&w=', '?width=', '&width=', '?size=', '&size=']):
+            # Удаляем все параметры размера
+            url = re.sub(r'[?&]w=\d+', '', url)
+            url = re.sub(r'[?&]h=\d+', '', url)
+            url = re.sub(r'[?&]width=\d+', '', url)
+            url = re.sub(r'[?&]height=\d+', '', url)
+            url = re.sub(r'[?&]size=\d+', '', url)
+            
+            # Чистим лишние символы
+            url = re.sub(r'\?&', '?', url)  # ?& -> ?
+            url = re.sub(r'&&', '&', url)   # && -> &
+            url = re.sub(r'[?&]$', '', url) # Убираем ? или & в конце
+            
+            print(f"🔧 [IMG] Удалены параметры размера из URL")
+            return url
+        
+        # 4. Cloudflare Images / Imgix
+        # https://imagedelivery.net/.../w=32,h=32
+        if any(service in url for service in ['imagedelivery.net', 'imgix.net', 'images.unsplash.com']):
+            # Заменяем маленькие размеры на большие
+            url = re.sub(r'/w=\d+', '/w=1920', url)
+            url = re.sub(r'/h=\d+', '/h=1080', url)
+            url = re.sub(r'w=\d+', 'w=1920', url)
+            url = re.sub(r'h=\d+', 'h=1080', url)
+            print(f"🔧 [IMG] Увеличен размер CDN изображения")
+            return url
+        
+        # 5. Возвращаем как есть если ничего не подошло
+        return url
+
+    async def _get_valid_image_url(self, image_candidates, session):
+        """Проверяет и возвращает первое валидное изображение подходящего размера"""
+        
+        # Сортируем кандидатов по приоритету (og:image в начало)
+        prioritized = []
+        regular = []
+        
+        for url in image_candidates:
+            if not url or self._is_likely_logo(url):
+                continue
+            
+            # og:image обычно лучшего качества
+            if 'og:' in str(url) or len(prioritized) == 0:
+                prioritized.append(url)
+            else:
+                regular.append(url)
+        
+        # Проверяем сначала приоритетные, потом обычные
+        all_candidates = prioritized + regular
+        
+        for url in all_candidates:
+            try:
+                # Проверяем размер изображения
                 async with session.get(url, timeout=10) as response:
-                    if response.status != 200: continue
+                    if response.status != 200:
+                        print(f"🖼️ [IMG] Пропущено (HTTP {response.status}): {url[:80]}")
+                        continue
+                    
+                    # Читаем первые 4KB чтобы определить размер
                     image_data = await response.content.read(4096)
-                    if not image_data: continue
+                    if not image_data:
+                        continue
+                    
                     img = Image.open(io.BytesIO(image_data))
-                    if img.width >= config.MIN_IMAGE_WIDTH and img.height >= config.MIN_IMAGE_HEIGHT:
-                        print(f"🖼️ [IMG] Найдено подходящее изображение: {url} ({img.width}x{img.height})")
+                    width, height = img.size
+                    
+                    # Проверяем минимальный размер
+                    if width >= config.MIN_IMAGE_WIDTH and height >= config.MIN_IMAGE_HEIGHT:
+                        print(f"✅ [IMG] Найдено изображение: {url[:80]} ({width}x{height})")
                         return url
                     else:
-                        print(f"🖼️ [IMG] Изображение отклонено (слишком маленькое): {url} ({img.width}x{img.height})")
+                        print(f"🖼️ [IMG] Отклонено (маленькое): {url[:80]} ({width}x{height})")
+                
             except Exception as e:
-                print(f"🖼️ [IMG] Не удалось проверить изображение {url}: {e}")
+                print(f"⚠️  [IMG] Ошибка проверки {url[:50]}: {e}")
                 continue
+        
+        print(f"⚠️  [IMG] Подходящее изображение не найдено среди {len(all_candidates)} кандидатов")
         return None
 
     def _is_likely_logo(self, image_url):
-        if not image_url: return True
-        return any(keyword in image_url.lower() for keyword in ['logo', 'brand', 'icon'])
+        """Определяет является ли URL логотипом/иконкой"""
+        if not image_url:
+            return True
+        
+        url_lower = image_url.lower()
+        
+        # Явные признаки логотипа
+        logo_keywords = [
+            'logo', 'icon', 'favicon', 'brand', 
+            'avatar', 'profile', 'badge',
+            '/icons/', '/logos/', '/favicons/'
+        ]
+        
+        return any(keyword in url_lower for keyword in logo_keywords)
