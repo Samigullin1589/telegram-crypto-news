@@ -7,7 +7,7 @@ from . import config
 class AIHandler:
     def __init__(self):
         genai.configure(api_key=config.GEMINI_API_KEY)
-        self.gemini_model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        self.gemini_model = genai.GenerativeModel('gemini-1.5-pro')
         self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
         self.prompt_template = """
         Ты — ведущий аналитик издания 'Bloomberg Crypto'. Твоя задача — проанализировать текст новости и подготовить профессиональный, структурированный пост для Telegram-канала 'Crypto Compass'.
