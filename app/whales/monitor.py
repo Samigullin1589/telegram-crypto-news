@@ -76,29 +76,53 @@ class BlockchainMonitor:
         return self.price_cache.get(symbol, 0.0)
     
     async def _refresh_price_cache(self):
-        """Обновляет кэш цен для основных активов через Binance API"""
+        """Обновляет кэш цен для основных активов (через CoinGecko)"""
         try:
-            # Binance API - быстрый и без rate limits для публичных данных
-            url = "https://api.binance.com/api/v3/ticker/price"
+            # CoinGecko API (Binance заблокирован на Render)
+            url = "https://api.coingecko.com/api/v3/simple/price"
+            params = {
+                "ids": "bitcoin,ethereum,binancecoin,solana,matic-network,avalanche-2,arbitrum,optimism,chainlink,uniswap",
+                "vs_currencies": "usd"
+            }
             
-            async with self.session.get(url, timeout=5) as resp:
+            # Добавляем API ключ если есть
+            if settings.COINGECKO_API_KEY:
+                params["x_cg_pro_api_key"] = settings.COINGECKO_API_KEY
+            
+            async with self.session.get(url, params=params, timeout=10) as resp:
                 if resp.status != 200:
-                    print(f"⚠️  [PRICE CACHE] Binance вернул {resp.status}")
+                    print(f"⚠️  [PRICE CACHE] CoinGecko вернул {resp.status}")
                     self._set_fallback_prices()
                     return
                 
                 data = await resp.json()
                 
+                # Маппинг CoinGecko ID → Символ
+                mapping = {
+                    "bitcoin": "BTC",
+                    "ethereum": "ETH",
+                    "binancecoin": "BNB",
+                    "solana": "SOL",
+                    "matic-network": "MATIC",
+                    "avalanche-2": "AVAX",
+                    "arbitrum": "ARB",
+                    "optimism": "OP",
+                    "chainlink": "LINK",
+                    "uniswap": "UNI",
+                }
+                
                 # Парсим цены
-                for item in data:
-                    symbol = item.get("symbol", "")
-                    
-                    # BTCUSDT -> BTC
-                    if symbol.endswith("USDT"):
-                        base = symbol[:-4]
-                        price = float(item.get("price", 0))
+                for coin_id, symbol in mapping.items():
+                    if coin_id in data and "usd" in data[coin_id]:
+                        price = data[coin_id]["usd"]
                         if price > 0:
-                            self.price_cache[base] = price
+                            self.price_cache[symbol] = price
+                
+                # Добавляем wrapped токены
+                if "ETH" in self.price_cache:
+                    self.price_cache["WETH"] = self.price_cache["ETH"]
+                if "BTC" in self.price_cache:
+                    self.price_cache["WBTC"] = self.price_cache["BTC"]
                 
                 self.price_cache_time = datetime.utcnow()
                 
