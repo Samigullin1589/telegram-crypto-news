@@ -672,7 +672,7 @@ class BlockchainMonitor:
             "native_symbol": "ETH",
             "block_time": 2
         }
-        
+    }
         config = configs.get(chain)
         if config and not config["api_key"]:
             print(f"⚠️  [{chain.upper()}] API ключ не установлен")
