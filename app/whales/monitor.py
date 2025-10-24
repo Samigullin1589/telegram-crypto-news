@@ -659,19 +659,18 @@ class BlockchainMonitor:
                 "block_time": 2
             },
             "avalanche": {
-                "api_url": "https://api.snowtrace.io/api",
-                "api_key": settings.ETHERSCAN_API_KEY,
-                "explorer": "https://snowtrace.io",
-                "native_symbol": "AVAX",
-                "block_time": 2
-            }
-            },
-            "optimism": {
-                "api_url": "https://api-optimistic.etherscan.io/api",
-                "api_key": settings.ETHERSCAN_API_KEY,
-                "explorer": "https://optimistic.etherscan.io",
-                "native_symbol": "ETH",
-                "block_time": 2
+            "api_url": "https://api.snowtrace.io/api",
+            "api_key": settings.ETHERSCAN_API_KEY,
+            "explorer": "https://snowtrace.io",
+            "native_symbol": "AVAX",
+            "block_time": 2
+        },
+        "optimism": {
+            "api_url": "https://api-optimistic.etherscan.io/api",
+            "api_key": settings.ETHERSCAN_API_KEY,
+            "explorer": "https://optimistic.etherscan.io",
+            "native_symbol": "ETH",
+            "block_time": 2
         }
         
         config = configs.get(chain)
