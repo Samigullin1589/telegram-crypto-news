@@ -1,5 +1,6 @@
 # bot/content_parser.py (ФИНАЛЬНАЯ ВЕРСИЯ - 24 октября 2025)
 import aiohttp
+import asyncio  # ИСПРАВЛЕНО: Добавлен импорт
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 from PIL import Image
@@ -70,9 +71,11 @@ class ContentParser:
         if og_image := soup.find('meta', property='og:image'):
             if content := og_image.get('content'):
                 full_url = urljoin(final_url, content)
-                fixed_url = self._extract_full_size_image_url(full_url)
-                image_candidates.append(fixed_url)
-                print(f"🖼️ [IMG] Найден og:image: {fixed_url[:80]}...")
+                # КРИТИЧНО: Пропускаем data: URLs и другие невалидные схемы
+                if self._is_valid_image_url(full_url):
+                    fixed_url = self._extract_full_size_image_url(full_url)
+                    image_candidates.append(fixed_url)
+                    print(f"🖼️ [IMG] Найден og:image: {fixed_url[:80]}...")
         
         # 2. Изображения из article body
         article_body = soup.find('article') or soup.find('div', class_='post-content') or soup.find('body')
@@ -80,26 +83,63 @@ class ContentParser:
             for img_tag in article_body.find_all('img', src=True):
                 if src := img_tag.get('src'):
                     full_url = urljoin(final_url, src)
-                    fixed_url = self._extract_full_size_image_url(full_url)
-                    image_candidates.append(fixed_url)
+                    if self._is_valid_image_url(full_url):
+                        fixed_url = self._extract_full_size_image_url(full_url)
+                        image_candidates.append(fixed_url)
         
         # 3. RSS media:content
         if 'media_content' in entry and entry.media_content:
             if media_url := entry.media_content[0].get('url'):
                 full_url = urljoin(final_url, media_url)
-                fixed_url = self._extract_full_size_image_url(full_url)
-                image_candidates.append(fixed_url)
+                if self._is_valid_image_url(full_url):
+                    fixed_url = self._extract_full_size_image_url(full_url)
+                    image_candidates.append(fixed_url)
         
         # 4. RSS enclosures
         elif 'enclosures' in entry and entry.enclosures:
             for enc in entry.enclosures:
                 if 'image' in enc.type and enc.href:
                     full_url = urljoin(final_url, enc.href)
-                    fixed_url = self._extract_full_size_image_url(full_url)
-                    image_candidates.append(fixed_url)
+                    if self._is_valid_image_url(full_url):
+                        fixed_url = self._extract_full_size_image_url(full_url)
+                        image_candidates.append(fixed_url)
         
-        print(f"🖼️ [IMG] Найдено {len(image_candidates)} кандидатов")
+        print(f"🖼️ [IMG] Найдено {len(image_candidates)} валидных кандидатов")
         return image_candidates
+    
+    def _is_valid_image_url(self, url):
+        """
+        КРИТИЧНО: Проверяет что URL можно скачать
+        
+        Фильтрует:
+        - data: URLs (inline SVG/base64)
+        - javascript: URLs
+        - mailto: URLs
+        - Слишком короткие URLs
+        """
+        if not url or len(url) < 10:
+            return False
+        
+        url_lower = url.lower()
+        
+        # Блокируем невалидные схемы
+        invalid_schemes = [
+            'data:',           # data:image/svg+xml или data:image/png;base64
+            'javascript:',     # javascript:void(0)
+            'mailto:',         # mailto:email@example.com
+            'tel:',            # tel:+1234567890
+            'about:',          # about:blank
+            '#',               # якорные ссылки
+        ]
+        
+        if any(url_lower.startswith(scheme) for scheme in invalid_schemes):
+            return False
+        
+        # Должен начинаться с http:// или https://
+        if not (url_lower.startswith('http://') or url_lower.startswith('https://')):
+            return False
+        
+        return True
 
     def _extract_full_size_image_url(self, url):
         """
@@ -246,8 +286,12 @@ class ContentParser:
             except asyncio.TimeoutError:
                 print(f"⏱️  [IMG] Timeout: {url[:60]}")
                 continue
+            except aiohttp.ClientError as e:
+                # Ловим все aiohttp ошибки (InvalidURL, ClientConnectorError, etc)
+                print(f"⚠️  [IMG] HTTP ошибка {url[:50]}: {type(e).__name__}")
+                continue
             except Exception as e:
-                print(f"⚠️  [IMG] Ошибка проверки {url[:50]}: {e}")
+                print(f"⚠️  [IMG] Ошибка проверки {url[:50]}: {type(e).__name__} - {e}")
                 continue
         
         print(f"⚠️  [IMG] Подходящее изображение не найдено среди {len(all_candidates)} кандидатов")
