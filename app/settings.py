@@ -1,4 +1,4 @@
-# app/settings.py (МАКСИМАЛЬНО УЛУЧШЕННАЯ ВЕРСИЯ)
+# app/settings.py (ФИНАЛЬНАЯ УЛУЧШЕННАЯ ВЕРСИЯ)
 import os
 from dotenv import load_dotenv
 from typing import List, Optional
@@ -11,8 +11,10 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID') or os.getenv('TELEGRAM_CHANNEL_ID')
 
-# НОВОЕ: ID админа для уведомлений об ошибках (по умолчанию = канал)
-ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', CHAT_ID)
+# ИСПРАВЛЕНО: Более надёжное получение ADMIN_CHAT_ID
+# Проблема: os.getenv может вернуть пустую строку ""
+_admin_chat_raw = os.getenv('ADMIN_CHAT_ID', '').strip()
+ADMIN_CHAT_ID = _admin_chat_raw if _admin_chat_raw else CHAT_ID
 
 if not TELEGRAM_TOKEN or not CHAT_ID:
     raise ValueError("TELEGRAM_TOKEN и CHAT_ID обязательны")
@@ -25,11 +27,11 @@ TELEGRAM_CHANNEL_ID = CHAT_ID
 # WHALE MONITOR - ОСНОВНЫЕ ПАРАМЕТРЫ
 # ============================================================================
 ASSETS = os.getenv('ASSETS', '*')
-ASSETS_LIST = [] if ASSETS == '*' else [a.strip() for a in ASSETS.split(',')]
+ASSETS_LIST = [] if ASSETS == '*' else [a.strip() for a in ASSETS.split(',') if a.strip()]
 
 # Базовые пороги (УЛУЧШЕНО)
 MIN_USD = float(os.getenv('MIN_USD', '500000'))
-MIN_USD_FLOOR = float(os.getenv('MIN_USD_FLOOR', '50000'))  # БЫЛО 300000
+MIN_USD_FLOOR = float(os.getenv('MIN_USD_FLOOR', '50000'))
 MIN_USD_K = float(os.getenv('MIN_USD_K', '0.02'))
 MIN_USD_PCTL = float(os.getenv('MIN_USD_PCTL', '75'))
 
@@ -58,9 +60,9 @@ EXCHANGE_PREFERENCE = [e.strip() for e in os.getenv('EXCHANGE_PREFERENCE', 'bina
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 DEBUG_FILTERS = int(os.getenv('DEBUG_FILTERS', '1')) == 1
 
-# НОВОЕ: Настройки алертов
-ENABLE_ALERTS = int(os.getenv('ENABLE_ALERTS', '1')) == 1  # Уведомления об ошибках
-ALERT_COOLDOWN_SECONDS = int(os.getenv('ALERT_COOLDOWN_SECONDS', '300'))  # 5 минут между повторами
+# Настройки алертов
+ENABLE_ALERTS = int(os.getenv('ENABLE_ALERTS', '1')) == 1
+ALERT_COOLDOWN_SECONDS = int(os.getenv('ALERT_COOLDOWN_SECONDS', '300'))
 SEND_STARTUP_NOTIFICATION = int(os.getenv('SEND_STARTUP_NOTIFICATION', '1')) == 1
 SEND_DAILY_STATS = int(os.getenv('SEND_DAILY_STATS', '1')) == 1
 
@@ -72,9 +74,7 @@ HELIUS_API_KEY = os.getenv('HELIUS_API_KEY')
 TRONSCAN_API_KEY = os.getenv('TRONSCAN_API_KEY')
 ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
 COINGECKO_API_KEY = os.getenv('COINGECKO_API_KEY')
-
-# НОВОЕ: Дополнительные источники цен (fallback)
-COINMARKETCAP_API_KEY = os.getenv('COINMARKETCAP_API_KEY')  # Опционально
+COINMARKETCAP_API_KEY = os.getenv('COINMARKETCAP_API_KEY')
 
 # ============================================================================
 # API КЛЮЧИ - НОВОСТИ
@@ -99,12 +99,14 @@ os.makedirs(HISTORY_DIR, exist_ok=True)
 DB_PATH = os.path.join(os.environ.get('RENDER_DISK_MOUNT_PATH', '.'), 'news_database.sqlite')
 
 # ============================================================================
-# ВАЛИДАЦИЯ
+# ВАЛИДАЦИЯ И ДИАГНОСТИКА
 # ============================================================================
 def validate_config():
+    """Проверяет конфигурацию и выводит детальную информацию"""
     errors = []
     warnings = []
     
+    # Проверка Discovery
     if ASSETS == '*':
         if not COINGECKO_API_KEY:
             warnings.append("COINGECKO_API_KEY не установлен. Discovery может работать медленнее.")
@@ -117,24 +119,103 @@ def validate_config():
     if not TRONSCAN_API_KEY:
         errors.append("TRONSCAN_API_KEY обязателен для TRON мониторинга")
     
-    # НОВОЕ: Проверка настроек алертов
+    # УЛУЧШЕНО: Детальная проверка ADMIN_CHAT_ID
     if ENABLE_ALERTS:
+        # Проверяем что ADMIN_CHAT_ID отличается от CHAT_ID
         if ADMIN_CHAT_ID == CHAT_ID:
-            warnings.append("ADMIN_CHAT_ID не установлен - уведомления пойдут в публичный канал")
+            warnings.append(
+                f"ADMIN_CHAT_ID не установлен или равен CHAT_ID. "
+                f"Алерты будут отправляться в публичный канал ({CHAT_ID})"
+            )
+        else:
+            # Проверяем формат (должен быть числовой для личных чатов)
+            if ADMIN_CHAT_ID.lstrip('-').isdigit():
+                print(f"✅ ADMIN_CHAT_ID настроен: {ADMIN_CHAT_ID[:4]}...{ADMIN_CHAT_ID[-4:]}")
+            else:
+                warnings.append(
+                    f"ADMIN_CHAT_ID имеет необычный формат: {ADMIN_CHAT_ID}. "
+                    f"Для личных чатов используйте числовой ID (например: 123456789)"
+                )
     
+    # Вывод ошибок
     if errors:
         raise ValueError(f"Ошибки конфигурации:\n" + "\n".join(f"- {e}" for e in errors))
     
-    print(f"✅ Конфигурация валидна")
-    print(f"📊 Режим: {'DISCOVERY' if ASSETS == '*' else f'ALLOWLIST ({len(ASSETS_LIST)} активов)'}")
-    print(f"💰 Порог: ${MIN_USD_FLOOR:,.0f}")
-    print(f"🔔 Алерты: {'включены' if ENABLE_ALERTS else 'выключены'}")
-    print(f"📈 Логирование фильтров: {'включено' if DEBUG_FILTERS else 'выключено'}")
+    # Основная информация
+    print("=" * 80)
+    print("⚙️  КОНФИГУРАЦИЯ СИСТЕМЫ")
+    print("=" * 80)
     
+    print(f"\n📊 РЕЖИМ РАБОТЫ")
+    if ASSETS == '*':
+        print(f"  • Discovery Mode (автопоиск топ-{DISCOVERY_TOP_N_PER_CHAIN} токенов)")
+        print(f"  • Обновление watchlist: каждые {DISCOVERY_REFRESH_HOURS}ч")
+    else:
+        print(f"  • Allowlist Mode ({len(ASSETS_LIST)} активов)")
+        print(f"  • Активы: {', '.join(ASSETS_LIST[:10])}")
+        if len(ASSETS_LIST) > 10:
+            print(f"    ... и ещё {len(ASSETS_LIST) - 10}")
+    
+    print(f"\n💰 ПОРОГИ USD")
+    print(f"  • Минимальный порог: ${MIN_USD_FLOOR:,.0f}")
+    print(f"  • Базовый порог: ${MIN_USD:,.0f}")
+    print(f"  • Коэффициент объёма: {MIN_USD_K:.1%}")
+    
+    print(f"\n📡 МОНИТОРИНГ")
+    print(f"  • Интервал опроса: {POLL_SECONDS}с")
+    print(f"  • Начать с: {START_FROM_MINUTES_AGO} минут назад")
+    print(f"  • Лимит публикаций: {POSTS_PER_HOUR_CAP}/час")
+    
+    print(f"\n🔔 АЛЕРТЫ")
+    if ENABLE_ALERTS:
+        print(f"  • Статус: ✅ Включены")
+        if ADMIN_CHAT_ID != CHAT_ID:
+            print(f"  • Админ ID: {ADMIN_CHAT_ID[:4]}...{ADMIN_CHAT_ID[-4:]}")
+        else:
+            print(f"  • Админ ID: не настроен (→ публичный канал)")
+        print(f"  • Cooldown: {ALERT_COOLDOWN_SECONDS}с")
+        print(f"  • Уведомление о запуске: {'да' if SEND_STARTUP_NOTIFICATION else 'нет'}")
+        print(f"  • Ежедневная статистика: {'да' if SEND_DAILY_STATS else 'нет'}")
+    else:
+        print(f"  • Статус: ❌ Отключены")
+    
+    print(f"\n📈 ДОПОЛНИТЕЛЬНО")
+    print(f"  • Графики: {'включены' if ENABLE_IMAGES else 'выключены'}")
+    print(f"  • Debug фильтров: {'включен' if DEBUG_FILTERS else 'выключен'}")
+    print(f"  • Log level: {LOG_LEVEL}")
+    
+    # API ключи (скрыто)
+    print(f"\n🔑 API КЛЮЧИ")
+    api_keys = {
+        "Etherscan": ETHERSCAN_API_KEY,
+        "Helius (Solana)": HELIUS_API_KEY,
+        "TronScan": TRONSCAN_API_KEY,
+        "CoinGecko": COINGECKO_API_KEY,
+        "Alchemy": ALCHEMY_API_KEY,
+        "CoinMarketCap": COINMARKETCAP_API_KEY,
+    }
+    for name, key in api_keys.items():
+        status = "✅" if key else "❌"
+        print(f"  • {name}: {status}")
+    
+    print("=" * 80)
+    
+    # Предупреждения в конце
     if warnings:
-        print(f"\n⚠️  Предупреждения:")
+        print(f"\n⚠️  ПРЕДУПРЕЖДЕНИЯ:")
         for w in warnings:
-            print(f"  - {w}")
+            print(f"  • {w}")
+        print()
+
+def get_environment_info():
+    """Возвращает информацию об окружении для отладки"""
+    return {
+        "render": bool(os.environ.get('RENDER')),
+        "render_service": os.environ.get('RENDER_SERVICE_NAME', 'N/A'),
+        "python_version": os.environ.get('PYTHON_VERSION', 'N/A'),
+        "has_disk": bool(os.environ.get('RENDER_DISK_MOUNT_PATH')),
+        "disk_path": os.environ.get('RENDER_DISK_MOUNT_PATH', 'N/A'),
+    }
 
 # Запуск валидации
 validate_config()
