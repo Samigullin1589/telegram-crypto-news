@@ -1,4 +1,4 @@
-# app/whales/monitor.py
+# app/whales/monitor.py (ФИНАЛЬНАЯ ВЕРСИЯ - 24 октября 2025)
 import aiohttp
 import asyncio
 from datetime import datetime, timedelta
@@ -30,7 +30,7 @@ class BlockchainMonitor:
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
         self.watchlist_cache: Dict = {}
-        # НОВОЕ: Кэш цен
+        # Кэш цен
         self.price_cache: Dict[str, float] = {}
         self.price_cache_time: Optional[datetime] = None
         
@@ -57,7 +57,7 @@ class BlockchainMonitor:
             self.watchlist_cache = {}
     
     # =========================================================================
-    # НОВОЕ: Методы для получения реальных цен
+    # ИСПРАВЛЕНО: CoinGecko вместо Binance (451 error fix)
     # =========================================================================
     
     async def _get_quick_price(self, symbol: str) -> float:
@@ -76,12 +76,12 @@ class BlockchainMonitor:
         return self.price_cache.get(symbol, 0.0)
     
     async def _refresh_price_cache(self):
-        """Обновляет кэш цен для основных активов (через CoinGecko)"""
+        """ИСПРАВЛЕНО: CoinGecko вместо Binance (Render geoblocking fix)"""
         try:
-            # CoinGecko API (Binance заблокирован на Render)
+            # CoinGecko API (работает на Render, в отличие от Binance)
             url = "https://api.coingecko.com/api/v3/simple/price"
             params = {
-                "ids": "bitcoin,ethereum,binancecoin,solana,matic-network,avalanche-2,arbitrum,optimism,chainlink,uniswap",
+                "ids": "bitcoin,ethereum,binancecoin,solana,matic-network,avalanche-2,arbitrum,optimism,chainlink,uniswap,ripple,dogecoin,tron",
                 "vs_currencies": "usd"
             }
             
@@ -90,6 +90,11 @@ class BlockchainMonitor:
                 params["x_cg_pro_api_key"] = settings.COINGECKO_API_KEY
             
             async with self.session.get(url, params=params, timeout=10) as resp:
+                if resp.status == 429:
+                    print(f"⚠️  [PRICE CACHE] CoinGecko rate limit, используем fallback")
+                    self._set_fallback_prices()
+                    return
+                
                 if resp.status != 200:
                     print(f"⚠️  [PRICE CACHE] CoinGecko вернул {resp.status}")
                     self._set_fallback_prices()
@@ -109,6 +114,9 @@ class BlockchainMonitor:
                     "optimism": "OP",
                     "chainlink": "LINK",
                     "uniswap": "UNI",
+                    "ripple": "XRP",
+                    "dogecoin": "DOGE",
+                    "tron": "TRX",
                 }
                 
                 # Парсим цены
@@ -124,9 +132,15 @@ class BlockchainMonitor:
                 if "BTC" in self.price_cache:
                     self.price_cache["WBTC"] = self.price_cache["BTC"]
                 
+                # Stablecoins
+                self.price_cache["USDT"] = 1.0
+                self.price_cache["USDC"] = 1.0
+                self.price_cache["DAI"] = 1.0
+                self.price_cache["USDD"] = 1.0
+                
                 self.price_cache_time = datetime.utcnow()
                 
-                print(f"💰 [PRICE CACHE] Обновлено {len(self.price_cache)} цен: "
+                print(f"💰 [PRICE CACHE] Обновлено {len(self.price_cache)} цен через CoinGecko: "
                       f"BTC=${self.price_cache.get('BTC', 0):,.0f}, "
                       f"ETH=${self.price_cache.get('ETH', 0):,.0f}, "
                       f"SOL=${self.price_cache.get('SOL', 0):,.0f}")
@@ -136,24 +150,30 @@ class BlockchainMonitor:
             self._set_fallback_prices()
     
     def _set_fallback_prices(self):
-        """Устанавливает fallback цены при недоступности API"""
+        """ОБНОВЛЕНО: Актуальные fallback цены (24.10.2025)"""
         self.price_cache = {
-            "BTC": 95000,
-            "ETH": 3500,
-            "BNB": 600,
-            "SOL": 180,
-            "MATIC": 0.8,
-            "AVAX": 40,
-            "ARB": 1.2,
-            "OP": 2.5,
-            "LINK": 15,
-            "UNI": 8,
-            "AAVE": 180,
-            "WETH": 3500,
-            "WBTC": 95000,
+            "BTC": 110000,   # Актуально на 24.10.2025
+            "ETH": 3870,     # Актуально на 24.10.2025
+            "BNB": 1096,     # Актуально на 24.10.2025
+            "SOL": 189,      # Актуально на 24.10.2025
+            "USDT": 1.0,
+            "USDC": 1.0,
+            "DAI": 1.0,
+            "MATIC": 0.65,
+            "AVAX": 25,
+            "ARB": 0.75,
+            "OP": 1.65,
+            "LINK": 11,
+            "UNI": 6.5,
+            "AAVE": 145,
+            "TRX": 0.16,
+            "XRP": 2.40,
+            "DOGE": 0.19,
+            "WETH": 3870,
+            "WBTC": 110000,
         }
         self.price_cache_time = datetime.utcnow()
-        print(f"⚠️  [PRICE CACHE] Используются fallback цены")
+        print(f"⚠️  [PRICE CACHE] Используются fallback цены (API недоступен)")
     
     # =========================================================================
     # Основной метод сбора событий
@@ -162,7 +182,7 @@ class BlockchainMonitor:
     async def fetch_events(self, start_time: datetime) -> List[WhaleEvent]:
         """Собирает события со всех цепей (нативные + токены)"""
         
-        # НОВОЕ: Обновляем кэш цен при старте
+        # Обновляем кэш цен при старте
         await self._refresh_price_cache()
         
         events = []
@@ -459,7 +479,7 @@ class BlockchainMonitor:
             return []
     
     def _parse_evm_transactions(self, txs: List[Dict], chain: str, wallet_info: Dict, flow_type: str, api_config: Dict) -> List[WhaleEvent]:
-        """Парсит нативные транзакции с РЕАЛЬНЫМИ ценами"""
+        """Парсит нативные транзакции с РЕАЛЬНЫМИ ценами из кэша"""
         events = []
         
         for tx in txs[:10]:
@@ -470,7 +490,7 @@ class BlockchainMonitor:
                 
                 value_native = value_wei / 1e18
                 
-                # УЛУЧШЕНО: Получаем реальную цену из кэша
+                # Получаем реальную цену из кэша
                 native_symbol = api_config["native_symbol"]
                 
                 # Для обёрнутых токенов используем базовый актив
@@ -482,15 +502,10 @@ class BlockchainMonitor:
                 # Получаем цену из кэша (синхронный доступ)
                 price_estimate = self.price_cache.get(price_symbol, 0)
                 
-                # Fallback на старые значения если цена не найдена
+                # Fallback если цена не найдена (не должно случаться)
                 if price_estimate == 0:
-                    fallback_prices = {
-                        "ETH": 3500,
-                        "BNB": 600,
-                        "MATIC": 0.8,
-                        "AVAX": 40
-                    }
-                    price_estimate = fallback_prices.get(native_symbol, 1)
+                    print(f"⚠️  [PRICE] Не найдена цена для {price_symbol}, используем fallback")
+                    price_estimate = settings.FALLBACK_PRICES.get(native_symbol, 1)
                 
                 usd_estimate = value_native * price_estimate
                 
@@ -559,7 +574,7 @@ class BlockchainMonitor:
                 txs = await resp.json()
                 
                 # Получаем реальную цену BTC
-                btc_price = self.price_cache.get("BTC", 95000)
+                btc_price = self.price_cache.get("BTC", settings.FALLBACK_PRICES.get("BTC", 110000))
                 
                 for tx in txs[:30]:
                     vout_sum = sum(out.get("value", 0) for out in tx.get("vout", []))
@@ -615,7 +630,7 @@ class BlockchainMonitor:
             ]
             
             # Получаем реальную цену SOL
-            sol_price = self.price_cache.get("SOL", 180)
+            sol_price = self.price_cache.get("SOL", settings.FALLBACK_PRICES.get("SOL", 189))
             
             for wallet in known_sol_wallets:
                 try:
@@ -811,9 +826,10 @@ class BlockchainMonitor:
         
         return events
     
-    def _parse_tron_label(self, tag: str) -> Optional[AddressLabel]:
-        """Парсит метку TRONSCAN"""
-        if not tag:
+    def _parse_tron_label(self, tag) -> Optional[AddressLabel]:
+        """ИСПРАВЛЕНО: Парсит метку TRONSCAN с проверкой типа"""
+        # КРИТИЧНО: Проверка типа tag перед вызовом .lower()
+        if not tag or not isinstance(tag, str):
             return None
         
         tag_lower = tag.lower()
