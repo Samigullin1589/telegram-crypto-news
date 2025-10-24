@@ -781,8 +781,16 @@ class BlockchainMonitor:
                             from_addr = tx.get("from_address", "")
                             to_addr = tx.get("to_address", "")
                             
-                            from_label = self._parse_tron_label(tx.get("from_address_tag", ""))
-                            to_label = self._parse_tron_label(tx.get("to_address_tag", ""))
+                            # ИСПРАВЛЕНО: Безопасное извлечение тэгов (может быть string или dict)
+                            from_tag_raw = tx.get("from_address_tag")
+                            to_tag_raw = tx.get("to_address_tag")
+                            
+                            # Конвертируем dict в строку если нужно
+                            from_tag = self._normalize_tron_tag(from_tag_raw)
+                            to_tag = self._normalize_tron_tag(to_tag_raw)
+                            
+                            from_label = self._parse_tron_label(from_tag)
+                            to_label = self._parse_tron_label(to_tag)
                             
                             direction = self._determine_direction(from_label, to_label)
                             
@@ -825,6 +833,38 @@ class BlockchainMonitor:
             print(f"❌ [TRON] Ошибка: {e}")
         
         return events
+    
+    def _normalize_tron_tag(self, tag) -> Optional[str]:
+        """
+        КРИТИЧНО: Нормализует тэг из TronScan API
+        
+        TronScan может возвращать:
+        - Строку: "Binance Hot Wallet"
+        - Dict: {"en": "Binance", "zh": "币安"}
+        - None/пустое значение
+        """
+        if not tag:
+            return None
+        
+        # Если уже строка - возвращаем как есть
+        if isinstance(tag, str):
+            return tag.strip() if tag.strip() else None
+        
+        # Если dict - берём английское название
+        if isinstance(tag, dict):
+            # Приоритет: en > name > первое значение
+            if "en" in tag:
+                return str(tag["en"]).strip()
+            elif "name" in tag:
+                return str(tag["name"]).strip()
+            elif tag:
+                # Берём первое доступное значение
+                first_value = next(iter(tag.values()), None)
+                if first_value:
+                    return str(first_value).strip()
+        
+        # Для всех остальных типов
+        return str(tag).strip() if tag else None
     
     def _parse_tron_label(self, tag) -> Optional[AddressLabel]:
         """ИСПРАВЛЕНО: Парсит метку TRONSCAN с проверкой типа"""
