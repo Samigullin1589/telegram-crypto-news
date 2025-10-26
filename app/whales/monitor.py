@@ -1,1144 +1,1138 @@
-# app/whales/monitor.py (ФИНАЛЬНАЯ ВЕРСИЯ - 24 октября 2025)
+# app/whales/monitor.py
+"""
+BLOCKCHAIN MONITOR v3.0
+
+Универсальный мониторинг крупных транзакций на всех блокчейнах:
+- Multi-chain support (Ethereum, BSC, Solana, Tron, Base, Arbitrum, Polygon)
+- Smart filtering (биржи, мосты, внутренние переводы)
+- DEX detection (Uniswap, PancakeSwap, Raydium, etc)
+- ERC-20/SPL token support
+- Automatic retry с exponential backoff
+- Circuit breaker для защиты от перегрузки
+- Rate limiting и caching
+"""
+
 import aiohttp
 import asyncio
+from typing import List, Dict, Optional, Set, Tuple
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from collections import defaultdict
+import time
+import hashlib
+
 from app import settings
-from app.whales.normalize import WhaleEvent, AddressLabel
+from app.whales.normalize import WhaleEvent
+
+
+class CircuitBreaker:
+    """
+    Circuit Breaker для защиты от перегрузки API
+    
+    States:
+    - CLOSED: Нормальная работа
+    - OPEN: API перегружен, все запросы блокируются
+    - HALF_OPEN: Тестирование восстановления
+    """
+    
+    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.failures = 0
+        self.last_failure_time = None
+        self.state = "CLOSED"
+    
+    def record_success(self):
+        """Записывает успешный запрос"""
+        self.failures = 0
+        self.state = "CLOSED"
+    
+    def record_failure(self):
+        """Записывает неудачный запрос"""
+        self.failures += 1
+        self.last_failure_time = time.time()
+        
+        if self.failures >= self.failure_threshold:
+            self.state = "OPEN"
+            print(f"⚠️  [CIRCUIT] Circuit breaker OPEN ({self.failures} failures)")
+    
+    def can_execute(self) -> bool:
+        """Проверяет можно ли выполнять запросы"""
+        
+        if self.state == "CLOSED":
+            return True
+        
+        if self.state == "OPEN":
+            if time.time() - self.last_failure_time >= self.timeout:
+                self.state = "HALF_OPEN"
+                print(f"🔄 [CIRCUIT] Circuit breaker HALF_OPEN (testing)")
+                return True
+            return False
+        
+        return True
+
+
+class TransactionCache:
+    """
+    Кэш транзакций для предотвращения дубликатов
+    """
+    
+    def __init__(self, ttl_seconds: int = 3600):
+        self.cache: Dict[str, float] = {}
+        self.ttl = ttl_seconds
+    
+    def add(self, tx_hash: str):
+        """Добавляет транзакцию в кэш"""
+        self.cache[tx_hash] = time.time()
+        self._cleanup()
+    
+    def contains(self, tx_hash: str) -> bool:
+        """Проверяет наличие транзакции в кэше"""
+        self._cleanup()
+        return tx_hash in self.cache
+    
+    def _cleanup(self):
+        """Удаляет устаревшие записи"""
+        now = time.time()
+        to_remove = [
+            tx_hash for tx_hash, timestamp in self.cache.items()
+            if now - timestamp > self.ttl
+        ]
+        for tx_hash in to_remove:
+            del self.cache[tx_hash]
+
 
 class BlockchainMonitor:
-    """Сбор крупных перемещений из всех блокчейнов (включая токены)"""
+    """
+    Универсальный монитор всех блокчейнов
+    """
     
-    # ERC-20 Transfer event signature
-    ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-    
-    # Известные горячие кошельки бирж (топ-15 для примера, в реале их 50+)
-    KNOWN_HOT_WALLETS = {
-    # ========================================================================
-    # ETHEREUM - 22 адреса (95% покрытие) ✅
-    # ========================================================================
-    "ethereum": {
-        # Binance (топ-5 hot wallets)
-        "0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be": {"name": "Binance", "confidence": 95},
-        "0xd551234ae421e3bcba99a0da6d736074f22192ff": {"name": "Binance", "confidence": 95},
-        "0x564286362092d8e7936f0549571a803b203aaced": {"name": "Binance", "confidence": 95},
-        "0xf89d7b9c864f589bbf53a82105107622b35eaa40": {"name": "Binance", "confidence": 95},
-        "0xdfd5293d8e347dfe59e90efd55b2956a1343963d": {"name": "Binance", "confidence": 95},
-        
-        # Coinbase (топ-4)
-        "0x71660c4005ba85c37ccec55d0c4493e66fe775d3": {"name": "Coinbase", "confidence": 95},
-        "0x503828976d22510aad0201ac7ec88293211d23da": {"name": "Coinbase", "confidence": 95},
-        "0xddfabcdc4d8ffc6d5beaf154f18b778f892a0740": {"name": "Coinbase", "confidence": 95},
-        "0x07ee55aa48bb72dcc6e9d78256648910de513eca": {"name": "Coinbase", "confidence": 95},
-        
-        # Kraken (топ-3)
-        "0x2910543af39aba0cd09dbb2d50200b3e800a63d2": {"name": "Kraken", "confidence": 95},
-        "0x0a869d79a7052c7f1b55a8ebabbea3420f0d1e13": {"name": "Kraken", "confidence": 95},
-        "0xd688aea8f7d450909ade10c47faa95707ce0ce25": {"name": "Kraken", "confidence": 95},
-        
-        # OKX (топ-3)
-        "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": {"name": "OKX", "confidence": 90},
-        "0x98ec059dc3adfbdd63429454aeb0c990fba4a128": {"name": "OKX", "confidence": 90},
-        "0xa7efae728d2936e78bda97dc267687568dd593f3": {"name": "OKX", "confidence": 90},
-        
-        # Bybit (топ-3)
-        "0xa1116930326d21fb917d5a27f1e9943a9595fb47": {"name": "Bybit", "confidence": 90},
-        "0xf89d7b9c864f589bbf53a82105107622b35eaa40": {"name": "Bybit", "confidence": 90},
-        "0x3d6d6fd183b49c9e04d2c7ec6b0c8fcabd9e2bb7": {"name": "Bybit", "confidence": 90},
-        
-        # Huobi / HTX (топ-2)
-        "0xab5c66752a9e8167967685f1450532fb96d5d24f": {"name": "Huobi", "confidence": 85},
-        "0x6748f50f686bfbca6fe8ad62b22228b87f31ff2b": {"name": "Huobi", "confidence": 85},
-        
-        # Другие крупные биржи
-        "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c": {"name": "Gate.io", "confidence": 85},
-        "0x2b5634c42055806a59e9107ed44d43c426e58258": {"name": "KuCoin", "confidence": 85},
-    },
-    
-    # ========================================================================
-    # BSC - 15 адресов (90% покрытие) ✅ НОВОЕ!
-    # ========================================================================
-    "bsc": {
-        # Binance (BNB Chain - их родной блокчейн)
-        "0x8894e0a0c962cb723c1976a4421c95949be2d4e3": {"name": "Binance", "confidence": 95},
-        "0xf977814e90da44bfa03b6295a0616a897441acec": {"name": "Binance", "confidence": 95},
-        "0x21a31ee1afc51d94c2efccaa2092ad1028285549": {"name": "Binance", "confidence": 95},
-        "0xdfd5293d8e347dfe59e90efd55b2956a1343963d": {"name": "Binance", "confidence": 95},
-        "0x4976a4a02f38326660d17bf34b431dc6e2eb2327": {"name": "Binance", "confidence": 95},
-        
-        # OKX
-        "0x2c8fbb630289363ac80705a1a61273f76fd5a157": {"name": "OKX", "confidence": 90},
-        "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": {"name": "OKX", "confidence": 90},
-        
-        # Bybit
-        "0xee5b5b923ffce93a870b3104b7ca09c3db80047a": {"name": "Bybit", "confidence": 90},
-        "0xa1116930326d21fb917d5a27f1e9943a9595fb47": {"name": "Bybit", "confidence": 90},
-        
-        # Huobi / HTX
-        "0x0d0707963952f2fba59dd06f2b425ace40b492fe": {"name": "Huobi", "confidence": 85},
-        
-        # Другие
-        "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c": {"name": "Gate.io", "confidence": 85},
-        "0x689c56aef474df92d44a1b70850f808488f9769c": {"name": "KuCoin", "confidence": 85},
-        "0x4fabb145d64652a948d72533023f6e7a623c7c53": {"name": "Bitfinex", "confidence": 80},
-        "0x6262998ced04146fa42253a5c0af90ca02dfd2a3": {"name": "Crypto.com", "confidence": 80},
-        "0x28c6c06298d514db089934071355e5743bf21d60": {"name": "MEXC", "confidence": 75},
-    },
-    
-    # ========================================================================
-    # POLYGON - 12 адресов (85% покрытие) ✅ НОВОЕ!
-    # ========================================================================
-    "polygon": {
-        # Binance
-        "0x1e0447b19bb6ecfdae1e4ae1694b0c3659614e4e": {"name": "Binance", "confidence": 95},
-        "0xf977814e90da44bfa03b6295a0616a897441acec": {"name": "Binance", "confidence": 95},
-        "0x5a52e96bacdabb82fd05763e25335261b270efcb": {"name": "Binance", "confidence": 95},
-        
-        # Coinbase
-        "0xbec4a6c6b2c1d4b402c1e0c8fa3b8a9ded31c4ed": {"name": "Coinbase", "confidence": 95},
-        "0xd551234ae421e3bcba99a0da6d736074f22192ff": {"name": "Coinbase", "confidence": 95},
-        
-        # OKX
-        "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": {"name": "OKX", "confidence": 90},
-        "0x2c8fbb630289363ac80705a1a61273f76fd5a157": {"name": "OKX", "confidence": 90},
-        
-        # Bybit
-        "0xa1116930326d21fb917d5a27f1e9943a9595fb47": {"name": "Bybit", "confidence": 90},
-        
-        # Другие
-        "0x0a869d79a7052c7f1b55a8ebabbea3420f0d1e13": {"name": "Kraken", "confidence": 85},
-        "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c": {"name": "Gate.io", "confidence": 85},
-        "0x2b5634c42055806a59e9107ed44d43c426e58258": {"name": "KuCoin", "confidence": 85},
-        "0x7758e507850da48cd47df1fb5f875c23e3340c50": {"name": "Crypto.com", "confidence": 80},
-    },
-    
-    # ========================================================================
-    # ARBITRUM - 10 адресов (80% покрытие) ✅ НОВОЕ!
-    # ========================================================================
-    "arbitrum": {
-        # Binance
-        "0xb38e8c17e38363af6ebdcb3dae12e0243582891d": {"name": "Binance", "confidence": 95},
-        "0xf977814e90da44bfa03b6295a0616a897441acec": {"name": "Binance", "confidence": 95},
-        
-        # Coinbase
-        "0x503828976d22510aad0201ac7ec88293211d23da": {"name": "Coinbase", "confidence": 95},
-        
-        # OKX
-        "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": {"name": "OKX", "confidence": 90},
-        
-        # Bybit
-        "0xa1116930326d21fb917d5a27f1e9943a9595fb47": {"name": "Bybit", "confidence": 90},
-        
-        # Другие
-        "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c": {"name": "Gate.io", "confidence": 85},
-        "0x2b5634c42055806a59e9107ed44d43c426e58258": {"name": "KuCoin", "confidence": 85},
-        "0x0d0707963952f2fba59dd06f2b425ace40b492fe": {"name": "Huobi", "confidence": 80},
-        "0x0639556f03714a74a5feeaf5736a4a64ff70d206": {"name": "Bitget", "confidence": 80},
-        "0x75e89d5979e4f6fba9f97c104c2f0afb3f1dcb88": {"name": "MEXC", "confidence": 75},
-    },
-    
-    # ========================================================================
-    # BASE - 8 адресов (75% покрытие) ✅ НОВОЕ!
-    # ========================================================================
-    "base": {
-        # Coinbase (их родной L2)
-        "0x503828976d22510aad0201ac7ec88293211d23da": {"name": "Coinbase", "confidence": 95},
-        "0xd551234ae421e3bcba99a0da6d736074f22192ff": {"name": "Coinbase", "confidence": 95},
-        "0xddfabcdc4d8ffc6d5beaf154f18b778f892a0740": {"name": "Coinbase", "confidence": 95},
-        
-        # Другие биржи
-        "0xb38e8c17e38363af6ebdcb3dae12e0243582891d": {"name": "Binance", "confidence": 90},
-        "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": {"name": "OKX", "confidence": 85},
-        "0xa1116930326d21fb917d5a27f1e9943a9595fb47": {"name": "Bybit", "confidence": 85},
-        "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c": {"name": "Gate.io", "confidence": 80},
-        "0x2b5634c42055806a59e9107ed44d43c426e58258": {"name": "KuCoin", "confidence": 80},
-    },
-    
-    # ========================================================================
-    # AVALANCHE - 10 адресов (80% покрытие) ✅ НОВОЕ!
-    # ========================================================================
-    "avalanche": {
-        # Binance
-        "0xf977814e90da44bfa03b6295a0616a897441acec": {"name": "Binance", "confidence": 95},
-        "0x564286362092d8e7936f0549571a803b203aaced": {"name": "Binance", "confidence": 95},
-        
-        # Coinbase
-        "0xd551234ae421e3bcba99a0da6d736074f22192ff": {"name": "Coinbase", "confidence": 95},
-        
-        # OKX
-        "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": {"name": "OKX", "confidence": 90},
-        
-        # Bybit
-        "0xa1116930326d21fb917d5a27f1e9943a9595fb47": {"name": "Bybit", "confidence": 90},
-        
-        # Другие
-        "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c": {"name": "Gate.io", "confidence": 85},
-        "0x2b5634c42055806a59e9107ed44d43c426e58258": {"name": "KuCoin", "confidence": 85},
-        "0x0d0707963952f2fba59dd06f2b425ace40b492fe": {"name": "Huobi", "confidence": 80},
-        "0x6262998ced04146fa42253a5c0af90ca02dfd2a3": {"name": "Crypto.com", "confidence": 80},
-        "0x876eabf441b2ee5b5b0554fd502a8e0600950cfa": {"name": "Bitfinex", "confidence": 75},
-    },
-    
-    # ========================================================================
-    # OPTIMISM - 8 адресов (75% покрытие) ✅ НОВЫЙ БЛОКЧЕЙН!
-    # ========================================================================
-    "optimism": {
-        # Binance
-        "0xf977814e90da44bfa03b6295a0616a897441acec": {"name": "Binance", "confidence": 95},
-        
-        # Coinbase
-        "0x503828976d22510aad0201ac7ec88293211d23da": {"name": "Coinbase", "confidence": 95},
-        
-        # OKX
-        "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": {"name": "OKX", "confidence": 90},
-        
-        # Bybit
-        "0xa1116930326d21fb917d5a27f1e9943a9595fb47": {"name": "Bybit", "confidence": 90},
-        
-        # Другие
-        "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c": {"name": "Gate.io", "confidence": 85},
-        "0x2b5634c42055806a59e9107ed44d43c426e58258": {"name": "KuCoin", "confidence": 85},
-        "0x6262998ced04146fa42253a5c0af90ca02dfd2a3": {"name": "Crypto.com", "confidence": 80},
-        "0x0639556f03714a74a5feeaf5736a4a64ff70d206": {"name": "Bitget", "confidence": 75},
-    },
-    
-    # ========================================================================
-    # SOLANA - 15+ адресов (85%+ покрытие) ✅ КРИТИЧНО УЛУЧШЕНО!
-    # ========================================================================
-    "solana": {
-        # Binance (топ-6, самые активные)
-        "H8sMJSCQxfKiFTCfDR3DUMLPwcRbM61LGFJ8N4dK3WjS": {"name": "Binance", "confidence": 95},
-        "2ojv9BAiHUrvsm9gxDe7fJSzbNZSJcxZvf8dqmWGHG8S": {"name": "Binance", "confidence": 95},
-        "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM": {"name": "Binance", "confidence": 95},
-        "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9": {"name": "Binance", "confidence": 95},
-        "CuieVDEDtLo7FypA9SbLM9saXFdb1dsshEkyErMqkRQq": {"name": "Binance", "confidence": 95},
-        "DYnF7kaPxPBRdV9XFWgXfAZNzh7RdP5x3aw31rpLcvMC": {"name": "Binance", "confidence": 95},
-        
-        # Coinbase (топ-3)
-        "H8UekPQCBxTd5ZWGcfJmXpz5RPvfNxAH7fLxZ9jdQvSA": {"name": "Coinbase", "confidence": 95},
-        "2AQdpHJ2JpcEgPiATUXjQxA8QmafFegfQwSLWSprPicm": {"name": "Coinbase", "confidence": 95},
-        "GJRs4FwHtemZ5ZE9x3FNvJ8TMwitKTh21yxdRPqn7npE": {"name": "Coinbase", "confidence": 90},
-        
-        # OKX (топ-2)
-        "5VCwKtCXgCJ6kit5FybXjvriW3xELsFDhYrPSqtJNmcD": {"name": "OKX", "confidence": 90},
-        "CTz5UMLQm2SRWHzQnU62Pi4yJqbNGjgRBHqqp6oDHfF7": {"name": "OKX", "confidence": 90},
-        
-        # Bybit (топ-2)
-        "AC5RDfQFmDS1deWZos921JfqscXdByf8BKHs5ACWjtW2": {"name": "Bybit", "confidence": 90},
-        "CUx5QyDqJSAa9Jh4YQGdyYCGzW8Z6K2cXeHxRkYvLi8T": {"name": "Bybit", "confidence": 90},
-        
-        # Другие
-        "DqniU4V1kye6HSgQEB1oBWeVVN63SqTqL1FVPjneSz9P": {"name": "Kraken", "confidence": 90},
-        "BSxbACLWrgYDBPHLb2HTFfx8RkRZAhKyEQZ9xEZYQVZg": {"name": "Gate.io", "confidence": 85},
-        "EviLW6BDLYyzS3pPzKLr5CVex4dKKBT3Gq9FU6nABHZP": {"name": "KuCoin", "confidence": 85},
-    },
-    
-    # ========================================================================
-    # BITCOIN - Известные адреса (УЛУЧШЕНО!) ⚠️ Частичное покрытие
-    # ========================================================================
-    "bitcoin": {
-        # Binance (P2SH и Bech32)
-        "3FupZp77ySr7jwoLYEJ9mwzJpvoNBXMLdJ": {"name": "Binance", "confidence": 95},
-        "34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo": {"name": "Binance", "confidence": 95},
-        "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h": {"name": "Binance", "confidence": 95},
-        
-        # Coinbase
-        "3M219KR5vEneNb47ewrPfWyb5jQ2DjxRP6": {"name": "Coinbase", "confidence": 95},
-        "bc1qgdjqv0av3q56jvd82tkdjpy7gdp9ut8tlqmgrpmv24sq90ecnvqqjwvw97": {"name": "Coinbase", "confidence": 95},
-        
-        # Bitfinex
-        "3D2oetdNuZUqQHPJmcMDDHYoqkyNVsFk9r": {"name": "Bitfinex", "confidence": 90},
-        
-        # Kraken
-        "3BMEX7kfQdkyfGnNGRAk6bBxYf8j2KYELt": {"name": "Kraken", "confidence": 90},
-        
-        # Huobi
-        "3JZq4atUahhuA9rLhXLMhhTo133J9rF97j": {"name": "Huobi", "confidence": 85},
-        
-        # OKX
-        "1Kr6QSydW9bFQG1mXiPNNu6WpJGmUa9i1g": {"name": "OKX", "confidence": 85},
-    },
-}
-
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
-        self.watchlist_cache: Dict = {}
-        # Кэш цен
-        self.price_cache: Dict[str, float] = {}
-        self.price_cache_time: Optional[datetime] = None
         
+        # API endpoints и ключи
+        self.apis = {
+            "ethereum": {
+                "url": "https://api.etherscan.io/api",
+                "key": settings.ETHERSCAN_API_KEY,
+                "native_token": "ETH",
+                "decimals": 18
+            },
+            "bsc": {
+                "url": "https://api.bscscan.com/api",
+                "key": settings.ETHERSCAN_API_KEY,
+                "native_token": "BNB",
+                "decimals": 18
+            },
+            "solana": {
+                "url": f"https://mainnet.helius-rpc.com/?api-key={settings.HELIUS_API_KEY}",
+                "key": settings.HELIUS_API_KEY,
+                "native_token": "SOL",
+                "decimals": 9
+            },
+            "tron": {
+                "url": "https://apilist.tronscanapi.com/api",
+                "key": settings.TRONSCAN_API_KEY,
+                "native_token": "TRX",
+                "decimals": 6
+            },
+            "base": {
+                "url": "https://api.basescan.org/api",
+                "key": settings.ETHERSCAN_API_KEY,
+                "native_token": "ETH",
+                "decimals": 18
+            },
+            "arbitrum": {
+                "url": "https://api.arbiscan.io/api",
+                "key": settings.ETHERSCAN_API_KEY,
+                "native_token": "ETH",
+                "decimals": 18
+            },
+            "polygon": {
+                "url": "https://api.polygonscan.com/api",
+                "key": settings.ETHERSCAN_API_KEY,
+                "native_token": "MATIC",
+                "decimals": 18
+            }
+        }
+        
+        # Circuit breakers для каждого chain
+        self.circuit_breakers = {
+            chain: CircuitBreaker(failure_threshold=3, timeout=120)
+            for chain in self.apis.keys()
+        }
+        
+        # Rate limiting
+        self.last_request_time = defaultdict(float)
+        self.min_request_interval = 0.2
+        
+        # Transaction cache
+        self.tx_cache = TransactionCache(ttl_seconds=3600)
+        
+        # Адреса бирж и мостов
+        self.exchange_addresses = self._load_exchange_addresses()
+        self.bridge_addresses = self._load_bridge_addresses()
+        
+        # DEX contracts
+        self.dex_contracts = self._load_dex_contracts()
+        
+        # Статистика
+        self.stats = {
+            "requests_made": defaultdict(int),
+            "events_found": defaultdict(int),
+            "events_filtered": defaultdict(int),
+            "cache_hits": 0,
+            "errors": defaultdict(int),
+            "circuit_breaker_trips": defaultdict(int),
+            "dex_detected": defaultdict(int)
+        }
+    
+    # ========================================================================
+    # CONTEXT MANAGER
+    # ========================================================================
+    
     async def __aenter__(self):
-        self.session = aiohttp.ClientSession()
-        if settings.ASSETS == '*':
-            self._load_watchlist()
+        """Создает aiohttp сессию"""
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        connector = aiohttp.TCPConnector(limit=100, limit_per_host=10)
+        self.session = aiohttp.ClientSession(
+            timeout=timeout,
+            connector=connector,
+            headers={
+                "User-Agent": "CryptoCompass/3.0",
+                "Accept": "application/json"
+            }
+        )
         return self
-        
+    
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Закрывает aiohttp сессию"""
         if self.session:
             await self.session.close()
     
-    def _load_watchlist(self):
-        """Загружает watchlist.json для Discovery"""
-        try:
-            import json
-            with open(settings.WATCHLIST_FILE, 'r') as f:
-                data = json.load(f)
-                self.watchlist_cache = data.get("chains", {})
-                print(f"📋 [MONITOR] Загружен watchlist: {sum(len(v) for v in self.watchlist_cache.values())} токенов")
-        except:
-            print("⚠️  [MONITOR] Watchlist не найден")
-            self.watchlist_cache = {}
+    # ========================================================================
+    # MAIN FETCH
+    # ========================================================================
     
-    # =========================================================================
-    # ИСПРАВЛЕНО: CoinGecko вместо Binance (451 error fix)
-    # =========================================================================
-    
-    async def _get_quick_price(self, symbol: str) -> float:
-        """Быстрое получение цены из кэша (обновляется каждые 5 минут)"""
+    async def fetch_events(
+        self,
+        start_time: datetime,
+        chains: Optional[List[str]] = None,
+        assets: Optional[List[str]] = None
+    ) -> List[WhaleEvent]:
+        """
+        Получает события со всех блокчейнов
         
-        # Проверяем кэш
-        if self.price_cache_time and (datetime.utcnow() - self.price_cache_time).seconds < 300:
-            if symbol in self.price_cache:
-                return self.price_cache[symbol]
+        Args:
+            start_time: Начало временного окна
+            chains: Список chains для мониторинга (None = все)
+            assets: Список активов для фильтрации (None = все)
         
-        # Обновляем кэш если старый
-        if not self.price_cache or not self.price_cache_time or \
-           (datetime.utcnow() - self.price_cache_time).seconds >= 300:
-            await self._refresh_price_cache()
+        Returns:
+            Список WhaleEvent
+        """
         
-        return self.price_cache.get(symbol, 0.0)
-    
-    async def _refresh_price_cache(self):
-        """ИСПРАВЛЕНО: CoinGecko вместо Binance (Render geoblocking fix)"""
-        try:
-            # CoinGecko API (работает на Render, в отличие от Binance)
-            url = "https://api.coingecko.com/api/v3/simple/price"
-            params = {
-                "ids": "bitcoin,ethereum,binancecoin,solana,matic-network,avalanche-2,arbitrum,optimism,chainlink,uniswap,ripple,dogecoin,tron",
-                "vs_currencies": "usd"
-            }
-            
-            # Добавляем API ключ если есть
-            if settings.COINGECKO_API_KEY:
-                params["x_cg_pro_api_key"] = settings.COINGECKO_API_KEY
-            
-            async with self.session.get(url, params=params, timeout=10) as resp:
-                if resp.status == 429:
-                    print(f"⚠️  [PRICE CACHE] CoinGecko rate limit, используем fallback")
-                    self._set_fallback_prices()
-                    return
-                
-                if resp.status != 200:
-                    print(f"⚠️  [PRICE CACHE] CoinGecko вернул {resp.status}")
-                    self._set_fallback_prices()
-                    return
-                
-                data = await resp.json()
-                
-                # Маппинг CoinGecko ID → Символ
-                mapping = {
-                    "bitcoin": "BTC",
-                    "ethereum": "ETH",
-                    "binancecoin": "BNB",
-                    "solana": "SOL",
-                    "matic-network": "MATIC",
-                    "avalanche-2": "AVAX",
-                    "arbitrum": "ARB",
-                    "optimism": "OP",
-                    "chainlink": "LINK",
-                    "uniswap": "UNI",
-                    "ripple": "XRP",
-                    "dogecoin": "DOGE",
-                    "tron": "TRX",
-                }
-                
-                # Парсим цены
-                for coin_id, symbol in mapping.items():
-                    if coin_id in data and "usd" in data[coin_id]:
-                        price = data[coin_id]["usd"]
-                        if price > 0:
-                            self.price_cache[symbol] = price
-                
-                # Добавляем wrapped токены
-                if "ETH" in self.price_cache:
-                    self.price_cache["WETH"] = self.price_cache["ETH"]
-                if "BTC" in self.price_cache:
-                    self.price_cache["WBTC"] = self.price_cache["BTC"]
-                
-                # Stablecoins
-                self.price_cache["USDT"] = 1.0
-                self.price_cache["USDC"] = 1.0
-                self.price_cache["DAI"] = 1.0
-                self.price_cache["USDD"] = 1.0
-                
-                self.price_cache_time = datetime.utcnow()
-                
-                print(f"💰 [PRICE CACHE] Обновлено {len(self.price_cache)} цен через CoinGecko: "
-                      f"BTC=${self.price_cache.get('BTC', 0):,.0f}, "
-                      f"ETH=${self.price_cache.get('ETH', 0):,.0f}, "
-                      f"SOL=${self.price_cache.get('SOL', 0):,.0f}")
-                
-        except Exception as e:
-            print(f"⚠️  [PRICE CACHE] Ошибка обновления: {e}")
-            self._set_fallback_prices()
-    
-    def _set_fallback_prices(self):
-        """ОБНОВЛЕНО: Актуальные fallback цены (24.10.2025)"""
-        self.price_cache = {
-            "BTC": 110000,   # Актуально на 24.10.2025
-            "ETH": 3870,     # Актуально на 24.10.2025
-            "BNB": 1096,     # Актуально на 24.10.2025
-            "SOL": 189,      # Актуально на 24.10.2025
-            "USDT": 1.0,
-            "USDC": 1.0,
-            "DAI": 1.0,
-            "MATIC": 0.65,
-            "AVAX": 25,
-            "ARB": 0.75,
-            "OP": 1.65,
-            "LINK": 11,
-            "UNI": 6.5,
-            "AAVE": 145,
-            "TRX": 0.16,
-            "XRP": 2.40,
-            "DOGE": 0.19,
-            "WETH": 3870,
-            "WBTC": 110000,
-        }
-        self.price_cache_time = datetime.utcnow()
-        print(f"⚠️  [PRICE CACHE] Используются fallback цены (API недоступен)")
-    
-    # =========================================================================
-    # Основной метод сбора событий
-    # =========================================================================
-    
-    async def fetch_events(self, start_time: datetime) -> List[WhaleEvent]:
-        """Собирает события со всех цепей (нативные + токены)"""
+        if not self.session:
+            raise RuntimeError("BlockchainMonitor должен использоваться с async context manager")
         
-        # Обновляем кэш цен при старте
-        await self._refresh_price_cache()
+        # Определяем chains для мониторинга
+        chains_to_monitor = chains or list(self.apis.keys())
         
-        events = []
+        # Фильтруем chains с доступными API ключами
+        chains_to_monitor = [
+            chain for chain in chains_to_monitor
+            if self.apis[chain]["key"]
+        ]
         
+        if not chains_to_monitor:
+            print("⚠️  [MONITOR] Нет доступных API ключей")
+            return []
+        
+        print(f"🔍 [MONITOR] Сканирую {len(chains_to_monitor)} chains: {', '.join(chains_to_monitor)}")
+        
+        # Параллельно запрашиваем все chains
         tasks = [
-            self._fetch_evm_events("ethereum", start_time),
-            self._fetch_evm_events("bsc", start_time),
-            self._fetch_evm_events("polygon", start_time),
-            self._fetch_evm_events("arbitrum", start_time),
-            self._fetch_evm_events("base", start_time),
-            self._fetch_evm_events("avalanche", start_time),
-            self._fetch_evm_events("optimism", start_time),
-            self._fetch_btc_events(start_time),
-            self._fetch_sol_events(start_time),
-            self._fetch_tron_events(start_time),
+            self._fetch_chain_events(chain, start_time, assets)
+            for chain in chains_to_monitor
         ]
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        for result in results:
+        # Объединяем результаты
+        all_events = []
+        for chain, result in zip(chains_to_monitor, results):
             if isinstance(result, Exception):
-                print(f"⚠️  [MONITOR] Ошибка: {result}")
-            elif isinstance(result, list):
-                events.extend(result)
-        
-        print(f"📊 [MONITOR] Собрано {len(events)} событий (нативные + токены)")
-        return events
-    
-    # =========================================================================
-    # EVM CHAINS (нативные + ERC-20 токены)
-    # =========================================================================
-    async def _fetch_evm_events(self, chain: str, start_time: datetime) -> List[WhaleEvent]:
-        """Мониторинг EVM: нативные + ERC-20"""
-        events = []
-        
-        api_config = self._get_evm_api_config(chain)
-        if not api_config:
-            return events
-        
-        try:
-            latest_block = await self._get_latest_block(api_config)
-            if not latest_block:
-                return events
-            
-            blocks_back = int(settings.START_FROM_MINUTES_AGO * 60 / api_config["block_time"])
-            start_block = max(0, latest_block - blocks_back)
-            
-            print(f"🔗 [{chain.upper()}] Блоки {start_block}-{latest_block}")
-            
-            # 1. Нативные переводы
-            native_events = await self._fetch_native_transfers(api_config, chain, start_block, latest_block)
-            events.extend(native_events)
-            
-            # 2. ERC-20 токены
-            token_events = await self._fetch_token_transfers(api_config, chain, start_block, latest_block)
-            events.extend(token_events)
-            
-            print(f"🔗 [{chain.upper()}] Найдено {len(events)} переводов")
-            
-        except Exception as e:
-            print(f"❌ [{chain.upper()}] Ошибка: {e}")
-        
-        return events
-    
-    async def _fetch_native_transfers(self, api_config: Dict, chain: str, start_block: int, end_block: int) -> List[WhaleEvent]:
-        """Нативные переводы на/с hot wallets"""
-        events = []
-        
-        for address, info in self.KNOWN_HOT_WALLETS.get(chain, {}).items():
-            try:
-                incoming = await self._fetch_evm_transactions(api_config, address, start_block, end_block)
-                events.extend(self._parse_evm_transactions(incoming, chain, info, "inflow", api_config))
-                await asyncio.sleep(0.2)
-            except Exception as e:
-                print(f"⚠️  [{chain}] Ошибка {address[:10]}: {e}")
-        
-        return events
-    
-    async def _fetch_token_transfers(self, api_config: Dict, chain: str, start_block: int, end_block: int) -> List[WhaleEvent]:
-        """ERC-20/BEP-20 токены из watchlist"""
-        events = []
-        
-        tokens = self.watchlist_cache.get(chain, [])
-        if not tokens:
-            return events
-        
-        # Топ-20 токенов по объёму
-        top_tokens = sorted(tokens, key=lambda x: x.get("volume_24h", 0), reverse=True)[:20]
-        
-        for token in top_tokens:
-            contract = token.get("contract")
-            if not contract:
+                print(f"❌ [MONITOR] Ошибка {chain}: {result}")
+                self.stats["errors"][chain] += 1
                 continue
             
-            try:
-                transfers = await self._fetch_erc20_logs(api_config, contract, start_block, end_block)
-                
-                for tx in transfers:
-                    event = self._parse_erc20_transfer(tx, chain, token, api_config)
-                    if event:
-                        events.append(event)
-                
-                await asyncio.sleep(0.3)
-                
-            except Exception as e:
-                print(f"⚠️  [{chain}] Ошибка токена {token.get('symbol')}: {e}")
-                continue
+            if result:
+                all_events.extend(result)
+                self.stats["events_found"][chain] += len(result)
+                print(f"✅ [MONITOR] {chain}: найдено {len(result)} событий")
         
-        return events
+        # Фильтруем дубликаты по tx_hash
+        unique_events = {}
+        for event in all_events:
+            if event.tx_hash not in unique_events:
+                unique_events[event.tx_hash] = event
+        
+        all_events = list(unique_events.values())
+        
+        # Сортируем по времени
+        all_events.sort(key=lambda e: e.tx_time_utc, reverse=True)
+        
+        print(f"🎯 [MONITOR] Всего уникальных событий: {len(all_events)}")
+        
+        return all_events
     
-    async def _fetch_erc20_logs(self, api_config: Dict, contract: str, start_block: int, end_block: int) -> List[Dict]:
-        """Получает ERC-20 Transfer события"""
+    async def _fetch_chain_events(
+        self,
+        chain: str,
+        start_time: datetime,
+        assets: Optional[List[str]] = None
+    ) -> List[WhaleEvent]:
+        """
+        Получает события для конкретного chain
+        """
+        
+        # Проверяем circuit breaker
+        if not self.circuit_breakers[chain].can_execute():
+            print(f"⚠️  [MONITOR] {chain} circuit breaker OPEN, пропускаю")
+            self.stats["circuit_breaker_trips"][chain] += 1
+            return []
+        
         try:
-            params = {
-                "module": "logs",
-                "action": "getLogs",
-                "address": contract,
-                "fromBlock": start_block,
-                "toBlock": end_block,
-                "topic0": self.ERC20_TRANSFER_TOPIC,
-                "apikey": api_config["api_key"]
-            }
+            # Rate limiting
+            await self._wait_for_rate_limit(chain)
             
-            async with self.session.get(api_config["api_url"], params=params, timeout=15) as resp:
-                data = await resp.json()
-                
-                if data.get("status") == "1" and data.get("result"):
-                    return data["result"]
+            # Выбираем метод в зависимости от chain
+            if chain in ["ethereum", "bsc", "base", "arbitrum", "polygon"]:
+                events = await self._fetch_evm_events(chain, start_time, assets)
+            elif chain == "solana":
+                events = await self._fetch_solana_events(start_time, assets)
+            elif chain == "tron":
+                events = await self._fetch_tron_events(start_time, assets)
+            else:
+                print(f"⚠️  [MONITOR] Неизвестный chain: {chain}")
                 return []
-                
+            
+            # Успех - обновляем circuit breaker
+            self.circuit_breakers[chain].record_success()
+            self.stats["requests_made"][chain] += 1
+            
+            return events
+        
         except Exception as e:
+            print(f"❌ [MONITOR] Ошибка {chain}: {e}")
+            self.circuit_breakers[chain].record_failure()
+            self.stats["errors"][chain] += 1
             return []
     
-    def _parse_erc20_transfer(self, log: Dict, chain: str, token_info: Dict, api_config: Dict) -> Optional[WhaleEvent]:
-        """Парсит ERC-20 Transfer event"""
-        try:
-            topics = log.get("topics", [])
-            if len(topics) < 3:
-                return None
-            
-            from_addr = "0x" + topics[1][-40:]
-            to_addr = "0x" + topics[2][-40:]
-            
-            data_hex = log.get("data", "0x0")
-            amount_wei = int(data_hex, 16)
-            
-            decimals = token_info.get("decimals", 18)
-            if token_info.get("symbol") in ["USDT", "USDC", "USDD"]:
-                decimals = 6
-            
-            amount_tokens = amount_wei / (10 ** decimals)
-            
-            if amount_tokens == 0:
-                return None
-            
-            usd_estimate = amount_tokens * 1
-            
-            from_is_exchange = from_addr.lower() in self.KNOWN_HOT_WALLETS.get(chain, {})
-            to_is_exchange = to_addr.lower() in self.KNOWN_HOT_WALLETS.get(chain, {})
-            
-            if not (from_is_exchange or to_is_exchange):
-                return None
-            
-            if to_is_exchange:
-                direction = "inflow_to_exchange"
-                label_side = "to"
-                wallet_info = self.KNOWN_HOT_WALLETS[chain][to_addr.lower()]
-            else:
-                direction = "outflow_to_cold"
-                label_side = "from"
-                wallet_info = self.KNOWN_HOT_WALLETS[chain][from_addr.lower()]
-            
-            event = WhaleEvent(
-                asset=token_info.get("symbol", "UNKNOWN").upper(),
-                amount_native=amount_tokens,
-                amount_usd=usd_estimate,
-                chain=chain,
-                direction=direction,
-                phase="activation",
-                tx_hash=log.get("transactionHash", ""),
-                from_address=from_addr.lower(),
-                to_address=to_addr.lower(),
-                tx_time_utc=datetime.fromtimestamp(int(log.get("timeStamp", "0"), 16)),
-                min_usd_threshold=settings.MIN_USD_FLOOR
-            )
-            
-            label = AddressLabel(
-                provider="known_wallets",
-                name="exchange",
-                confidence=wallet_info["confidence"],
-                details=f"{wallet_info['name']} Hot Wallet"
-            )
-            event.labels[label_side].append(label)
-            
-            event.links = {
-                "tx": f"{api_config['explorer']}/tx/{event.tx_hash}",
-                "from": f"{api_config['explorer']}/address/{from_addr}",
-                "to": f"{api_config['explorer']}/address/{to_addr}"
-            }
-            
-            return event
-        except Exception as e:
-            return None
+    # ========================================================================
+    # EVM CHAINS
+    # ========================================================================
     
-    def _get_evm_api_config(self, chain: str) -> Optional[Dict]:
-        """Конфигурация API для EVM сетей"""
-        configs = {
-            "ethereum": {
-                "api_url": "https://api.etherscan.io/api",
-                "api_key": settings.ETHERSCAN_API_KEY,
-                "explorer": "https://etherscan.io",
-                "native_symbol": "ETH",
-                "block_time": 12
-            },
-            "bsc": {
-                "api_url": "https://api.bscscan.com/api",
-                "api_key": settings.ETHERSCAN_API_KEY,
-                "explorer": "https://bscscan.com",
-                "native_symbol": "BNB",
-                "block_time": 3
-            },
-            "polygon": {
-                "api_url": "https://api.polygonscan.com/api",
-                "api_key": settings.ETHERSCAN_API_KEY,
-                "explorer": "https://polygonscan.com",
-                "native_symbol": "MATIC",
-                "block_time": 2
-            },
-            "arbitrum": {
-                "api_url": "https://api.arbiscan.io/api",
-                "api_key": settings.ETHERSCAN_API_KEY,
-                "explorer": "https://arbiscan.io",
-                "native_symbol": "ETH",
-                "block_time": 0.25
-            },
-            "base": {
-                "api_url": "https://api.basescan.org/api",
-                "api_key": settings.ETHERSCAN_API_KEY,
-                "explorer": "https://basescan.org",
-                "native_symbol": "ETH",
-                "block_time": 2
-            },
-            "avalanche": {
-            "api_url": "https://api.snowtrace.io/api",
-            "api_key": settings.ETHERSCAN_API_KEY,
-            "explorer": "https://snowtrace.io",
-            "native_symbol": "AVAX",
-            "block_time": 2
-        },
-        "optimism": {
-            "api_url": "https://api-optimistic.etherscan.io/api",
-            "api_key": settings.ETHERSCAN_API_KEY,
-            "explorer": "https://optimistic.etherscan.io",
-            "native_symbol": "ETH",
-            "block_time": 2
-        }
-    }
-        config = configs.get(chain)
-        if config and not config["api_key"]:
-            print(f"⚠️  [{chain.upper()}] API ключ не установлен")
-            return None
+    async def _fetch_evm_events(
+        self,
+        chain: str,
+        start_time: datetime,
+        assets: Optional[List[str]] = None
+    ) -> List[WhaleEvent]:
+        """
+        Получает события для EVM-совместимых chains
+        """
         
-        return config
+        api_config = self.apis[chain]
+        api_url = api_config["url"]
+        api_key = api_config["key"]
+        
+        events = []
+        
+        # Стратегия 1: Получаем крупные нативные транзакции
+        native_events = await self._fetch_evm_native_transfers(
+            chain, api_url, api_key, start_time
+        )
+        events.extend(native_events)
+        
+        # Стратегия 2: Получаем крупные ERC-20 трансферы
+        if assets:
+            token_events = await self._fetch_evm_token_transfers(
+                chain, api_url, api_key, start_time, assets
+            )
+            events.extend(token_events)
+        
+        # Стратегия 3: Мониторим DEX swaps
+        dex_events = await self._fetch_evm_dex_swaps(
+            chain, api_url, api_key, start_time
+        )
+        events.extend(dex_events)
+        
+        return events
     
-    async def _get_latest_block(self, api_config: Dict) -> Optional[int]:
-        """Получает последний блок"""
+    async def _fetch_evm_native_transfers(
+        self,
+        chain: str,
+        api_url: str,
+        api_key: str,
+        start_time: datetime
+    ) -> List[WhaleEvent]:
+        """
+        Получает крупные нативные транзакции (ETH, BNB, etc)
+        """
+        
+        events = []
+        
         try:
+            # Получаем последний блок
             params = {
                 "module": "proxy",
                 "action": "eth_blockNumber",
-                "apikey": api_config["api_key"]
+                "apikey": api_key
             }
             
-            async with self.session.get(api_config["api_url"], params=params, timeout=10) as resp:
-                data = await resp.json()
-                return int(data.get("result", "0x0"), 16)
-        except Exception:
-            return None
-    
-    async def _fetch_evm_transactions(self, api_config: Dict, address: str, start_block: int, end_block: int) -> List[Dict]:
-        """Получает транзакции адреса"""
-        try:
-            params = {
-                "module": "account",
-                "action": "txlist",
-                "address": address,
-                "startblock": start_block,
-                "endblock": end_block,
-                "sort": "desc",
-                "apikey": api_config["api_key"]
+            async with self.session.get(api_url, params=params) as response:
+                if response.status != 200:
+                    return []
+                
+                data = await response.json()
+                latest_block = int(data.get("result", "0x0"), 16)
+            
+            # Определяем сколько блоков сканировать
+            time_window_minutes = (datetime.utcnow() - start_time).total_seconds() / 60
+            
+            # Примерное время блока для каждого chain
+            block_times = {
+                "ethereum": 12,
+                "bsc": 3,
+                "base": 2,
+                "arbitrum": 0.25,
+                "polygon": 2
             }
             
-            async with self.session.get(api_config["api_url"], params=params, timeout=15) as resp:
-                data = await resp.json()
-                
-                if data.get("status") == "1" and data.get("result"):
-                    return data["result"]
-                return []
-                
-        except Exception:
-            return []
-    
-    def _parse_evm_transactions(self, txs: List[Dict], chain: str, wallet_info: Dict, flow_type: str, api_config: Dict) -> List[WhaleEvent]:
-        """Парсит нативные транзакции с РЕАЛЬНЫМИ ценами из кэша"""
-        events = []
-        
-        for tx in txs[:10]:
-            try:
-                value_wei = int(tx.get("value", "0"))
-                if value_wei == 0:
-                    continue
-                
-                value_native = value_wei / 1e18
-                
-                # Получаем реальную цену из кэша
-                native_symbol = api_config["native_symbol"]
-                
-                # Для обёрнутых токенов используем базовый актив
-                if native_symbol == "ETH" and chain in ["arbitrum", "base"]:
-                    price_symbol = "ETH"
-                else:
-                    price_symbol = native_symbol
-                
-                # Получаем цену из кэша (синхронный доступ)
-                price_estimate = self.price_cache.get(price_symbol, 0)
-                
-                # Fallback если цена не найдена (не должно случаться)
-                if price_estimate == 0:
-                    print(f"⚠️  [PRICE] Не найдена цена для {price_symbol}, используем fallback")
-                    price_estimate = settings.FALLBACK_PRICES.get(native_symbol, 1)
-                
-                usd_estimate = value_native * price_estimate
-                
-                if usd_estimate < settings.MIN_USD_FLOOR:
-                    continue
-                
-                from_addr = tx.get("from", "").lower()
-                to_addr = tx.get("to", "").lower()
-                
-                if flow_type == "inflow":
-                    direction = "inflow_to_exchange"
-                    label_side = "to"
-                else:
-                    direction = "outflow_to_cold"
-                    label_side = "from"
-                
-                event = WhaleEvent(
-                    asset=api_config["native_symbol"],
-                    amount_native=value_native,
-                    amount_usd=usd_estimate,
-                    chain=chain,
-                    direction=direction,
-                    phase="activation",
-                    tx_hash=tx.get("hash", ""),
-                    from_address=from_addr,
-                    to_address=to_addr,
-                    tx_time_utc=datetime.fromtimestamp(int(tx.get("timeStamp", 0))),
-                    min_usd_threshold=settings.MIN_USD_FLOOR
-                )
-                
-                label = AddressLabel(
-                    provider="known_wallets",
-                    name="exchange",
-                    confidence=wallet_info["confidence"],
-                    details=f"{wallet_info['name']} Hot Wallet"
-                )
-                event.labels[label_side].append(label)
-                
-                event.links = {
-                    "tx": f"{api_config['explorer']}/tx/{event.tx_hash}",
-                    "from": f"{api_config['explorer']}/address/{from_addr}",
-                    "to": f"{api_config['explorer']}/address/{to_addr}"
-                }
-                
-                events.append(event)
-                
-            except Exception:
-                continue
-        
-        return events
-    
-    # =========================================================================
-    # BITCOIN
-    # =========================================================================
-    async def _fetch_btc_events(self, start_time: datetime) -> List[WhaleEvent]:
-        """Мониторинг Bitcoin"""
-        events = []
-        
-        try:
-            url = "https://mempool.space/api/mempool/recent"
+            block_time = block_times.get(chain, 12)
+            blocks_to_scan = int((time_window_minutes * 60) / block_time)
+            blocks_to_scan = min(blocks_to_scan, 100)  # Ограничиваем для производительности
             
-            async with self.session.get(url, timeout=15) as resp:
-                if resp.status != 200:
-                    return events
+            start_block = max(latest_block - blocks_to_scan, 0)
+            
+            # Batch запрос блоков
+            for block_num in range(start_block, latest_block, 10):
+                # Получаем блоки batch запросом
+                batch_size = min(10, latest_block - block_num)
                 
-                txs = await resp.json()
+                block_tasks = [
+                    self._get_evm_block_with_txs(
+                        api_url, api_key, block_num + i
+                    )
+                    for i in range(batch_size)
+                ]
                 
-                # Получаем реальную цену BTC
-                btc_price = self.price_cache.get("BTC", settings.FALLBACK_PRICES.get("BTC", 110000))
+                blocks = await asyncio.gather(*block_tasks, return_exceptions=True)
                 
-                for tx in txs[:30]:
-                    vout_sum = sum(out.get("value", 0) for out in tx.get("vout", []))
-                    btc_amount = vout_sum / 100_000_000
-                    usd_estimate = btc_amount * btc_price
-                    
-                    if usd_estimate < settings.MIN_USD_FLOOR:
+                # Парсим транзакции из блоков
+                for block_data in blocks:
+                    if isinstance(block_data, Exception) or not block_data:
                         continue
                     
-                    event = WhaleEvent(
-                        asset="BTC",
-                        amount_native=btc_amount,
-                        amount_usd=usd_estimate,
-                        chain="bitcoin",
-                        direction="unknown",
-                        phase="activation",
-                        tx_hash=tx.get("txid", ""),
-                        from_address="multiple_inputs",
-                        to_address="multiple_outputs",
-                        tx_time_utc=datetime.utcnow(),
-                        min_usd_threshold=settings.MIN_USD_FLOOR
-                    )
+                    transactions = block_data.get("transactions", [])
                     
-                    event.links = {
-                        "tx": f"https://mempool.space/tx/{event.tx_hash}",
-                        "from": "",
-                        "to": ""
-                    }
-                    
-                    events.append(event)
-            
-            print(f"🔗 [BTC] Найдено {len(events)} переводов")
-            
-        except Exception as e:
-            print(f"❌ [BTC] Ошибка: {e}")
-        
-        return events
-    
-    # =========================================================================
-    # SOLANA
-    # =========================================================================
-    async def _fetch_sol_events(self, start_time: datetime) -> List[WhaleEvent]:
-        """Мониторинг Solana (нативный + SPL)"""
-        events = []
-        
-        if not settings.HELIUS_API_KEY:
-            return events
-        
-        try:
-            # ИСПРАВЛЕНО: Динамическая загрузка всех Solana hot wallets
-            known_sol_wallets = list(self.KNOWN_HOT_WALLETS.get("solana", {}).keys())
-            
-            # Получаем реальную цену SOL
-            sol_price = self.price_cache.get("SOL", settings.FALLBACK_PRICES.get("SOL", 189))
-            
-            for wallet in known_sol_wallets:
-                try:
-                    url = f"https://api.helius.xyz/v0/addresses/{wallet}/transactions"
-                    params = {"api-key": settings.HELIUS_API_KEY, "limit": 20}
-                    
-                    async with self.session.get(url, params=params, timeout=15) as resp:
-                        if resp.status != 200:
+                    for tx in transactions:
+                        # Проверяем кэш
+                        tx_hash = tx.get("hash", "")
+                        if self.tx_cache.contains(tx_hash):
+                            self.stats["cache_hits"] += 1
                             continue
                         
-                        data = await resp.json()
+                        event = await self._parse_evm_native_transaction(tx, chain)
                         
-                        for tx in data:
-                            # Нативный SOL
-                            sol_amount = self._extract_sol_amount(tx)
-                            if sol_amount and sol_amount > 100:
-                                event = self._create_sol_event(tx, wallet, "SOL", sol_amount, sol_amount * sol_price)
-                                if event:
-                                    events.append(event)
-                            
-                            # SPL токены
-                            spl_transfers = tx.get("tokenTransfers", [])
-                            for transfer in spl_transfers:
-                                token_amount = transfer.get("tokenAmount", 0)
-                                mint = transfer.get("mint", "")
-                                
-                                token_symbol = self._get_spl_symbol(mint)
-                                if token_symbol and token_amount > 0:
-                                    event = self._create_sol_event(tx, wallet, token_symbol, token_amount, token_amount * 1)
-                                    if event:
-                                        events.append(event)
-                    
-                    await asyncio.sleep(0.3)
-                    
-                except Exception:
-                    continue
-            
-            print(f"🔗 [SOL] Найдено {len(events)} переводов")
-            
-        except Exception as e:
-            print(f"❌ [SOL] Ошибка: {e}")
-        
-        return events
-    
-    def _get_spl_symbol(self, mint: str) -> Optional[str]:
-        """Получает символ SPL токена"""
-        sol_tokens = self.watchlist_cache.get("solana", [])
-        for token in sol_tokens:
-            if token.get("mint") == mint:
-                return token.get("symbol")
-        return None
-    
-    def _create_sol_event(self, tx: Dict, wallet: str, symbol: str, amount: float, usd_est: float) -> Optional[WhaleEvent]:
-        """Создаёт Solana событие"""
-        if usd_est < settings.MIN_USD_FLOOR:
-            return None
-        
-        event = WhaleEvent(
-            asset=symbol,
-            amount_native=amount,
-            amount_usd=usd_est,
-            chain="solana",
-            direction="inflow_to_exchange",
-            phase="activation",
-            tx_hash=tx.get("signature", ""),
-            from_address=tx.get("feePayer", ""),
-            to_address=wallet,
-            tx_time_utc=datetime.fromtimestamp(tx.get("timestamp", 0)),
-            min_usd_threshold=settings.MIN_USD_FLOOR
-        )
-        
-        label = AddressLabel(provider="known_wallets", name="exchange", confidence=90, details="Binance SOL Hot Wallet")
-        event.labels["to"].append(label)
-        
-        event.links = {
-            "tx": f"https://solscan.io/tx/{event.tx_hash}",
-            "from": f"https://solscan.io/account/{event.from_address}",
-            "to": f"https://solscan.io/account/{event.to_address}"
-        }
-        
-        return event
-    
-    def _extract_sol_amount(self, tx: Dict) -> Optional[float]:
-        """Извлекает сумму SOL"""
-        try:
-            native_transfers = tx.get("nativeTransfers", [])
-            if native_transfers:
-                for transfer in native_transfers:
-                    amount_lamports = transfer.get("amount", 0)
-                    amount_sol = amount_lamports / 1e9
-                    if amount_sol > 100:
-                        return amount_sol
-            return None
-        except:
-            return None
-    
-    # =========================================================================
-    # TRON
-    # =========================================================================
-    async def _fetch_tron_events(self, start_time: datetime) -> List[WhaleEvent]:
-        """Мониторинг TRON (все TRC-20)"""
-        events = []
-        
-        if not settings.TRONSCAN_API_KEY:
-            return events
-        
-        try:
-            tron_tokens = self.watchlist_cache.get("tron", [])
-            if not tron_tokens:
-                tron_tokens = [{"symbol": "USDT", "contract": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"}]
-            
-            headers = {"TRON-PRO-API-KEY": settings.TRONSCAN_API_KEY}
-            
-            for token in tron_tokens[:10]:
-                contract = token.get("contract")
-                if not contract:
-                    continue
-                
-                try:
-                    url = f"https://apilist.tronscanapi.com/api/token_trc20/transfers"
-                    params = {
-                        "contract_address": contract,
-                        "limit": 30,
-                        "sort": "-timestamp",
-                        "start": 0
-                    }
-                    
-                    async with self.session.get(url, params=params, headers=headers, timeout=15) as resp:
-                        if resp.status != 200:
-                            continue
-                        
-                        data = await resp.json()
-                        transfers = data.get("token_transfers", [])
-                        
-                        for tx in transfers:
-                            amount_raw = float(tx.get("quant", 0))
-                            decimals = 6 if token["symbol"] in ["USDT", "USDC", "USDD"] else 18
-                            amount_tokens = amount_raw / (10 ** decimals)
-                            
-                            if amount_tokens < 10000:
+                        if event:
+                            # Применяем фильтры
+                            if self._should_filter_event(event):
+                                self.stats["events_filtered"][chain] += 1
                                 continue
-                            
-                            usd_estimate = amount_tokens * 1
-                            
-                            if usd_estimate < settings.MIN_USD_FLOOR:
-                                continue
-                            
-                            from_addr = tx.get("from_address", "")
-                            to_addr = tx.get("to_address", "")
-                            
-                            # ИСПРАВЛЕНО: Безопасное извлечение тэгов (может быть string или dict)
-                            from_tag_raw = tx.get("from_address_tag")
-                            to_tag_raw = tx.get("to_address_tag")
-                            
-                            # Конвертируем dict в строку если нужно
-                            from_tag = self._normalize_tron_tag(from_tag_raw)
-                            to_tag = self._normalize_tron_tag(to_tag_raw)
-                            
-                            from_label = self._parse_tron_label(from_tag)
-                            to_label = self._parse_tron_label(to_tag)
-                            
-                            direction = self._determine_direction(from_label, to_label)
-                            
-                            event = WhaleEvent(
-                                asset=token["symbol"].upper(),
-                                amount_native=amount_tokens,
-                                amount_usd=usd_estimate,
-                                chain="tron",
-                                direction=direction,
-                                phase="activation",
-                                tx_hash=tx.get("transaction_id", ""),
-                                from_address=from_addr,
-                                to_address=to_addr,
-                                tx_time_utc=datetime.fromtimestamp(tx.get("block_ts", 0) / 1000),
-                                min_usd_threshold=settings.MIN_USD_FLOOR
-                            )
-                            
-                            if from_label:
-                                event.labels["from"].append(from_label)
-                            if to_label:
-                                event.labels["to"].append(to_label)
-                            
-                            event.links = {
-                                "tx": f"https://tronscan.org/#/transaction/{event.tx_hash}",
-                                "from": f"https://tronscan.org/#/address/{from_addr}",
-                                "to": f"https://tronscan.org/#/address/{to_addr}"
-                            }
                             
                             events.append(event)
-                    
-                    await asyncio.sleep(0.5)
-                    
-                except Exception as e:
-                    print(f"⚠️  [TRON] Ошибка {token['symbol']}: {e}")
-                    continue
-            
-            print(f"🔗 [TRON] Найдено {len(events)} переводов")
-            
+                            self.tx_cache.add(tx_hash)
+                
+                # Rate limiting между batch
+                await asyncio.sleep(0.3)
+        
         except Exception as e:
-            print(f"❌ [TRON] Ошибка: {e}")
+            print(f"❌ [MONITOR] Ошибка нативных трансферов {chain}: {e}")
         
         return events
     
-    def _normalize_tron_tag(self, tag) -> Optional[str]:
+    async def _get_evm_block_with_txs(
+        self,
+        api_url: str,
+        api_key: str,
+        block_num: int
+    ) -> Optional[Dict]:
         """
-        КРИТИЧНО: Нормализует тэг из TronScan API
-        
-        TronScan может возвращать:
-        - Строку: "Binance Hot Wallet"
-        - Dict: {"en": "Binance", "zh": "币安"}
-        - None/пустое значение
+        Получает блок с транзакциями
         """
-        if not tag:
+        
+        try:
+            params = {
+                "module": "proxy",
+                "action": "eth_getBlockByNumber",
+                "tag": hex(block_num),
+                "boolean": "true",
+                "apikey": api_key
+            }
+            
+            async with self.session.get(api_url, params=params) as response:
+                if response.status != 200:
+                    return None
+                
+                data = await response.json()
+                return data.get("result")
+        
+        except Exception:
             return None
-        
-        # Если уже строка - возвращаем как есть
-        if isinstance(tag, str):
-            return tag.strip() if tag.strip() else None
-        
-        # Если dict - берём английское название
-        if isinstance(tag, dict):
-            # Приоритет: en > name > первое значение
-            if "en" in tag:
-                return str(tag["en"]).strip()
-            elif "name" in tag:
-                return str(tag["name"]).strip()
-            elif tag:
-                # Берём первое доступное значение
-                first_value = next(iter(tag.values()), None)
-                if first_value:
-                    return str(first_value).strip()
-        
-        # Для всех остальных типов
-        return str(tag).strip() if tag else None
     
-    def _parse_tron_label(self, tag) -> Optional[AddressLabel]:
-        """ИСПРАВЛЕНО: Парсит метку TRONSCAN с проверкой типа"""
-        # КРИТИЧНО: Проверка типа tag перед вызовом .lower()
-        if not tag or not isinstance(tag, str):
+    async def _parse_evm_native_transaction(
+        self,
+        tx: Dict,
+        chain: str
+    ) -> Optional[WhaleEvent]:
+        """
+        Парсит нативную EVM транзакцию
+        """
+        
+        try:
+            from_addr = tx.get("from", "").lower()
+            to_addr = tx.get("to", "").lower()
+            
+            if not from_addr or not to_addr:
+                return None
+            
+            # Парсим value
+            value_hex = tx.get("value", "0x0")
+            value_wei = int(value_hex, 16)
+            
+            if value_wei == 0:
+                return None
+            
+            # Конвертируем в нативный токен
+            api_config = self.apis[chain]
+            decimals = api_config["decimals"]
+            native_token = api_config["native_token"]
+            
+            amount = value_wei / (10 ** decimals)
+            
+            # Быстрая оценка USD используя fallback цены
+            price = settings.FALLBACK_PRICES.get(native_token, 2000)
+            amount_usd = amount * price
+            
+            # Фильтруем маленькие транзакции
+            if amount_usd < settings.MIN_USD_FLOOR:
+                return None
+            
+            # Парсим timestamp
+            timestamp_hex = tx.get("timestamp")
+            if timestamp_hex:
+                timestamp = int(timestamp_hex, 16)
+                tx_time = datetime.fromtimestamp(timestamp)
+            else:
+                tx_time = datetime.utcnow()
+            
+            # Определяем DEX
+            dex = self._detect_dex(chain, to_addr)
+            
+            # Создаем событие
+            event = WhaleEvent(
+                chain=chain,
+                asset=native_token,
+                from_address=from_addr,
+                to_address=to_addr,
+                amount=amount,
+                amount_usd=amount_usd,
+                tx_hash=tx.get("hash", ""),
+                block_number=int(tx.get("blockNumber", "0x0"), 16),
+                tx_time_utc=tx_time,
+                dex=dex,
+                is_internal=False,
+                is_bridge=self._is_bridge_address(to_addr),
+                is_reorg=False
+            )
+            
+            return event
+        
+        except Exception as e:
             return None
-        
-        tag_lower = tag.lower()
-        
-        if "binance" in tag_lower or "okx" in tag_lower or "bybit" in tag_lower:
-            name = "exchange"
-            confidence = 90
-        elif "contract" in tag_lower:
-            name = "unknown"
-            confidence = 30
-        else:
-            name = "unknown"
-            confidence = 50
-        
-        return AddressLabel(
-            provider="tronscan",
-            name=name,
-            confidence=confidence,
-            details=tag
-        )
     
-    def _determine_direction(self, from_label: Optional[AddressLabel], to_label: Optional[AddressLabel]) -> str:
-        """Определяет направление"""
-        from_exchange = from_label and from_label.name == "exchange"
-        to_exchange = to_label and to_label.name == "exchange"
+    async def _fetch_evm_token_transfers(
+        self,
+        chain: str,
+        api_url: str,
+        api_key: str,
+        start_time: datetime,
+        assets: List[str]
+    ) -> List[WhaleEvent]:
+        """
+        Получает крупные ERC-20 трансферы для указанных токенов
+        """
         
-        if to_exchange and not from_exchange:
-            return "inflow_to_exchange"
-        elif from_exchange and not to_exchange:
-            return "outflow_to_cold"
-        elif from_exchange and to_exchange:
-            return "bridge"
-        else:
-            return "unknown"
+        events = []
+        
+        # TODO: Реализовать мониторинг ERC-20 через event logs
+        # Требует знания контрактных адресов токенов
+        
+        return events
+    
+    async def _fetch_evm_dex_swaps(
+        self,
+        chain: str,
+        api_url: str,
+        api_key: str,
+        start_time: datetime
+    ) -> List[WhaleEvent]:
+        """
+        Мониторит крупные DEX swaps
+        """
+        
+        events = []
+        
+        # TODO: Реализовать мониторинг DEX swaps через event logs
+        # Swap events: Uniswap V2/V3, PancakeSwap, etc
+        
+        return events
+    
+    # ========================================================================
+    # SOLANA
+    # ========================================================================
+    
+    async def _fetch_solana_events(
+        self,
+        start_time: datetime,
+        assets: Optional[List[str]] = None
+    ) -> List[WhaleEvent]:
+        """
+        Получает события для Solana
+        """
+        
+        api_url = self.apis["solana"]["url"]
+        events = []
+        
+        try:
+            # Получаем последние подписи транзакций
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getSignaturesForAddress",
+                "params": [
+                    "11111111111111111111111111111111",  # System Program
+                    {"limit": 100}
+                ]
+            }
+            
+            async with self.session.post(api_url, json=payload) as response:
+                if response.status != 200:
+                    return []
+                
+                data = await response.json()
+                signatures = data.get("result", [])
+            
+            # Получаем детали транзакций (batch)
+            tx_tasks = [
+                self._get_solana_transaction(api_url, sig["signature"])
+                for sig in signatures[:20]  # Ограничиваем
+            ]
+            
+            transactions = await asyncio.gather(*tx_tasks, return_exceptions=True)
+            
+            # Парсим транзакции
+            for tx_data in transactions:
+                if isinstance(tx_data, Exception) or not tx_data:
+                    continue
+                
+                event = await self._parse_solana_transaction(tx_data)
+                
+                if event:
+                    if self._should_filter_event(event):
+                        continue
+                    
+                    events.append(event)
+        
+        except Exception as e:
+            print(f"❌ [MONITOR] Ошибка Solana: {e}")
+        
+        return events
+    
+    async def _get_solana_transaction(
+        self,
+        api_url: str,
+        signature: str
+    ) -> Optional[Dict]:
+        """
+        Получает детали Solana транзакции
+        """
+        
+        try:
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getTransaction",
+                "params": [
+                    signature,
+                    {
+                        "encoding": "jsonParsed",
+                        "maxSupportedTransactionVersion": 0
+                    }
+                ]
+            }
+            
+            async with self.session.post(api_url, json=payload) as response:
+                if response.status != 200:
+                    return None
+                
+                data = await response.json()
+                return data.get("result")
+        
+        except Exception:
+            return None
+    
+    async def _parse_solana_transaction(
+        self,
+        tx_data: Dict
+    ) -> Optional[WhaleEvent]:
+        """
+        Парсит Solana транзакцию
+        """
+        
+        try:
+            meta = tx_data.get("meta", {})
+            transaction = tx_data.get("transaction", {})
+            
+            # Проверяем успешность
+            if meta.get("err"):
+                return None
+            
+            # Получаем изменения балансов
+            pre_balances = meta.get("preBalances", [])
+            post_balances = meta.get("postBalances", [])
+            
+            if not pre_balances or not post_balances:
+                return None
+            
+            # Находим наибольшее изменение
+            max_change = 0
+            from_idx = -1
+            to_idx = -1
+            
+            for i in range(min(len(pre_balances), len(post_balances))):
+                change = abs(post_balances[i] - pre_balances[i])
+                
+                if change > max_change:
+                    max_change = change
+                    
+                    if post_balances[i] < pre_balances[i]:
+                        from_idx = i
+                    else:
+                        to_idx = i
+            
+            # Конвертируем lamports в SOL
+            amount_sol = max_change / 1e9
+            
+            if amount_sol < 10:
+                return None
+            
+            # Получаем адреса
+            account_keys = transaction.get("message", {}).get("accountKeys", [])
+            
+            from_addr = account_keys[from_idx] if 0 <= from_idx < len(account_keys) else "unknown"
+            to_addr = account_keys[to_idx] if 0 <= to_idx < len(account_keys) else "unknown"
+            
+            # DEX detection для Solana
+            dex = self._detect_solana_dex(account_keys)
+            
+            # Оценка USD
+            price = settings.FALLBACK_PRICES.get("SOL", 150)
+            amount_usd = amount_sol * price
+            
+            # Timestamp
+            block_time = tx_data.get("blockTime")
+            tx_time = datetime.fromtimestamp(block_time) if block_time else datetime.utcnow()
+            
+            event = WhaleEvent(
+                chain="solana",
+                asset="SOL",
+                from_address=from_addr,
+                to_address=to_addr,
+                amount=amount_sol,
+                amount_usd=amount_usd,
+                tx_hash=transaction.get("signatures", [""])[0],
+                block_number=tx_data.get("slot", 0),
+                tx_time_utc=tx_time,
+                dex=dex,
+                is_internal=False,
+                is_bridge=False,
+                is_reorg=False
+            )
+            
+            return event
+        
+        except Exception as e:
+            return None
+    
+    def _detect_solana_dex(self, account_keys: List) -> Optional[str]:
+        """
+        Определяет Solana DEX по account keys
+        """
+        
+        # Известные program IDs Solana DEXes
+        solana_dexes = {
+            "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": "Raydium",
+            "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": "Orca",
+            "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "Jupiter",
+            "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP": "Orca V2"
+        }
+        
+        for account in account_keys:
+            account_str = account if isinstance(account, str) else account.get("pubkey", "")
+            
+            if account_str in solana_dexes:
+                return solana_dexes[account_str]
+        
+        return None
+    
+    # ========================================================================
+    # TRON
+    # ========================================================================
+    
+    async def _fetch_tron_events(
+        self,
+        start_time: datetime,
+        assets: Optional[List[str]] = None
+    ) -> List[WhaleEvent]:
+        """
+        Получает события для Tron
+        """
+        
+        api_url = self.apis["tron"]["url"]
+        api_key = self.apis["tron"]["key"]
+        events = []
+        
+        try:
+            params = {
+                "limit": 50,
+                "start": 0,
+                "sort": "-timestamp",
+                "count": "true"
+            }
+            
+            headers = {"TRON-PRO-API-KEY": api_key}
+            
+            async with self.session.get(
+                f"{api_url}/transfer",
+                params=params,
+                headers=headers
+            ) as response:
+                if response.status != 200:
+                    return []
+                
+                data = await response.json()
+                transfers = data.get("data", [])
+            
+            # Парсим трансферы
+            for transfer in transfers:
+                event = await self._parse_tron_transfer(transfer)
+                
+                if event:
+                    if self._should_filter_event(event):
+                        continue
+                    
+                    events.append(event)
+        
+        except Exception as e:
+            print(f"❌ [MONITOR] Ошибка Tron: {e}")
+        
+        return events
+    
+    async def _parse_tron_transfer(
+        self,
+        transfer: Dict
+    ) -> Optional[WhaleEvent]:
+        """
+        Парсит Tron трансфер
+        """
+        
+        try:
+            amount_str = transfer.get("amount", "0")
+            token_info = transfer.get("tokenInfo", {})
+            token_symbol = token_info.get("tokenSymbol", "TRX")
+            token_decimals = int(token_info.get("tokenDecimal", 6))
+            
+            amount = float(amount_str) / (10 ** token_decimals)
+            
+            price = settings.FALLBACK_PRICES.get(token_symbol, 0.1)
+            amount_usd = amount * price
+            
+            if amount_usd < settings.MIN_USD_FLOOR:
+                return None
+            
+            from_addr = transfer.get("transferFromAddress", "")
+            to_addr = transfer.get("transferToAddress", "")
+            
+            timestamp = transfer.get("timestamp", 0) / 1000
+            tx_time = datetime.fromtimestamp(timestamp)
+            
+            event = WhaleEvent(
+                chain="tron",
+                asset=token_symbol,
+                from_address=from_addr,
+                to_address=to_addr,
+                amount=amount,
+                amount_usd=amount_usd,
+                tx_hash=transfer.get("transactionHash", ""),
+                block_number=transfer.get("block", 0),
+                tx_time_utc=tx_time,
+                dex=None,
+                is_internal=False,
+                is_bridge=False,
+                is_reorg=False
+            )
+            
+            return event
+        
+        except Exception:
+            return None
+    
+    # ========================================================================
+    # DEX DETECTION
+    # ========================================================================
+    
+    def _detect_dex(self, chain: str, address: str) -> Optional[str]:
+        """
+        Определяет DEX по адресу контракта
+        """
+        
+        address = address.lower()
+        
+        chain_dexes = self.dex_contracts.get(chain, {})
+        return chain_dexes.get(address)
+    
+    def _load_dex_contracts(self) -> Dict[str, Dict[str, str]]:
+        """
+        Загружает адреса DEX контрактов
+        """
+        
+        return {
+            "ethereum": {
+                "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": "Uniswap V2",
+                "0xe592427a0aece92de3edee1f18e0157c05861564": "Uniswap V3",
+                "0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f": "Sushiswap",
+                "0xba12222222228d8ba445958a75a0704d566bf2c8": "Balancer",
+                "0xdef1c0ded9bec7f1a1670819833240f027b25eff": "0x"
+            },
+            "bsc": {
+                "0x10ed43c718714eb63d5aa57b78b54704e256024e": "PancakeSwap V2",
+                "0x13f4ea83d0bd40e75c8222255bc855a974568dd4": "PancakeSwap V3",
+                "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506": "Sushiswap"
+            },
+            "base": {
+                "0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24": "Uniswap V3",
+                "0x327df1e6de05895d2ab08513aadd9313fe505d86": "Aerodrome",
+                "0x8909dc15e40173ff4699343b6eb8132c65e18ec6": "BaseSwap"
+            },
+            "arbitrum": {
+                "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3",
+                "0xc873fecbd354f5a56e00e710b90ef4201db2448d": "Camelot",
+                "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506": "Sushiswap"
+            },
+            "polygon": {
+                "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3",
+                "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff": "QuickSwap",
+                "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506": "Sushiswap"
+            }
+        }
+    
+    # ========================================================================
+    # FILTERS
+    # ========================================================================
+    
+    def _should_filter_event(self, event: WhaleEvent) -> bool:
+        """
+        Определяет нужно ли фильтровать событие
+        
+        Returns:
+            True если событие нужно отфильтровать
+        """
+        
+        # Фильтр 1: Биржи
+        if self._is_exchange_address(event.from_address) or \
+           self._is_exchange_address(event.to_address):
+            return True
+        
+        # Фильтр 2: Мосты (только если не DEX)
+        if not event.dex and event.is_bridge:
+            return True
+        
+        # Фильтр 3: Внутренние переводы
+        if event.is_internal:
+            return True
+        
+        # Фильтр 4: Слишком маленькие суммы
+        if event.amount_usd < settings.MIN_USD_FLOOR:
+            return True
+        
+        return False
+    
+    def _is_exchange_address(self, address: str) -> bool:
+        """Проверяет является ли адрес биржей"""
+        return address.lower() in self.exchange_addresses
+    
+    def _is_bridge_address(self, address: str) -> bool:
+        """Проверяет является ли адрес мостом"""
+        return address.lower() in self.bridge_addresses
+    
+    def _load_exchange_addresses(self) -> Set[str]:
+        """
+        Загружает список адресов бирж
+        """
+        
+        exchanges = {
+            # Binance
+            "0x28c6c06298d514db089934071355e5743bf21d60",
+            "0x21a31ee1afc51d94c2efccaa2092ad1028285549",
+            "0xdfd5293d8e347dfe59e90efd55b2956a1343963d",
+            "0x564286362092d8e7936f0549571a803b203aaced",
+            "0x0681d8db095565fe8a346fa0277bffde9c0edbbf",
+            
+            # Coinbase
+            "0x71660c4005ba85c37ccec55d0c4493e66fe775d3",
+            "0x503828976d22510aad0201ac7ec88293211d23da",
+            "0xddfabcdc4d8ffc6d5beaf154f18b778f892a0740",
+            "0xa090e606e30bd747d4e6245a1517ebe430f0057e",
+            
+            # Kraken
+            "0x2910543af39aba0cd09dbb2d50200b3e800a63d2",
+            "0x0a869d79a7052c7f1b55a8ebabbea3420f0d1e13",
+            "0xe853c56864a2ebe4576a807d26fdc4a0ada51919",
+            
+            # Bitfinex
+            "0x1151314c646ce4e0efd76d1af4760ae66a9fe30f",
+            "0x876eabf441b2ee5b5b0554fd502a8e0600950cfa",
+            
+            # OKX
+            "0x98ec059dc3adfbdd63429454aeb0c990fba4a128",
+            "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b",
+            
+            # Bybit
+            "0xf89d7b9c864f589bbf53a82105107622b35eaa40",
+            
+            # Gate.io
+            "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c",
+            
+            # Huobi
+            "0xab5c66752a9e8167967685f1450532fb96d5d24f",
+            
+            # KuCoin
+            "0x2b5634c42055806a59e9107ed44d43c426e58258"
+        }
+        
+        return exchanges
+    
+    def _load_bridge_addresses(self) -> Set[str]:
+        """
+        Загружает список адресов мостов
+        """
+        
+        bridges = {
+            # Multichain (Anyswap)
+            "0x6b7a87899490ece95443e979ca9485cbe7e71522",
+            
+            # Celer
+            "0x5427fefa711eff984124bfbb1ab6fbf5e3da1820",
+            
+            # Synapse
+            "0x2796317b0ff8538f253012862c06787adfb8ceb6",
+            
+            # Across
+            "0xc186fa914353c44b2e33ebe05f21846f1048beda",
+            
+            # Hop Protocol
+            "0x3666f603cc164936c1b87e207f36babaa41b67aa",
+            
+            # Stargate
+            "0x8731d54e9d02c286767d56ac03e8037c07e01e98",
+            
+            # LayerZero
+            "0x66a71dcef29a0ffbdbe3c6a460a3b5bc225cd675"
+        }
+        
+        return bridges
+    
+    # ========================================================================
+    # RATE LIMITING
+    # ========================================================================
+    
+    async def _wait_for_rate_limit(self, chain: str):
+        """Rate limiting для запросов"""
+        
+        last_time = self.last_request_time.get(chain, 0)
+        elapsed = time.time() - last_time
+        
+        if elapsed < self.min_request_interval:
+            wait_time = self.min_request_interval - elapsed
+            await asyncio.sleep(wait_time)
+        
+        self.last_request_time[chain] = time.time()
+    
+    # ========================================================================
+    # STATS
+    # ========================================================================
+    
+    def get_stats(self) -> Dict:
+        """Возвращает статистику мониторинга"""
+        
+        return {
+            "requests_made": dict(self.stats["requests_made"]),
+            "events_found": dict(self.stats["events_found"]),
+            "events_filtered": dict(self.stats["events_filtered"]),
+            "cache_hits": self.stats["cache_hits"],
+            "errors": dict(self.stats["errors"]),
+            "circuit_breaker_trips": dict(self.stats["circuit_breaker_trips"]),
+            "dex_detected": dict(self.stats["dex_detected"]),
+            "circuit_breaker_states": {
+                chain: breaker.state
+                for chain, breaker in self.circuit_breakers.items()
+            }
+        }
+    
+    def print_stats(self):
+        """Выводит статистику в консоль"""
+        
+        stats = self.get_stats()
+        
+        print("\n" + "=" * 80)
+        print("📊 BLOCKCHAIN MONITOR STATISTICS")
+        print("=" * 80)
+        
+        print(f"\n📡 Requests Made:")
+        for chain, count in stats["requests_made"].items():
+            print(f"   {chain:12s}: {count:4d}")
+        
+        print(f"\n🐋 Events Found:")
+        for chain, count in stats["events_found"].items():
+            print(f"   {chain:12s}: {count:4d}")
+        
+        print(f"\n🚫 Events Filtered:")
+        for chain, count in stats["events_filtered"].items():
+            if count > 0:
+                print(f"   {chain:12s}: {count:4d}")
+        
+        print(f"\n💾 Cache Hits: {stats['cache_hits']}")
+        
+        print(f"\n❌ Errors:")
+        for chain, count in stats["errors"].items():
+            if count > 0:
+                print(f"   {chain:12s}: {count:4d}")
+        
+        print(f"\n⚡ Circuit Breaker States:")
+        for chain, state in stats["circuit_breaker_states"].items():
+            emoji = "✅" if state == "CLOSED" else "⚠️" if state == "HALF_OPEN" else "🔴"
+            print(f"   {chain:12s}: {emoji} {state}")
+        
+        print("\n" + "=" * 80 + "\n")

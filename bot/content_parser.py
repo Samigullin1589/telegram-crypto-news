@@ -1,122 +1,40 @@
-# bot/content_parser.py (ФИНАЛЬНАЯ ВЕРСИЯ - 24 октября 2025)
+# bot/content_parser.py
 import aiohttp
-import asyncio  # ИСПРАВЛЕНО: Добавлен импорт
+import asyncio
+import re
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 from PIL import Image
 import io
-import re
-from . import config
+from typing import Optional, List, Dict, Tuple
+from .config import config
 
-class ContentParser:
-    async def get_article_content(self, url, entry, session):
-        soup, final_url = await self._fetch_and_parse_page(url, session)
-        article_text = self._extract_article_text(soup, entry)
-        image_candidates = self._extract_image_candidates(soup, entry, final_url)
-        image_url = await self._get_valid_image_url(image_candidates, session)
-        return {'text': article_text, 'image_url': image_url, 'final_url': final_url}
 
-    async def _fetch_and_parse_page(self, url, session):
-        """УЛУЧШЕНО: Надежные headers для обхода блокировок"""
-        try:
-            # Максимально реалистичные headers (как у браузера)
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Cache-Control': 'max-age=0'
-            }
-            
-            async with session.get(url, timeout=15, headers=headers) as response:
-                response.raise_for_status()
-                final_url = str(response.url)
-                html_text = await response.text()
-                soup = BeautifulSoup(html_text, 'lxml')
-                return soup, final_url
-        except Exception as e:
-            print(f"🕸️ [WARN] Не удалось скачать страницу {url}: {e}")
-            return None, url
-
-    def _extract_article_text(self, soup, entry):
-        """Извлекает текст статьи"""
-        if not soup:
-            return entry.get('summary', '')
-        
-        article_body = soup.find('article') or soup.find('div', class_='post-content') or soup.find('body')
-        if article_body:
-            # Удаляем скрипты и стили
-            for element in (article_body.find_all("script") + article_body.find_all("style")):
-                element.decompose()
-            
-            parsed_text = ' '.join(article_body.get_text().split())
-            if parsed_text:
-                return parsed_text[:12000]
-        
-        return entry.get('summary', '')
-
-    def _extract_image_candidates(self, soup, entry, final_url):
-        """УЛУЧШЕНО: Извлекает кандидатов на изображение с умной обработкой"""
-        image_candidates = []
-        if not soup:
-            return image_candidates
-        
-        # 1. Приоритет: og:image (обычно лучшего качества)
-        if og_image := soup.find('meta', property='og:image'):
-            if content := og_image.get('content'):
-                full_url = urljoin(final_url, content)
-                # КРИТИЧНО: Пропускаем data: URLs и другие невалидные схемы
-                if self._is_valid_image_url(full_url):
-                    fixed_url = self._extract_full_size_image_url(full_url)
-                    image_candidates.append(fixed_url)
-                    print(f"🖼️ [IMG] Найден og:image: {fixed_url[:80]}...")
-        
-        # 2. Изображения из article body
-        article_body = soup.find('article') or soup.find('div', class_='post-content') or soup.find('body')
-        if article_body:
-            for img_tag in article_body.find_all('img', src=True):
-                if src := img_tag.get('src'):
-                    full_url = urljoin(final_url, src)
-                    if self._is_valid_image_url(full_url):
-                        fixed_url = self._extract_full_size_image_url(full_url)
-                        image_candidates.append(fixed_url)
-        
-        # 3. RSS media:content
-        if 'media_content' in entry and entry.media_content:
-            if media_url := entry.media_content[0].get('url'):
-                full_url = urljoin(final_url, media_url)
-                if self._is_valid_image_url(full_url):
-                    fixed_url = self._extract_full_size_image_url(full_url)
-                    image_candidates.append(fixed_url)
-        
-        # 4. RSS enclosures
-        elif 'enclosures' in entry and entry.enclosures:
-            for enc in entry.enclosures:
-                if 'image' in enc.type and enc.href:
-                    full_url = urljoin(final_url, enc.href)
-                    if self._is_valid_image_url(full_url):
-                        fixed_url = self._extract_full_size_image_url(full_url)
-                        image_candidates.append(fixed_url)
-        
-        print(f"🖼️ [IMG] Найдено {len(image_candidates)} валидных кандидатов")
-        return image_candidates
+class URLNormalizer:
+    """Умная нормализация и очистка URL"""
     
-    def _is_valid_image_url(self, url):
+    @staticmethod
+    def normalize(url: str) -> str:
         """
-        КРИТИЧНО: Проверяет что URL можно скачать
+        Удаляет query параметры и fragments для дедупликации
+        https://example.com/article?utm_source=fb#top -> https://example.com/article
+        """
+        if not url:
+            return url
         
-        Фильтрует:
-        - data: URLs (inline SVG/base64)
-        - javascript: URLs
-        - mailto: URLs
-        - Слишком короткие URLs
-        """
+        parsed = urlparse(url)
+        # Оставляем только scheme, netloc и path
+        normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        
+        # Убираем trailing slash (кроме корневого URL)
+        if normalized.endswith('/') and len(parsed.path) > 1:
+            normalized = normalized[:-1]
+        
+        return normalized
+    
+    @staticmethod
+    def is_valid_http_url(url: str) -> bool:
+        """Проверка валидности HTTP(S) URL"""
         if not url or len(url) < 10:
             return False
         
@@ -124,12 +42,7 @@ class ContentParser:
         
         # Блокируем невалидные схемы
         invalid_schemes = [
-            'data:',           # data:image/svg+xml или data:image/png;base64
-            'javascript:',     # javascript:void(0)
-            'mailto:',         # mailto:email@example.com
-            'tel:',            # tel:+1234567890
-            'about:',          # about:blank
-            '#',               # якорные ссылки
+            'data:', 'javascript:', 'mailto:', 'tel:', 'about:', '#'
         ]
         
         if any(url_lower.startswith(scheme) for scheme in invalid_schemes):
@@ -141,62 +54,52 @@ class ContentParser:
         
         return True
 
-    def _extract_full_size_image_url(self, url):
+
+class ImageURLProcessor:
+    """Процессор для извлечения full-size изображений"""
+    
+    @staticmethod
+    def extract_full_size_url(url: str) -> str:
         """
-        КРИТИЧНО: Извлекает полноразмерное изображение из различных форматов URL
+        Извлекает полноразмерное изображение из различных форматов URL
         
-        Обрабатывает:
-        1. Next.js Image Optimization: /_next/image?url=...&w=32
-        2. WordPress thumbnails: image-150x150.jpg
-        3. Query parameters: ?w=32&h=32
-        4. CDN размеры: /w=32,h=32
+        Поддерживает:
+        - Next.js Image Optimization
+        - WordPress thumbnails
+        - Query parameters
+        - CDN размеры
         """
         if not url:
             return url
         
         original_url = url
         
-        # ========================================================================
-        # 1. Next.js Image Optimization (CoinDesk и многие современные сайты)
-        # ========================================================================
-        # URL вида: https://site.com/_next/image?url=https%3A%2F%2Freal-image.png&w=32&q=75
+        # 1. Next.js Image Optimization (_next/image?url=...&w=32)
         if '/_next/image' in url and 'url=' in url:
             try:
                 parsed = urlparse(url)
                 params = parse_qs(parsed.query)
                 
-                # Извлекаем оригинальный URL из параметра 'url'
                 if 'url' in params:
                     extracted_url = unquote(params['url'][0])
-                    print(f"🔧 [IMG] Next.js → оригинал: {extracted_url[:80]}...")
                     return extracted_url
                 
-                # Если не получилось - меняем размер на максимальный
+                # Fallback: увеличиваем размер
                 url = re.sub(r'&w=\d+', '&w=1920', url)
                 url = re.sub(r'&h=\d+', '&h=1080', url)
-                print(f"🔧 [IMG] Next.js → увеличен до 1920x1080")
                 return url
                 
-            except Exception as e:
-                print(f"⚠️  [IMG] Ошибка обработки Next.js URL: {e}")
+            except Exception:
+                pass
         
-        # ========================================================================
-        # 2. WordPress/CDN thumbnails
-        # ========================================================================
-        # image-150x150.jpg → image.jpg
-        # image-300x200.jpg → image.jpg
+        # 2. WordPress/CDN thumbnails (image-150x150.jpg -> image.jpg)
         thumbnail_pattern = r'-\d+x\d+(\.[a-z]{3,4})$'
         if re.search(thumbnail_pattern, url):
             url = re.sub(thumbnail_pattern, r'\1', url)
-            print(f"🔧 [IMG] WordPress thumbnail удалён")
             return url
         
-        # ========================================================================
-        # 3. Query parameters размера (общий случай)
-        # ========================================================================
-        # ?w=32&h=32 или &width=100&height=100
+        # 3. Query parameters размера (?w=32&h=32)
         if any(param in url.lower() for param in ['?w=', '&w=', '?width=', '&width=', '?size=', '&size=']):
-            # Удаляем все параметры размера
             url = re.sub(r'[?&]w=\d+', '', url)
             url = re.sub(r'[?&]h=\d+', '', url)
             url = re.sub(r'[?&]width=\d+', '', url)
@@ -205,111 +108,337 @@ class ContentParser:
             url = re.sub(r'[?&]quality=\d+', '', url)
             url = re.sub(r'[?&]q=\d+', '', url)
             
-            # Чистим лишние символы
-            url = re.sub(r'\?&', '?', url)  # ?& → ?
-            url = re.sub(r'&&', '&', url)   # && → &
-            url = re.sub(r'[?&]$', '', url) # Убираем ? или & в конце
+            # Чистка
+            url = re.sub(r'\?&', '?', url)
+            url = re.sub(r'&&+', '&', url)
+            url = re.sub(r'[?&]$', '', url)
             
-            print(f"🔧 [IMG] Query params удалены")
             return url
         
-        # ========================================================================
-        # 4. Cloudflare Images / Imgix / CDN
-        # ========================================================================
-        # https://imagedelivery.net/.../w=32,h=32
-        if any(service in url for service in ['imagedelivery.net', 'imgix.net', 'images.unsplash.com', 'cdn-images']):
-            # Заменяем маленькие размеры на большие
+        # 4. CDN сервисы (Cloudflare, Imgix, etc)
+        cdn_services = ['imagedelivery.net', 'imgix.net', 'images.unsplash.com', 'cdn-images']
+        if any(service in url for service in cdn_services):
             url = re.sub(r'/w=\d+', '/w=1920', url)
             url = re.sub(r'/h=\d+', '/h=1080', url)
             url = re.sub(r',w=\d+', ',w=1920', url)
             url = re.sub(r',h=\d+', ',h=1080', url)
-            url = re.sub(r'w=\d+', 'w=1920', url)
-            url = re.sub(r'h=\d+', 'h=1080', url)
-            print(f"🔧 [IMG] CDN размер увеличен")
+            url = re.sub(r'\bw=\d+', 'w=1920', url)
+            url = re.sub(r'\bh=\d+', 'h=1080', url)
             return url
         
-        # ========================================================================
-        # 5. Возвращаем как есть если ничего не подошло
-        # ========================================================================
-        if url != original_url:
-            print(f"🔧 [IMG] URL обработан")
-        
         return url
+    
+    @staticmethod
+    def is_likely_logo(url: str) -> bool:
+        """Определяет является ли URL логотипом/иконкой"""
+        if not url:
+            return True
+        
+        url_lower = url.lower()
+        
+        logo_keywords = [
+            'logo', 'icon', 'favicon', 'brand',
+            'avatar', 'profile', 'badge', 'symbol',
+            '/icons/', '/logos/', '/favicons/',
+            'apple-touch-icon', 'android-chrome',
+            'og-image-default', 'default-thumb'
+        ]
+        
+        return any(keyword in url_lower for keyword in logo_keywords)
 
-    async def _get_valid_image_url(self, image_candidates, session):
-        """УЛУЧШЕНО: Проверяет и возвращает первое валидное изображение"""
+
+class ArticleExtractor:
+    """Умный экстрактор текста статьи"""
+    
+    @staticmethod
+    def extract_text(soup: BeautifulSoup, fallback_summary: str = '') -> str:
+        """
+        Извлекает основной текст статьи с приоритезацией
+        """
+        if not soup:
+            return fallback_summary
         
-        # Сортируем кандидатов по приоритету (og:image в начало)
-        prioritized = []
-        regular = []
+        # Приоритеты для поиска контента
+        content_selectors = [
+            ('article', {}),
+            ('div', {'class': ['post-content', 'article-content', 'entry-content', 'content']}),
+            ('div', {'id': ['article', 'content', 'main-content']}),
+            ('main', {}),
+        ]
         
-        for url in image_candidates:
-            if not url or self._is_likely_logo(url):
-                continue
-            
-            # og:image обычно лучшего качества - проверяем первым
-            if len(prioritized) == 0:
-                prioritized.append(url)
+        for tag, attrs in content_selectors:
+            if attrs:
+                article_body = soup.find(tag, attrs)
             else:
-                regular.append(url)
+                article_body = soup.find(tag)
+            
+            if article_body:
+                # Удаляем ненужные элементы
+                for unwanted in article_body.find_all(['script', 'style', 'nav', 'aside', 'footer', 'header']):
+                    unwanted.decompose()
+                
+                # Извлекаем текст
+                text = article_body.get_text(separator=' ', strip=True)
+                
+                # Очистка лишних пробелов
+                text = re.sub(r'\s+', ' ', text)
+                
+                if len(text) > 200:  # Минимальная длина статьи
+                    return text[:config.MAX_ARTICLE_TEXT_LENGTH]
         
-        # Проверяем сначала приоритетные, потом обычные
-        all_candidates = prioritized + regular
+        # Fallback на summary из RSS
+        return fallback_summary
+
+
+class ImageExtractor:
+    """Умный экстрактор изображений с приоритезацией"""
+    
+    def __init__(self):
+        self.url_processor = ImageURLProcessor()
+        self.url_normalizer = URLNormalizer()
+    
+    def extract_candidates(
+        self,
+        soup: BeautifulSoup,
+        entry: Dict,
+        base_url: str
+    ) -> List[str]:
+        """
+        Извлекает кандидатов на изображение с умной приоритезацией
         
-        for url in all_candidates:
+        Приоритет:
+        1. og:image (лучшее качество)
+        2. twitter:image
+        3. Первое изображение в article
+        4. RSS media:content
+        5. RSS enclosures
+        """
+        candidates = []
+        
+        if not soup:
+            return self._extract_from_rss(entry, base_url)
+        
+        # 1. Open Graph image (высший приоритет)
+        og_image = soup.find('meta', property='og:image')
+        if og_image and og_image.get('content'):
+            url = self._process_url(og_image['content'], base_url)
+            if url:
+                candidates.append(('og:image', url, 10))  # priority 10
+        
+        # 2. Twitter card image
+        twitter_image = soup.find('meta', attrs={'name': 'twitter:image'})
+        if twitter_image and twitter_image.get('content'):
+            url = self._process_url(twitter_image['content'], base_url)
+            if url:
+                candidates.append(('twitter:image', url, 9))
+        
+        # 3. Первое изображение в article
+        article_body = soup.find('article') or soup.find('div', class_='post-content')
+        if article_body:
+            images = article_body.find_all('img', src=True, limit=5)
+            for idx, img in enumerate(images):
+                url = self._process_url(img['src'], base_url)
+                if url:
+                    priority = 8 - idx  # Первое изображение важнее
+                    candidates.append((f'article-img-{idx}', url, priority))
+        
+        # 4. RSS media:content
+        if hasattr(entry, 'media_content') and entry.media_content:
+            for media in entry.media_content[:3]:
+                if url := media.get('url'):
+                    url = self._process_url(url, base_url)
+                    if url:
+                        candidates.append(('rss-media', url, 6))
+        
+        # 5. RSS enclosures
+        if hasattr(entry, 'enclosures') and entry.enclosures:
+            for enc in entry.enclosures[:3]:
+                if 'image' in enc.get('type', '') and enc.get('href'):
+                    url = self._process_url(enc['href'], base_url)
+                    if url:
+                        candidates.append(('rss-enclosure', url, 5))
+        
+        # Сортируем по приоритету (высший первым)
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        
+        # Возвращаем только URLs без дубликатов
+        seen = set()
+        unique_urls = []
+        for source, url, priority in candidates:
+            if url not in seen:
+                seen.add(url)
+                unique_urls.append(url)
+        
+        return unique_urls
+    
+    def _extract_from_rss(self, entry: Dict, base_url: str) -> List[str]:
+        """Fallback: извлечение только из RSS когда нет soup"""
+        candidates = []
+        
+        if hasattr(entry, 'media_content') and entry.media_content:
+            for media in entry.media_content[:3]:
+                if url := media.get('url'):
+                    url = self._process_url(url, base_url)
+                    if url:
+                        candidates.append(url)
+        
+        if hasattr(entry, 'enclosures') and entry.enclosures:
+            for enc in entry.enclosures[:3]:
+                if 'image' in enc.get('type', '') and enc.get('href'):
+                    url = self._process_url(enc['href'], base_url)
+                    if url:
+                        candidates.append(url)
+        
+        return candidates
+    
+    def _process_url(self, url: str, base_url: str) -> Optional[str]:
+        """Обработка и валидация URL изображения"""
+        # Преобразуем относительный URL в абсолютный
+        full_url = urljoin(base_url, url)
+        
+        # Валидация
+        if not self.url_normalizer.is_valid_http_url(full_url):
+            return None
+        
+        # Проверка на логотип
+        if self.url_processor.is_likely_logo(full_url):
+            return None
+        
+        # Извлечение full-size версии
+        return self.url_processor.extract_full_size_url(full_url)
+
+
+class ContentParser:
+    """
+    Главный класс для парсинга контента статей
+    Объединяет все компоненты для умного извлечения текста и изображений
+    """
+    
+    def __init__(self):
+        self.url_normalizer = URLNormalizer()
+        self.article_extractor = ArticleExtractor()
+        self.image_extractor = ImageExtractor()
+    
+    async def get_article_content(
+        self,
+        url: str,
+        entry: Dict,
+        session: aiohttp.ClientSession
+    ) -> Dict[str, Optional[str]]:
+        """
+        Основной метод для получения контента статьи
+        
+        Returns:
+            {
+                'text': str,
+                'image_url': Optional[str],
+                'final_url': str
+            }
+        """
+        # Загружаем и парсим страницу
+        soup, final_url = await self._fetch_and_parse_page(url, session)
+        
+        # Извлекаем текст
+        fallback_summary = entry.get('summary', '')
+        article_text = self.article_extractor.extract_text(soup, fallback_summary)
+        
+        # Извлекаем изображения
+        image_candidates = self.image_extractor.extract_candidates(soup, entry, final_url)
+        image_url = await self._validate_image(image_candidates, session)
+        
+        return {
+            'text': article_text,
+            'image_url': image_url,
+            'final_url': final_url
+        }
+    
+    async def _fetch_and_parse_page(
+        self,
+        url: str,
+        session: aiohttp.ClientSession
+    ) -> Tuple[Optional[BeautifulSoup], str]:
+        """Загрузка и парсинг HTML страницы"""
+        try:
+            async with session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=15),
+                allow_redirects=True
+            ) as response:
+                response.raise_for_status()
+                final_url = str(response.url)
+                
+                # Проверка content-type
+                content_type = response.headers.get('Content-Type', '').lower()
+                if 'text/html' not in content_type:
+                    print(f"⚠️  [PARSER] Не HTML контент: {content_type}")
+                    return None, url
+                
+                html_text = await response.text()
+                soup = BeautifulSoup(html_text, 'lxml')
+                
+                return soup, final_url
+                
+        except asyncio.TimeoutError:
+            print(f"⏱️  [PARSER] Timeout загрузки: {url[:60]}")
+        except aiohttp.ClientError as e:
+            print(f"🕸️  [PARSER] HTTP ошибка {url[:50]}: {type(e).__name__}")
+        except Exception as e:
+            print(f"❌ [PARSER] Ошибка парсинга {url[:50]}: {e}")
+        
+        return None, url
+    
+    async def _validate_image(
+        self,
+        candidates: List[str],
+        session: aiohttp.ClientSession
+    ) -> Optional[str]:
+        """
+        Проверка и валидация изображений
+        Возвращает первое валидное изображение подходящего размера
+        """
+        if not candidates:
+            return None
+        
+        print(f"🖼️  [IMG] Проверяю {len(candidates)} кандидатов...")
+        
+        for idx, url in enumerate(candidates):
             try:
-                # Проверяем размер изображения
-                async with session.get(url, timeout=10) as response:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=config.IMAGE_CHECK_TIMEOUT)
+                ) as response:
+                    
                     if response.status != 200:
-                        print(f"🖼️ [IMG] Пропущено (HTTP {response.status}): {url[:60]}...")
                         continue
                     
-                    # Читаем первые 8KB чтобы определить размер (было 4KB)
-                    image_data = await response.content.read(8192)
+                    # Читаем первые байты для определения размера
+                    image_data = await response.content.read(config.IMAGE_PARTIAL_READ_BYTES)
                     if not image_data:
                         continue
                     
                     try:
                         img = Image.open(io.BytesIO(image_data))
                         width, height = img.size
+                        
+                        # Проверка минимального размера
+                        if width >= config.MIN_IMAGE_WIDTH and height >= config.MIN_IMAGE_HEIGHT:
+                            print(f"✅ [IMG] ВАЛИДНОЕ #{idx + 1}: {url[:70]} ({width}x{height})")
+                            return url
+                        else:
+                            print(f"📏 [IMG] Маленькое #{idx + 1}: {width}x{height}px")
+                    
                     except Exception as e:
-                        print(f"⚠️  [IMG] Не удалось открыть изображение: {e}")
+                        print(f"⚠️  [IMG] Не удалось открыть #{idx + 1}: {type(e).__name__}")
                         continue
                     
-                    # Проверяем минимальный размер
-                    if width >= config.MIN_IMAGE_WIDTH and height >= config.MIN_IMAGE_HEIGHT:
-                        print(f"✅ [IMG] НАЙДЕНО: {url[:80]} ({width}x{height})")
-                        return url
-                    else:
-                        print(f"🖼️ [IMG] Отклонено (маленькое): {url[:60]} ({width}x{height})")
-                
             except asyncio.TimeoutError:
-                print(f"⏱️  [IMG] Timeout: {url[:60]}")
+                print(f"⏱️  [IMG] Timeout #{idx + 1}")
                 continue
-            except aiohttp.ClientError as e:
-                # Ловим все aiohttp ошибки (InvalidURL, ClientConnectorError, etc)
-                print(f"⚠️  [IMG] HTTP ошибка {url[:50]}: {type(e).__name__}")
+            except aiohttp.ClientError:
                 continue
             except Exception as e:
-                print(f"⚠️  [IMG] Ошибка проверки {url[:50]}: {type(e).__name__} - {e}")
+                print(f"⚠️  [IMG] Ошибка #{idx + 1}: {type(e).__name__}")
                 continue
         
-        print(f"⚠️  [IMG] Подходящее изображение не найдено среди {len(all_candidates)} кандидатов")
+        print(f"⚠️  [IMG] Подходящее изображение не найдено")
         return None
-
-    def _is_likely_logo(self, image_url):
-        """Определяет является ли URL логотипом/иконкой"""
-        if not image_url:
-            return True
-        
-        url_lower = image_url.lower()
-        
-        # Явные признаки логотипа
-        logo_keywords = [
-            'logo', 'icon', 'favicon', 'brand', 
-            'avatar', 'profile', 'badge',
-            '/icons/', '/logos/', '/favicons/',
-            'apple-touch-icon', 'android-chrome'
-        ]
-        
-        return any(keyword in url_lower for keyword in logo_keywords)

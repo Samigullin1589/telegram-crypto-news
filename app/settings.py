@@ -183,13 +183,19 @@ ADAPTIVE_BULL_THRESHOLD = float(os.getenv('ADAPTIVE_BULL_THRESHOLD', '10.0'))  #
 ADAPTIVE_BEAR_THRESHOLD = float(os.getenv('ADAPTIVE_BEAR_THRESHOLD', '-10.0'))  # -10% BTC за 7д = bear
 
 # Модификаторы для bull market
-ADAPTIVE_BULL_CONFIDENCE_MODIFIER = int(os.getenv('ADAPTIVE_BULL_CONFIDENCE_MODIFIER', '+10'))
-ADAPTIVE_BULL_SIZE_REL_MODIFIER = float(os.getenv('ADAPTIVE_BULL_SIZE_REL_MODIFIER', '+0.05'))
+ADAPTIVE_BULL_CONFIDENCE_MODIFIER = int(os.getenv('ADAPTIVE_BULL_CONFIDENCE_MODIFIER', '+10').replace('+', ''))
+ADAPTIVE_BULL_SIZE_REL_MODIFIER = float(os.getenv('ADAPTIVE_BULL_SIZE_REL_MODIFIER', '+0.05').replace('+', ''))
 ADAPTIVE_BULL_VOLUME_MODIFIER = float(os.getenv('ADAPTIVE_BULL_VOLUME_MODIFIER', '1.5'))
 
 # Модификаторы для bear market
-ADAPTIVE_BEAR_CONFIDENCE_MODIFIER = int(os.getenv('ADAPTIVE_BEAR_CONFIDENCE_MODIFIER', '-5'))
-ADAPTIVE_BEAR_SIZE_REL_MODIFIER = float(os.getenv('ADAPTIVE_BEAR_SIZE_REL_MODIFIER', '-0.03'))
+ADAPTIVE_BEAR_CONFIDENCE_MODIFIER = int(os.getenv('ADAPTIVE_BEAR_CONFIDENCE_MODIFIER', '-5').replace('-', '').replace('+', ''))
+if os.getenv('ADAPTIVE_BEAR_CONFIDENCE_MODIFIER', '-5').startswith('-'):
+    ADAPTIVE_BEAR_CONFIDENCE_MODIFIER = -abs(ADAPTIVE_BEAR_CONFIDENCE_MODIFIER)
+
+ADAPTIVE_BEAR_SIZE_REL_MODIFIER = float(os.getenv('ADAPTIVE_BEAR_SIZE_REL_MODIFIER', '-0.03').replace('+', ''))
+if os.getenv('ADAPTIVE_BEAR_SIZE_REL_MODIFIER', '-0.03').startswith('-'):
+    ADAPTIVE_BEAR_SIZE_REL_MODIFIER = -abs(ADAPTIVE_BEAR_SIZE_REL_MODIFIER)
+
 ADAPTIVE_BEAR_VOLUME_MODIFIER = float(os.getenv('ADAPTIVE_BEAR_VOLUME_MODIFIER', '0.7'))
 
 # Адаптация на основе производительности
@@ -257,8 +263,8 @@ WALLET_MAX_SCORE = int(os.getenv('WALLET_MAX_SCORE', '100'))
 WALLET_MIN_SCORE = int(os.getenv('WALLET_MIN_SCORE', '0'))
 
 # Обновление скоров
-WALLET_SCORE_UPDATE_ON_SUCCESS = int(os.getenv('WALLET_SCORE_UPDATE_ON_SUCCESS', '+5'))
-WALLET_SCORE_UPDATE_ON_FAILURE = int(os.getenv('WALLET_SCORE_UPDATE_ON_FAILURE', '-3'))
+WALLET_SCORE_UPDATE_ON_SUCCESS = int(os.getenv('WALLET_SCORE_UPDATE_ON_SUCCESS', '+5').replace('+', ''))
+WALLET_SCORE_UPDATE_ON_FAILURE = -abs(int(os.getenv('WALLET_SCORE_UPDATE_ON_FAILURE', '-3').replace('-', '').replace('+', '')))
 WALLET_SCORE_DECAY_PER_DAY = float(os.getenv('WALLET_SCORE_DECAY_PER_DAY', '0.1'))  # -0.1/день неактивности
 
 # Лимиты
@@ -328,6 +334,15 @@ FALLBACK_PRICES = {
     "DOGE": 0.19,
     "WETH": 3870,
     "WBTC": 110000,
+}
+
+# ============================================================================
+# HTTP SESSION SETTINGS (для bot/config.py совместимость)
+# ============================================================================
+SESSION_TIMEOUT_TOTAL = 30
+SESSION_TIMEOUT_CONNECT = 10
+COMMON_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 }
 
 # ============================================================================
