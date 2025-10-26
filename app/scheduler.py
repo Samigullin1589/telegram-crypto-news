@@ -46,6 +46,28 @@ except ImportError:
     MINING_INTEGRATION_AVAILABLE = False
     print("⚠️  Mining Integration не найден - работаем без него")
 
+# V2.0 МОДУЛИ (с graceful degradation)
+try:
+    from app.mining.integration import MiningSystem
+    MINING_V2_AVAILABLE = True
+except ImportError:
+    MINING_V2_AVAILABLE = False
+    print("⚠️  Mining v2.0 не найден - работаем без него")
+
+try:
+    from app.analytics import get_analytics_engine
+    ANALYTICS_AVAILABLE = True
+except ImportError:
+    ANALYTICS_AVAILABLE = False
+    print("⚠️  Analytics не найден - работаем без него")
+
+try:
+    from app.chains import initialize_all_chains, get_supported_chains
+    MULTI_CHAIN_AVAILABLE = True
+except ImportError:
+    MULTI_CHAIN_AVAILABLE = False
+    print("⚠️  Multi-Chain не найден - работаем без него")
+
 
 class AdaptiveThresholds:
     """
@@ -298,6 +320,37 @@ class WhaleScheduler:
         self.wallet_db = WalletDatabase()
         self.smart_discovery = None  # Инициализируем позже
         
+        # V2.0 МОДУЛИ (с graceful degradation)
+        self.mining_system = None
+        self.analytics_engine = None
+        self.multi_chain_enabled = False
+        
+        # Инициализация Mining v2.0
+        if MINING_V2_AVAILABLE:
+            try:
+                self.mining_system = MiningSystem(self.wallet_db)
+                print("✅ Mining v2.0 loaded")
+            except Exception as e:
+                print(f"⚠️  Mining v2.0 failed to load: {e}")
+        
+        # Инициализация Analytics
+        if ANALYTICS_AVAILABLE:
+            try:
+                self.analytics_engine = get_analytics_engine()
+                print("✅ Analytics Engine loaded")
+            except Exception as e:
+                print(f"⚠️  Analytics failed to load: {e}")
+        
+        # Инициализация Multi-Chain
+        if MULTI_CHAIN_AVAILABLE:
+            try:
+                initialize_all_chains()
+                chains = get_supported_chains()
+                self.multi_chain_enabled = len(chains) > 0
+                print(f"✅ Multi-Chain loaded ({len(chains)} chains)")
+            except Exception as e:
+                print(f"⚠️  Multi-Chain failed to load: {e}")
+        
         # Очереди и кэши
         self.publication_queue: List[Dict] = []
         self.seen_keys: set = set()
@@ -333,6 +386,9 @@ class WhaleScheduler:
         print(f"Канал: {settings.CHAT_ID}")
         print(f"Лимит публикаций: {settings.POSTS_PER_HOUR_CAP}/час")
         print(f"🧠 Smart Discovery: {'✅ Включен' if SMART_DISCOVERY_AVAILABLE else '❌ Отключен'}")
+        print(f"⛏️  Mining v2.0: {'✅ Включен' if self.mining_system else '❌ Отключен'}")
+        print(f"🧠 Analytics: {'✅ Включен' if self.analytics_engine else '❌ Отключен'}")
+        print(f"🌐 Multi-Chain: {'✅ Включен' if self.multi_chain_enabled else '❌ Отключен'}")
         print(f"🔄 Adaptive Thresholds: ✅ Включен")
         print(f"📊 Performance Tracking: ✅ Включен")
         print(f"👛 Tracked Wallets: {len(self.wallet_db.get_active_wallets())}")
