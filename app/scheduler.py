@@ -39,6 +39,13 @@ except ImportError:
     SMART_DISCOVERY_AVAILABLE = False
     print("⚠️  Smart Discovery не найден - работаем без него")
 
+try:
+    from app.whales.mining_integration import MiningIntegration, convert_mining_to_performance_format
+    MINING_INTEGRATION_AVAILABLE = True
+except ImportError:
+    MINING_INTEGRATION_AVAILABLE = False
+    print("⚠️  Mining Integration не найден - работаем без него")
+
 
 class AdaptiveThresholds:
     """

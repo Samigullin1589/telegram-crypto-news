@@ -61,7 +61,10 @@ class SignalPerformance:
     
     # Дополнительно
     wallets_involved: List[str] = None
-    signal_type: str = "smart_money"  # smart_money, mining, onchain
+    signal_type: str = "smart_money"  # smart_money, mining, onchain, social
+    
+    # Mining данные (для mining сигналов)
+    mining_data: Optional[Dict] = None  # {"difficulty_change": 15.2, "hashrate_change": 8.5, etc}
     
     def to_dict(self):
         """Конвертация в словарь для сохранения"""
@@ -122,7 +125,8 @@ class PerformanceTracker:
         confidence: int,
         initial_price: float,
         wallets_involved: List[str] = None,
-        signal_type: str = "smart_money"
+        signal_type: str = "smart_money",
+        mining_data: Dict = None
     ):
         """
         Начинает отслеживание нового сигнала
@@ -135,7 +139,8 @@ class PerformanceTracker:
             confidence: Уверенность 0-100
             initial_price: Цена на момент публикации
             wallets_involved: Список адресов кошельков
-            signal_type: Тип сигнала
+            signal_type: Тип сигнала (smart_money, mining, onchain, social)
+            mining_data: Данные майнинга для mining сигналов
         """
         
         performance = SignalPerformance(
@@ -147,7 +152,8 @@ class PerformanceTracker:
             published_at=datetime.utcnow(),
             initial_price=initial_price,
             wallets_involved=wallets_involved or [],
-            signal_type=signal_type
+            signal_type=signal_type,
+            mining_data=mining_data
         )
         
         self.tracked_signals.append(performance)
