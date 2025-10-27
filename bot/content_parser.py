@@ -223,40 +223,41 @@ class ImageExtractor:
         if og_image and og_image.get('content'):
             url = self._process_url(og_image['content'], base_url)
             if url:
-                candidates.append(('og:image', url, 10))  # priority 10
+                candidates.append(('og:image', url, 10))
         
-        # 2. Twitter card image
+        # 2. Twitter Card image
         twitter_image = soup.find('meta', attrs={'name': 'twitter:image'})
         if twitter_image and twitter_image.get('content'):
             url = self._process_url(twitter_image['content'], base_url)
             if url:
                 candidates.append(('twitter:image', url, 9))
         
-        # 3. Первое изображение в article
-        article_body = soup.find('article') or soup.find('div', class_='post-content')
-        if article_body:
-            images = article_body.find_all('img', src=True, limit=5)
-            for idx, img in enumerate(images):
-                url = self._process_url(img['src'], base_url)
-                if url:
-                    priority = 8 - idx  # Первое изображение важнее
-                    candidates.append((f'article-img-{idx}', url, priority))
+        # 3. Первое изображение в <article>
+        article_tag = soup.find('article')
+        if article_tag:
+            first_img = article_tag.find('img')
+            if first_img:
+                img_src = first_img.get('src') or first_img.get('data-src')
+                if img_src:
+                    url = self._process_url(img_src, base_url)
+                    if url:
+                        candidates.append(('article-img', url, 8))
         
         # 4. RSS media:content
         if hasattr(entry, 'media_content') and entry.media_content:
-            for media in entry.media_content[:3]:
+            for idx, media in enumerate(entry.media_content[:3]):
                 if url := media.get('url'):
                     url = self._process_url(url, base_url)
                     if url:
-                        candidates.append(('rss-media', url, 6))
+                        candidates.append(('rss-media', url, 7 - idx))
         
         # 5. RSS enclosures
         if hasattr(entry, 'enclosures') and entry.enclosures:
-            for enc in entry.enclosures[:3]:
+            for idx, enc in enumerate(entry.enclosures[:3]):
                 if 'image' in enc.get('type', '') and enc.get('href'):
                     url = self._process_url(enc['href'], base_url)
                     if url:
-                        candidates.append(('rss-enclosure', url, 5))
+                        candidates.append(('rss-enclosure', url, 5 - idx))
         
         # Сортируем по приоритету (высший первым)
         candidates.sort(key=lambda x: x[2], reverse=True)
@@ -391,6 +392,105 @@ class ContentParser:
         except Exception as e:
             print(f"❌ [PARSER] Ошибка parse_article для {link[:60]}: {e}")
             return ""
+    
+    def find_best_image(self, entry: Dict) -> Optional[str]:
+        """
+        НОВЫЙ МЕТОД: Находит лучшее изображение из RSS entry
+        
+        Этот метод вызывается из processor.py (строка 255)
+        Возвращает URL изображения без валидации (валидация будет в download_image)
+        
+        Args:
+            entry: RSS feed entry (словарь с полями link, media_content, enclosures и т.д.)
+            
+        Returns:
+            URL изображения или None
+        """
+        try:
+            # Получаем базовый URL из ссылки статьи
+            base_url = entry.get('link', '')
+            
+            # Извлекаем кандидатов только из RSS (без парсинга HTML)
+            candidates = self.image_extractor._extract_from_rss(entry, base_url)
+            
+            if candidates:
+                # Возвращаем первый кандидат (лучший по приоритету)
+                print(f"🖼️  [PARSER] Найдено изображение: {candidates[0][:70]}")
+                return candidates[0]
+            else:
+                print(f"⚠️  [PARSER] Изображения не найдены в RSS entry")
+                return None
+                
+        except Exception as e:
+            print(f"❌ [PARSER] Ошибка find_best_image: {e}")
+            return None
+    
+    async def download_image(
+        self,
+        image_url: str,
+        session: aiohttp.ClientSession
+    ) -> Optional[bytes]:
+        """
+        НОВЫЙ МЕТОД: Скачивает и валидирует изображение
+        
+        Этот метод вызывается из processor.py (строка 258)
+        Проверяет размер изображения и возвращает байты
+        
+        Args:
+            image_url: URL изображения для загрузки
+            session: aiohttp ClientSession
+            
+        Returns:
+            Байты изображения или None если не прошло валидацию
+        """
+        if not image_url:
+            return None
+        
+        try:
+            print(f"📥 [PARSER] Скачиваю изображение: {image_url[:70]}")
+            
+            async with session.get(
+                image_url,
+                timeout=aiohttp.ClientTimeout(total=config.IMAGE_CHECK_TIMEOUT)
+            ) as response:
+                
+                if response.status != 200:
+                    print(f"❌ [PARSER] HTTP {response.status} при загрузке изображения")
+                    return None
+                
+                # Скачиваем полное изображение
+                image_data = await response.read()
+                
+                if not image_data:
+                    print(f"⚠️  [PARSER] Пустое изображение")
+                    return None
+                
+                # Валидируем размер изображения
+                try:
+                    img = Image.open(io.BytesIO(image_data))
+                    width, height = img.size
+                    
+                    # Проверка минимального размера
+                    if width >= config.MIN_IMAGE_WIDTH and height >= config.MIN_IMAGE_HEIGHT:
+                        print(f"✅ [PARSER] Изображение валидно: {width}x{height}px, {len(image_data) // 1024}KB")
+                        return image_data
+                    else:
+                        print(f"📏 [PARSER] Изображение слишком маленькое: {width}x{height}px")
+                        return None
+                
+                except Exception as e:
+                    print(f"⚠️  [PARSER] Не удалось открыть изображение: {type(e).__name__}")
+                    return None
+                
+        except asyncio.TimeoutError:
+            print(f"⏱️  [PARSER] Timeout при загрузке изображения")
+            return None
+        except aiohttp.ClientError as e:
+            print(f"🕸️  [PARSER] HTTP ошибка при загрузке: {type(e).__name__}")
+            return None
+        except Exception as e:
+            print(f"❌ [PARSER] Ошибка download_image: {e}")
+            return None
     
     async def _fetch_and_parse_page(
         self,
