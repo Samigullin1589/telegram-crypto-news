@@ -121,6 +121,7 @@ class FeedFetcher:
             
             entries = result
             
+            # ИСПРАВЛЕНИЕ: entries это список словарей, а не кортежей
             # Добавляем приоритет к каждой статье
             for entry in entries:
                 prioritized_entries.append((entry, feed_name, feed_config.priority))
@@ -129,7 +130,7 @@ class FeedFetcher:
         prioritized_entries.sort(
             key=lambda x: (
                 -x[2],  # Приоритет (инверсия для сортировки по убыванию)
-                x[0].get('published_parsed', time.gmtime())
+                x[0].get('published_parsed', time.gmtime())  # x[0] теперь это словарь entry
             ),
             reverse=False
         )
@@ -143,8 +144,13 @@ class FeedFetcher:
         feed_config,
         session: aiohttp.ClientSession,
         posted_cache: Set[str]
-    ) -> List[Tuple[dict, str]]:
-        """Загрузка одного RSS фида"""
+    ) -> List[dict]:
+        """
+        Загрузка одного RSS фида
+        
+        ИСПРАВЛЕНИЕ: Возвращает List[dict] вместо List[Tuple[dict, str]]
+        Категория будет добавлена в fetch_all_feeds
+        """
         try:
             print(f"📡 [FETCH] {category} (приоритет: {feed_config.priority})")
             
@@ -176,7 +182,7 @@ class FeedFetcher:
                 
                 normalized_link = self.url_normalizer.normalize(link)
                 if normalized_link not in posted_cache:
-                    new_entries.append((entry, category))
+                    new_entries.append(entry)  # ИСПРАВЛЕНИЕ: возвращаем только entry
             
             print(f"✅ [FETCH] {category}: {len(new_entries)} новых из {len(feed.entries)}")
             return new_entries
@@ -205,7 +211,6 @@ class ArticleProcessor:
         self.ai = ai
         self.poster = poster
         self.db = db
-        self.url_normalizer = URLNormalizer()
     
     async def process_article(
         self,
@@ -214,92 +219,77 @@ class ArticleProcessor:
         session: aiohttp.ClientSession
     ) -> bool:
         """
-        Полная обработка одной статьи
+        Обработка одной статьи
         
         Returns:
-            True если успешно опубликовано
+            True если статья успешно опубликована
         """
-        start_time = time.time()
-        
-        original_link = entry.get('link')
-        title = entry.get('title', 'Без заголовка')
-        
-        if not original_link:
-            return False
-        
-        normalized_link = self.url_normalizer.normalize(original_link)
-        
-        print(f"\n{'='*80}")
-        print(f"🔍 [PROCESS] {title[:70]}")
-        print(f"📂 Источник: {category}")
-        print(f"🔗 URL: {original_link[:70]}...")
-        
-        # 1. Парсинг контента
         try:
-            content = await self.parser.get_article_content(
-                original_link,
-                entry,
-                session
-            )
-        except Exception as e:
-            print(f"❌ [PROCESS] Ошибка парсинга: {e}")
-            return False
-        
-        final_link = content.get('final_url', original_link)
-        article_text = content.get('text', '')
-        image_url = content.get('image_url')
-        
-        print(f"📝 Текст: {len(article_text)} символов")
-        print(f"🖼️  Изображение: {'✅' if image_url else '❌'}")
-        
-        # 2. Генерация саммари
-        try:
-            result = await self.ai.get_summary(title, article_text, category)
+            link = entry.get('link')
+            title = entry.get('title', 'Без заголовка')
             
-            if not result:
-                print(f"❌ [PROCESS] AI не смог создать саммари")
+            print(f"📄 {title[:60]}...")
+            
+            # Парсим контент
+            article_text = await self.parser.parse_article(link, session)
+            
+            if not article_text:
+                print("⚠️  Не удалось извлечь текст")
                 return False
             
-            summary, ai_provider = result
-            print(f"🤖 AI: {ai_provider.upper()}")
+            # Генерируем саммари через AI
+            result = await self.ai.get_summary(
+                title=title,
+                text=article_text,
+                category=category
+            )
             
-        except Exception as e:
-            print(f"❌ [PROCESS] Ошибка AI: {e}")
-            return False
-        
-        # 3. Публикация
-        try:
-            success = await self.poster.post(summary, final_link, image_url)
+            if not result:
+                print("⚠️  AI не смог создать саммари")
+                return False
+            
+            summary, provider = result
+            print(f"✅ Саммари от {provider.upper()}")
+            
+            # Получаем изображение
+            image_url = self.parser.find_best_image(entry)
+            if image_url:
+                # Проверяем и скачиваем изображение
+                image_data = await self.parser.download_image(image_url, session)
+                if image_data:
+                    print(f"🖼️  Изображение готово ({len(image_data) // 1024}KB)")
+                else:
+                    image_data = None
+                    print("⚠️  Изображение не прошло проверку")
+            else:
+                image_data = None
+            
+            # Публикуем в Telegram
+            success = await self.poster.post(
+                text=summary,
+                link=link,
+                image_data=image_data
+            )
             
             if success:
                 # Сохраняем в БД
-                self.db.save_article(
-                    link=original_link,
-                    normalized_link=normalized_link,
-                    source_feed=category,
-                    title=title,
-                    has_image=bool(image_url),
-                    ai_provider=ai_provider,
-                    status='success'
-                )
-                
-                elapsed = time.time() - start_time
-                print(f"✅ [PROCESS] УСПЕХ за {elapsed:.1f}s")
-                print(f"{'='*80}\n")
+                normalized_link = URLNormalizer.normalize(link)
+                self.db.save_link(link, normalized_link, category)
+                print("✅ ОПУБЛИКОВАНО\n")
                 return True
             else:
-                print(f"❌ [PROCESS] Не удалось опубликовать")
+                print("❌ Ошибка публикации\n")
                 return False
                 
         except Exception as e:
-            print(f"❌ [PROCESS] Ошибка публикации: {e}")
+            print(f"❌ Ошибка обработки: {e}\n")
+            import traceback
+            traceback.print_exc()
             return False
 
 
 class NewsProcessor:
-    """
-    Главный процессор новостей с умным управлением потоком
-    """
+    """Главный координатор обработки новостей"""
     
     def __init__(self):
         self.db = DatabaseManager()
