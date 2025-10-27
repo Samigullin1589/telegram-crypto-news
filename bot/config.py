@@ -51,8 +51,8 @@ class Config:
         self.GEMINI_API_KEY = self._get_required_env('GEMINI_API_KEY')
         self.OPENAI_API_KEY = self._get_required_env('OPENAI_API_KEY')
         
-        # AI Models
-        self.GEMINI_MODEL = 'gemini-1.5-pro'
+        # AI Models (ИСПРАВЛЕНО: правильная модель Gemini)
+        self.GEMINI_MODEL = 'gemini-1.5-flash'  # или 'gemini-pro' для старого API
         self.OPENAI_MODEL = 'gpt-4o'
         
         # AI Retry Strategy (улучшено)

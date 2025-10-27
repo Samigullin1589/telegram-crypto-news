@@ -1,4 +1,5 @@
 # bot/telegram_poster.py
+# ИСПРАВЛЕНО: Добавлена поддержка обоих форматов параметров
 import asyncio
 import re
 from typing import Optional, Dict
@@ -138,6 +139,10 @@ class MessageSanitizer:
 class TelegramPoster:
     """
     Умный Telegram poster с retry механизмом и детальной статистикой
+    
+    ИСПРАВЛЕНО: Поддержка обоих форматов параметров:
+    - post(message, link, image_url) - новый формат
+    - post(text=..., link=..., image_data=...) - старый формат из processor.py
     """
     
     def __init__(self):
@@ -158,33 +163,54 @@ class TelegramPoster:
     
     async def post(
         self,
-        message: str,
-        link: str,
-        image_url: Optional[str] = None
+        message: Optional[str] = None,
+        link: Optional[str] = None,
+        image_url: Optional[str] = None,
+        # ИСПРАВЛЕНО: Добавлена поддержка старых параметров из processor.py
+        text: Optional[str] = None,
+        image_data: Optional[bytes] = None
     ) -> bool:
         """
         Основной метод публикации с умным retry и fallback
         
+        ИСПРАВЛЕНО: Поддержка обоих форматов параметров!
+        
         Args:
-            message: Текст сообщения
+            message: Текст сообщения (новый формат)
             link: Ссылка на первоисточник
-            image_url: URL изображения (опционально)
+            image_url: URL изображения (новый формат) - НЕ ИСПОЛЬЗУЕТСЯ, оставлен для совместимости
+            text: Текст сообщения (старый формат из processor.py)
+            image_data: Байты изображения (старый формат из processor.py)
         
         Returns:
             True если успешно опубликовано
         """
+        # ИСПРАВЛЕНО: Маппинг параметров
+        # Если используется старый формат (text=..., image_data=...), конвертируем в новый
+        final_message = message or text
+        final_link = link
+        
+        # ВАЖНО: image_data это bytes, а image_url это str
+        # Если передан image_data (bytes) - используем его
+        # Если передан image_url (str) - игнорируем (API Telegram требует либо bytes либо URL отдельно)
+        final_image_data = image_data  # bytes или None
+        
+        if not final_message or not final_link:
+            print("❌ [POST] Отсутствуют обязательные параметры (message/text и link)")
+            return False
+        
         self.metrics.total_attempts += 1
         
         # Rate limiting
         await self._rate_limit()
         
         # Создаём кнопку
-        keyboard = [[InlineKeyboardButton("🔗 Читать первоисточник", url=link)]]
+        keyboard = [[InlineKeyboardButton("🔗 Читать первоисточник", url=final_link)]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         # Подготовка сообщения
-        is_caption = bool(image_url)
-        prepared_message = self.sanitizer.prepare_message(message, is_caption=is_caption)
+        is_caption = bool(final_image_data)
+        prepared_message = self.sanitizer.prepare_message(final_message, is_caption=is_caption)
         
         # Стратегия публикации
         strategies = [
@@ -197,18 +223,18 @@ class TelegramPoster:
         for strategy_name, strategy_func in strategies:
             success = await strategy_func(
                 prepared_message,
-                image_url,
+                final_image_data,  # ИСПРАВЛЕНО: передаем bytes вместо URL
                 reply_markup
             )
             
             if success:
                 self.metrics.successful_posts += 1
-                if image_url:
+                if final_image_data:
                     self.metrics.posts_with_images += 1
                 else:
                     self.metrics.posts_without_images += 1
                 
-                print(f"✅ [POST] Успешно ({strategy_name}): {link[:60]}")
+                print(f"✅ [POST] Успешно ({strategy_name}): {final_link[:60]}")
                 return True
             
             # Если это не последняя стратегия - пробуем следующую
@@ -218,24 +244,25 @@ class TelegramPoster:
         
         # Все стратегии провалились
         self.metrics.failed_posts += 1
-        print(f"❌ [POST] ВСЕ СТРАТЕГИИ ПРОВАЛИЛИСЬ: {link[:60]}")
+        print(f"❌ [POST] ВСЕ СТРАТЕГИИ ПРОВАЛИЛИСЬ: {final_link[:60]}")
         return False
     
     async def _post_with_markdown_and_image(
         self,
         message: str,
-        image_url: Optional[str],
+        image_data: Optional[bytes],  # ИСПРАВЛЕНО: bytes вместо str
         reply_markup: InlineKeyboardMarkup
     ) -> bool:
         """Стратегия 1: Markdown + изображение"""
-        if not image_url:
+        if not image_data:
             return False
         
         try:
+            # ИСПРАВЛЕНО: передаем bytes напрямую
             await self._send_with_retry(
                 lambda: self.bot.send_photo(
                     chat_id=self.channel_id,
-                    photo=image_url,
+                    photo=image_data,  # bytes
                     caption=message,
                     parse_mode='Markdown',
                     reply_markup=reply_markup
@@ -256,7 +283,7 @@ class TelegramPoster:
     async def _post_with_markdown_text_only(
         self,
         message: str,
-        image_url: Optional[str],
+        image_data: Optional[bytes],  # ИСПРАВЛЕНО: bytes
         reply_markup: InlineKeyboardMarkup
     ) -> bool:
         """Стратегия 2: Markdown без изображения"""
@@ -285,11 +312,11 @@ class TelegramPoster:
     async def _post_plain_with_image(
         self,
         message: str,
-        image_url: Optional[str],
+        image_data: Optional[bytes],  # ИСПРАВЛЕНО: bytes
         reply_markup: InlineKeyboardMarkup
     ) -> bool:
         """Стратегия 3: Plain text + изображение (без Markdown)"""
-        if not image_url:
+        if not image_data:
             return False
         
         try:
@@ -299,7 +326,7 @@ class TelegramPoster:
             await self._send_with_retry(
                 lambda: self.bot.send_photo(
                     chat_id=self.channel_id,
-                    photo=image_url,
+                    photo=image_data,  # bytes
                     caption=plain_message,
                     reply_markup=reply_markup
                 )
@@ -314,7 +341,7 @@ class TelegramPoster:
     async def _post_plain_text_only(
         self,
         message: str,
-        image_url: Optional[str],
+        image_data: Optional[bytes],  # ИСПРАВЛЕНО: bytes
         reply_markup: InlineKeyboardMarkup
     ) -> bool:
         """Стратегия 4: Plain text без изображения (последний шанс)"""
