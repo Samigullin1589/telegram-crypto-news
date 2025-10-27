@@ -385,7 +385,7 @@ class BlockchainMonitor:
         try:
             # Получаем последний блок через JSON-RPC (V2)
             # Etherscan перешел на V2 API и требует использовать прямые RPC эндпоинты
-            rpc_url = api_url.replace('/api', '')  # Убираем /api для RPC
+            rpc_url = api_url.rsplit('/api', 1)[0] if '/api' in api_url else api_url  # ИСПРАВЛЕНО: удаляем только последний /api
             
             # JSON-RPC request для получения последнего блока
             rpc_payload = {
