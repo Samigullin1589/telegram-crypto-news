@@ -1,4 +1,3 @@
-# main.py
 """
 INTEGRATED CRYPTO MONITOR v2.0
 Unified system: News Bot + Whale Monitor
@@ -8,7 +7,7 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from bot.processor import NewsProcessor
 from app.scheduler import WhaleScheduler
 
@@ -26,12 +25,12 @@ class SystemHealthMonitor:
     def update_news_heartbeat(self):
         """Обновление heartbeat новостной системы"""
         self.news_alive = True
-        self.last_news_heartbeat = datetime.utcnow()
+        self.last_news_heartbeat = datetime.now(timezone.utc)
     
     def update_whale_heartbeat(self):
         """Обновление heartbeat whale системы"""
         self.whale_alive = True
-        self.last_whale_heartbeat = datetime.utcnow()
+        self.last_whale_heartbeat = datetime.now(timezone.utc)
     
     def check_health(self) -> tuple[bool, list]:
         """
@@ -39,7 +38,7 @@ class SystemHealthMonitor:
         Returns: (is_healthy, issues)
         """
         issues = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Проверка новостной системы
         if self.last_news_heartbeat:
@@ -262,7 +261,7 @@ class IntegratedBot:
         print("🐋 Whale Monitor: Активен (Discovery + Smart Money + Самообучение)")
         print("🔄 Health Monitor: Активен (проверка каждые 5 мин)")
         print("="*80)
-        print(f"⏰ Запуск: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        print(f"⏰ Запуск: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
         print("="*80 + "\n")
     
     def _print_final_stats(self):
@@ -292,7 +291,7 @@ class IntegratedBot:
             print(f"   Провалов: {whale_stats.get('events_failed', 0)}")
             
             if whale_stats.get('start_time'):
-                uptime = datetime.utcnow() - whale_stats['start_time']
+                uptime = datetime.now(timezone.utc) - whale_stats['start_time']
                 hours = uptime.total_seconds() / 3600
                 print(f"\n   Uptime: {hours:.1f}h")
         
@@ -306,7 +305,7 @@ def main():
     print("="*80)
     print("🤖 CRYPTO COMPASS - Integrated Monitoring System")
     print("="*80)
-    print(f"📅 {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print(f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(f"🐍 Python {sys.version.split()[0]}")
     print("="*80 + "\n")
     

@@ -1,4 +1,3 @@
-# bot/config.py
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -10,15 +9,21 @@ load_dotenv()
 
 @dataclass
 class FeedConfig:
-    """Конфигурация RSS фида с приоритетом и метаданными"""
+    """Конфигурация RSS фида с приоритетом и retry логикой"""
     url: str
     priority: int  # 1-10, где 10 = максимальный приоритет
-    timeout: int = 20
+    timeout: int = 30
     enabled: bool = True
+    max_retries: int = 3
+    retry_delay: int = 5
+    fallback_urls: List[str] = None
     
     def __post_init__(self):
         if not 1 <= self.priority <= 10:
             raise ValueError(f"Priority must be between 1-10, got {self.priority}")
+        
+        if self.fallback_urls is None:
+            self.fallback_urls = []
 
 
 class Config:
@@ -50,54 +55,121 @@ class Config:
         self.GEMINI_MODEL = 'gemini-1.5-pro'
         self.OPENAI_MODEL = 'gpt-4o'
         
-        # AI Retry Strategy
+        # AI Retry Strategy (улучшено)
         self.AI_MAX_RETRIES = 3
-        self.AI_BACKOFF_FACTOR = 10
+        self.AI_BACKOFF_FACTOR = 2  # Экспоненциальный backoff
         self.AI_TIMEOUT = 60
         
-        # === Optional API Keys (новые) ===
-        # CoinGecko - для цен криптовалют (РЕКОМЕНДУЕТСЯ)
+        # === Blockchain Scanner API Keys ===
+        self.ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
+        self.BSCSCAN_API_KEY = os.getenv('BSCSCAN_API_KEY', '')
+        self.POLYGONSCAN_API_KEY = os.getenv('POLYGONSCAN_API_KEY', '')
+        self.ARBISCAN_API_KEY = os.getenv('ARBISCAN_API_KEY', '')
+        self.BASESCAN_API_KEY = os.getenv('BASESCAN_API_KEY', '')
+        self.SNOWTRACE_API_KEY = os.getenv('SNOWTRACE_API_KEY', '')
+        self.OPTIMISM_ETHERSCAN_API_KEY = os.getenv('OPTIMISM_ETHERSCAN_API_KEY', '')
+        
+        # === Optional API Keys ===
         self.COINGECKO_API_KEY = os.getenv('COINGECKO_API_KEY')
-        
-        # Alchemy - альтернатива Etherscan (опционально)
         self.ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
-        
-        # CoinMarketCap - альтернатива CoinGecko (опционально)
         self.COINMARKETCAP_API_KEY = os.getenv('COINMARKETCAP_API_KEY')
-        
-        # CryptoPanic - агрегатор новостей (опционально)
         self.CRYPTOPANIC_API_KEY = os.getenv('CRYPTOPANIC_API_KEY')
-        
-        # NewsAPI - новости (опционально)
         self.NEWSAPI_KEY = os.getenv('NEWSAPI_KEY')
         
-        # === RSS Feeds Configuration ===
+        # === RSS Feeds Configuration (улучшено с fallback) ===
         self.RSS_FEEDS: Dict[str, FeedConfig] = {
             'Крипто и Блокчейн РФ/СНГ 🇷🇺': FeedConfig(
                 url='https://habr.com/ru/rss/hubs/cryptocurrency/',
-                priority=8,  # Высокий приоритет для локального контента
-                timeout=25
+                priority=8,
+                timeout=25,
+                max_retries=3,
+                fallback_urls=[
+                    'https://habr.com/ru/rss/hub/cryptocurrency/',
+                    'https://habr.com/ru/rss/hubs/blockchain/'
+                ]
             ),
             'Новости Майнинга (Мир) ⚙️': FeedConfig(
                 url='https://cointelegraph.com/rss/tag/mining',
                 priority=7,
-                timeout=40  # Увеличен таймаут для проблемного фида
+                timeout=50,  # Увеличен для проблемного фида
+                max_retries=5,  # Больше попыток
+                retry_delay=10,  # Больше задержка
+                fallback_urls=[
+                    'https://cointelegraph.com/rss',
+                    'https://cryptopotato.com/feed/'
+                ]
             ),
             'Крипто-новости СНГ 💡': FeedConfig(
                 url='https://forklog.com/feed',
-                priority=9,  # Максимальный приоритет для оперативности
-                timeout=20
+                priority=9,
+                timeout=20,
+                max_retries=3,
+                fallback_urls=[
+                    'https://forklog.com/feed/',
+                    'https://bits.media/feed/'
+                ]
             ),
             'Мировые Крипто-новости 🌍': FeedConfig(
                 url='https://www.coindesk.com/arc/outboundfeeds/rss/',
                 priority=6,
-                timeout=25
+                timeout=25,
+                max_retries=3,
+                fallback_urls=[
+                    'https://coindesk.com/arc/outboundfeeds/rss',
+                    'https://decrypt.co/feed'
+                ]
             ),
             'Глубокая аналитика (Eng) 🧐': FeedConfig(
                 url='https://www.theblock.co/rss.xml',
                 priority=7,
-                timeout=40  # Увеличен таймаут для проблемного фида
+                timeout=50,  # Увеличен для проблемного фида
+                max_retries=5,
+                retry_delay=10,
+                fallback_urls=[
+                    'https://theblock.co/rss',
+                    'https://cryptobriefing.com/feed/',
+                    'https://thedefiant.io/feed'
+                ]
+            ),
+            # НОВЫЙ: Альтернативный источник
+            'Bitcoin Magazine 📰': FeedConfig(
+                url='https://bitcoinmagazine.com/.rss/full/',
+                priority=6,
+                timeout=25,
+                max_retries=3
             )
+        }
+        
+        # === Whale Detection Thresholds ===
+        self.WHALE_THRESHOLDS = {
+            'ethereum': {
+                'min_native_value': 50,  # 50 ETH
+                'min_usd_value': 100000  # $100k
+            },
+            'bsc': {
+                'min_native_value': 100,  # 100 BNB
+                'min_usd_value': 50000
+            },
+            'polygon': {
+                'min_native_value': 50000,  # 50k MATIC
+                'min_usd_value': 25000
+            },
+            'arbitrum': {
+                'min_native_value': 50,  # 50 ETH
+                'min_usd_value': 100000
+            },
+            'optimism': {
+                'min_native_value': 50,
+                'min_usd_value': 100000
+            },
+            'base': {
+                'min_native_value': 50,
+                'min_usd_value': 100000
+            },
+            'avalanche': {
+                'min_native_value': 500,  # 500 AVAX
+                'min_usd_value': 15000
+            }
         }
         
         # === Timing Configuration ===
@@ -117,7 +189,7 @@ class Config:
         self.IMAGE_CHECK_TIMEOUT = 10
         self.IMAGE_PARTIAL_READ_BYTES = 8192
         
-        # === HTTP Configuration ===
+        # === HTTP Configuration (улучшено) ===
         self.COMMON_HEADERS = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -132,10 +204,11 @@ class Config:
             'Cache-Control': 'max-age=0'
         }
         
-        # Session Configuration
-        self.SESSION_TIMEOUT_TOTAL = 300  # 5 минут общий timeout
+        # Session Configuration (улучшено)
+        self.SESSION_TIMEOUT_TOTAL = 300  # 5 минут
         self.SESSION_TIMEOUT_CONNECT = 30
         self.SESSION_MAX_RETRIES = 3
+        self.SESSION_RETRY_DELAY = 5  # Секунды между попытками
         
         # === Content Parsing ===
         self.MAX_ARTICLE_TEXT_LENGTH = 12000
@@ -144,6 +217,11 @@ class Config:
         # === Logging Configuration ===
         self.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
         self.VERBOSE_LOGGING = os.getenv('VERBOSE_LOGGING', 'false').lower() == 'true'
+        
+        # === Rate Limiting (новое) ===
+        self.RATE_LIMIT_ENABLED = True
+        self.MAX_REQUESTS_PER_MINUTE = 60
+        self.MAX_API_CALLS_PER_SECOND = 5
         
         self._initialized = True
         self._validate_config()
@@ -158,6 +236,24 @@ class Config:
     def _get_optional_env(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Получает опциональную переменную окружения"""
         return os.getenv(key, default)
+    
+    def has_scanner_api_key(self, chain: str) -> bool:
+        """Проверяет наличие API ключа для конкретного blockchain scanner"""
+        key_mapping = {
+            'ethereum': self.ETHERSCAN_API_KEY,
+            'bsc': self.BSCSCAN_API_KEY,
+            'polygon': self.POLYGONSCAN_API_KEY,
+            'arbitrum': self.ARBISCAN_API_KEY,
+            'base': self.BASESCAN_API_KEY,
+            'avalanche': self.SNOWTRACE_API_KEY,
+            'optimism': self.OPTIMISM_ETHERSCAN_API_KEY
+        }
+        return bool(key_mapping.get(chain, ''))
+    
+    def get_missing_scanner_keys(self) -> List[str]:
+        """Возвращает список chains без API ключей"""
+        chains = ['ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism']
+        return [chain for chain in chains if not self.has_scanner_api_key(chain)]
     
     def has_coingecko(self) -> bool:
         """Проверяет наличие CoinGecko API ключа"""
@@ -183,6 +279,13 @@ class Config:
             raise ValueError("No active RSS feeds configured")
         
         print(f"✅ [CONFIG] Валидация пройдена. Активных фидов: {len(active_feeds)}")
+        
+        # Проверка blockchain scanner API keys
+        missing_keys = self.get_missing_scanner_keys()
+        if missing_keys:
+            print(f"⚠️  [CONFIG] Отсутствуют API ключи для: {', '.join(missing_keys)}")
+        else:
+            print("✅ [CONFIG] Все blockchain scanner API ключи настроены")
         
         # Информация об опциональных API
         if self.has_coingecko():

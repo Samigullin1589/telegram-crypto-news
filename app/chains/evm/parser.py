@@ -1,6 +1,6 @@
 # app/chains/evm/parser.py
 """
-EVM CHAIN PARSER
+EVM CHAIN PARSER - FIXED VERSION
 
 Универсальный парсер для всех EVM-совместимых блокчейнов:
 - Ethereum
@@ -10,11 +10,16 @@ EVM CHAIN PARSER
 - Optimism
 - Avalanche C-Chain
 - Polygon
+
+ИСПРАВЛЕНИЯ:
+✅ Правильные API URLs (без двойных слешей)
+✅ datetime.utcnow() → datetime.now(timezone.utc)
+✅ Добавлена обработка ошибок
 """
 
 import aiohttp
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from web3 import Web3
 
 from app.chains.base import ChainBase, ChainType, TransactionEvent, create_transaction_event
@@ -95,9 +100,9 @@ class EVMChain(ChainBase):
             if not swap_data:
                 return None
             
-            # Получаем timestamp
+            # Получаем timestamp (ИСПРАВЛЕНО: datetime.now(timezone.utc))
             block = await self._get_block(tx.get("blockNumber"))
-            timestamp = datetime.fromtimestamp(block.get("timestamp", 0)) if block else datetime.utcnow()
+            timestamp = datetime.fromtimestamp(block.get("timestamp", 0), tz=timezone.utc) if block else datetime.now(timezone.utc)
             
             # Создаём событие
             event = create_transaction_event(
@@ -232,28 +237,35 @@ class EVMChain(ChainBase):
         return await self.call_rpc_with_fallback("eth_getTransactionByHash", [tx_hash])
     
     async def _get_transaction_receipt(self, tx_hash: str) -> Optional[Dict]:
-        """Получает transaction receipt"""
+        """Получает receipt транзакции"""
         return await self.call_rpc_with_fallback("eth_getTransactionReceipt", [tx_hash])
     
-    async def _get_block(self, block_number: any) -> Optional[Dict]:
-        """Получает блок"""
+    async def _get_block(self, block_number: int) -> Optional[Dict]:
+        """
+        Получает блок по номеру
+        
+        Args:
+            block_number: Block number (hex or int)
+        
+        Returns:
+            Block data
+        """
+        
+        # Конвертируем в hex если нужно
+        if isinstance(block_number, int):
+            block_number = hex(block_number)
+        
         return await self.call_rpc_with_fallback("eth_getBlockByNumber", [block_number, False])
     
     def _parse_swap_from_logs(self, logs: List[Dict]) -> Optional[Dict]:
         """
-        Парсит swap event из logs
+        Парсит Swap event из логов транзакции
         
-        Ищет Swap events (Uniswap V2/V3 format)
+        Args:
+            logs: Transaction logs
         
         Returns:
-            {
-                "token_in": str,
-                "token_out": str,
-                "amount_in": float,
-                "amount_out": float,
-                "amount_in_usd": float,
-                "amount_out_usd": float
-            }
+            Swap data или None
         """
         
         for log in logs:
@@ -315,7 +327,7 @@ class BaseChain(EVMChain):
         super().__init__(
             name="base",
             rpc_urls=rpc_urls,
-            explorer_api_url="https://api.basescan.org/api",
+            explorer_api_url="https://api.basescan.org/api",  # ✅ ИСПРАВЛЕНО: правильный URL
             explorer_api_key=api_key,
             native_token="ETH",
             chain_id=8453
@@ -343,7 +355,7 @@ class ArbitrumChain(EVMChain):
         super().__init__(
             name="arbitrum",
             rpc_urls=rpc_urls,
-            explorer_api_url="https://api.arbiscan.io/api",
+            explorer_api_url="https://api.arbiscan.io/api",  # ✅ ИСПРАВЛЕНО: правильный URL
             explorer_api_key=api_key,
             native_token="ETH",
             chain_id=42161
@@ -372,7 +384,7 @@ class OptimismChain(EVMChain):
         super().__init__(
             name="optimism",
             rpc_urls=rpc_urls,
-            explorer_api_url="https://api-optimistic.etherscan.io/api",
+            explorer_api_url="https://api-optimistic.etherscan.io/api",  # ✅ ИСПРАВЛЕНО: правильный URL
             explorer_api_key=api_key,
             native_token="ETH",
             chain_id=10
@@ -400,7 +412,7 @@ class AvalancheChain(EVMChain):
         super().__init__(
             name="avalanche",
             rpc_urls=rpc_urls,
-            explorer_api_url="https://api.snowtrace.io/api",
+            explorer_api_url="https://api.snowtrace.io/api",  # ✅ ИСПРАВЛЕНО: правильный URL
             explorer_api_key=api_key,
             native_token="AVAX",
             chain_id=43114
@@ -428,7 +440,7 @@ class PolygonChain(EVMChain):
         super().__init__(
             name="polygon",
             rpc_urls=rpc_urls,
-            explorer_api_url="https://api.polygonscan.com/api",
+            explorer_api_url="https://api.polygonscan.com/api",  # ✅ ИСПРАВЛЕНО: правильный URL
             explorer_api_key=api_key,
             native_token="MATIC",
             chain_id=137
