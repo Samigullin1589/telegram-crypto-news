@@ -389,6 +389,11 @@ class BlockchainMonitor:
             # Формируем URL для Etherscan Proxy API
             block_url = f"{api_url}?module=proxy&action=eth_blockNumber&apikey={api_key}"
             
+            # DEBUG v8: Логируем запрос
+            print(f"🔍 [DEBUG] {chain} - Запрос к API:")
+            print(f"   URL: {api_url}")
+            print(f"   Full URL: {block_url[:100]}...")  # Скрываем API ключ в конце
+            
             async with self.session.get(block_url) as response:
                 if response.status != 200:
                     print(f"❌ [MONITOR] HTTP {response.status} для {chain}")
@@ -396,18 +401,27 @@ class BlockchainMonitor:
                 
                 data = await response.json()
                 
-                # Проверяем статус API (Etherscan возвращает status: "0" при ошибке)
+                # УЛУЧШЕНО v8: Детальное логирование ошибок API для диагностики
                 if data.get("status") == "0":
                     error_msg = data.get("message", "Unknown error")
-                    print(f"❌ [MONITOR] API error для {chain}: {error_msg}")
+                    result_msg = data.get("result", "")
+                    print(f"❌ [MONITOR] API error для {chain}:")
+                    print(f"   📝 Message: {error_msg}")
+                    print(f"   📊 Result: {result_msg}")
+                    print(f"   🔗 URL: {block_url}")
+                    print(f"   📦 Full response: {data}")
                     return []
                 
                 # Парсим hex результат
                 result = data.get("result", "0x0")
                 if isinstance(result, str) and result.startswith("0x"):
                     latest_block = int(result, 16)
+                    # DEBUG v8: Логируем успешный ответ
+                    print(f"✅ [DEBUG] {chain} - Успешный ответ:")
+                    print(f"   Latest block: {latest_block} ({result})")
                 else:
                     print(f"❌ [MONITOR] Неверный формат блока для {chain}: {result}")
+                    print(f"   Full response: {data}")
                     return []
 
             
