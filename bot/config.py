@@ -1,7 +1,7 @@
 # bot/config.py
 import os
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
@@ -55,6 +55,22 @@ class Config:
         self.AI_BACKOFF_FACTOR = 10
         self.AI_TIMEOUT = 60
         
+        # === Optional API Keys (новые) ===
+        # CoinGecko - для цен криптовалют (РЕКОМЕНДУЕТСЯ)
+        self.COINGECKO_API_KEY = os.getenv('COINGECKO_API_KEY')
+        
+        # Alchemy - альтернатива Etherscan (опционально)
+        self.ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
+        
+        # CoinMarketCap - альтернатива CoinGecko (опционально)
+        self.COINMARKETCAP_API_KEY = os.getenv('COINMARKETCAP_API_KEY')
+        
+        # CryptoPanic - агрегатор новостей (опционально)
+        self.CRYPTOPANIC_API_KEY = os.getenv('CRYPTOPANIC_API_KEY')
+        
+        # NewsAPI - новости (опционально)
+        self.NEWSAPI_KEY = os.getenv('NEWSAPI_KEY')
+        
         # === RSS Feeds Configuration ===
         self.RSS_FEEDS: Dict[str, FeedConfig] = {
             'Крипто и Блокчейн РФ/СНГ 🇷🇺': FeedConfig(
@@ -65,7 +81,7 @@ class Config:
             'Новости Майнинга (Мир) ⚙️': FeedConfig(
                 url='https://cointelegraph.com/rss/tag/mining',
                 priority=7,
-                timeout=20
+                timeout=40  # Увеличен таймаут для проблемного фида
             ),
             'Крипто-новости СНГ 💡': FeedConfig(
                 url='https://forklog.com/feed',
@@ -80,7 +96,7 @@ class Config:
             'Глубокая аналитика (Eng) 🧐': FeedConfig(
                 url='https://www.theblock.co/rss.xml',
                 priority=7,
-                timeout=20
+                timeout=40  # Увеличен таймаут для проблемного фида
             )
         }
         
@@ -139,6 +155,22 @@ class Config:
             raise ValueError(f"Missing required environment variable: {key}")
         return value
     
+    def _get_optional_env(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Получает опциональную переменную окружения"""
+        return os.getenv(key, default)
+    
+    def has_coingecko(self) -> bool:
+        """Проверяет наличие CoinGecko API ключа"""
+        return bool(self.COINGECKO_API_KEY)
+    
+    def has_alchemy(self) -> bool:
+        """Проверяет наличие Alchemy API ключа"""
+        return bool(self.ALCHEMY_API_KEY)
+    
+    def has_coinmarketcap(self) -> bool:
+        """Проверяет наличие CoinMarketCap API ключа"""
+        return bool(self.COINMARKETCAP_API_KEY)
+    
     def _validate_config(self):
         """Валидация конфигурации при инициализации"""
         # Проверка корректности ID канала
@@ -151,6 +183,12 @@ class Config:
             raise ValueError("No active RSS feeds configured")
         
         print(f"✅ [CONFIG] Валидация пройдена. Активных фидов: {len(active_feeds)}")
+        
+        # Информация об опциональных API
+        if self.has_coingecko():
+            print("✅ [CONFIG] CoinGecko API настроен")
+        else:
+            print("⚠️  [CONFIG] CoinGecko API не найден (рекомендуется для цен)")
     
     def get_sorted_feeds(self) -> List[tuple]:
         """Возвращает фиды отсортированные по приоритету (высший первым)"""
