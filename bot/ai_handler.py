@@ -6,6 +6,7 @@ from typing import Optional, Dict, Tuple
 from datetime import datetime, timedelta
 import google.generativeai as genai
 from openai import OpenAI
+import httpx
 from .config import config
 
 
@@ -152,7 +153,20 @@ class AIHandler:
         # Инициализация провайдеров
         genai.configure(api_key=config.GEMINI_API_KEY)
         self.gemini_model = genai.GenerativeModel(config.GEMINI_MODEL)
-        self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+        
+        # Создаем HTTP клиент для OpenAI с правильными настройками
+        # Это исправляет проблему с 'proxies' параметром
+        http_client = httpx.Client(
+            timeout=httpx.Timeout(60.0, connect=30.0),
+            follow_redirects=True,
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+        )
+        
+        self.openai_client = OpenAI(
+            api_key=config.OPENAI_API_KEY,
+            http_client=http_client,
+            timeout=60.0
+        )
         
         # Вспомогательные компоненты
         self.stats = AIProviderStats()
