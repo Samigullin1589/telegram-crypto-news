@@ -272,9 +272,9 @@ class ArticleProcessor:
             )
             
             if success:
-                # Сохраняем в БД
+                # Сохраняем в БД (ИСПРАВЛЕНО: save_article вместо save_link)
                 normalized_link = URLNormalizer.normalize(link)
-                self.db.save_link(link, normalized_link, category)
+                self.db.save_article(link=link, normalized_link=normalized_link, source_feed=category, title=title, has_image=bool(image_data), ai_provider=provider)
                 print("✅ ОПУБЛИКОВАНО\n")
                 return True
             else:
