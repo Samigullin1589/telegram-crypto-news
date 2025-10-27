@@ -352,6 +352,46 @@ class ContentParser:
             'final_url': final_url
         }
     
+    async def parse_article(
+        self,
+        link: str,
+        session: aiohttp.ClientSession
+    ) -> str:
+        """
+        Извлекает текст статьи из URL
+        
+        Этот метод был добавлен для совместимости с bot/processor.py,
+        который вызывает self.parser.parse_article(link, session)
+        
+        Args:
+            link: URL статьи
+            session: aiohttp ClientSession для запросов
+            
+        Returns:
+            Извлеченный текст статьи
+        """
+        try:
+            # Загружаем и парсим страницу
+            soup, final_url = await self._fetch_and_parse_page(link, session)
+            
+            if not soup:
+                print(f"⚠️  [PARSER] Не удалось загрузить страницу: {link[:60]}")
+                return ""
+            
+            # Извлекаем текст статьи
+            article_text = self.article_extractor.extract_text(soup, fallback_summary='')
+            
+            if article_text and len(article_text) > 100:
+                print(f"✅ [PARSER] Извлечено {len(article_text)} символов из {link[:60]}")
+                return article_text
+            else:
+                print(f"⚠️  [PARSER] Текст статьи слишком короткий: {len(article_text)} символов")
+                return ""
+        
+        except Exception as e:
+            print(f"❌ [PARSER] Ошибка parse_article для {link[:60]}: {e}")
+            return ""
+    
     async def _fetch_and_parse_page(
         self,
         url: str,

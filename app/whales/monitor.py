@@ -383,19 +383,46 @@ class BlockchainMonitor:
         events = []
         
         try:
-            # Получаем последний блок
-            params = {
-                "module": "proxy",
-                "action": "eth_blockNumber",
-                "apikey": api_key
+            # Получаем последний блок через JSON-RPC (V2)
+            # Etherscan перешел на V2 API и требует использовать прямые RPC эндпоинты
+            rpc_url = api_url.replace('/api', '')  # Убираем /api для RPC
+            
+            # JSON-RPC request для получения последнего блока
+            rpc_payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
             }
             
-            async with self.session.get(api_url, params=params) as response:
+            headers = {"Content-Type": "application/json"}
+            
+            async with self.session.post(
+                f"{rpc_url}?apikey={api_key}",
+                json=rpc_payload,
+                headers=headers
+            ) as response:
                 if response.status != 200:
+                    print(f"❌ [MONITOR] HTTP {response.status} для {chain}")
                     return []
                 
                 data = await response.json()
-                latest_block = int(data.get("result", "0x0"), 16)
+                
+                # Проверяем на ошибки API
+                if "error" in data:
+                    error_msg = data.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    print(f"❌ [MONITOR] RPC error для {chain}: {error_msg}")
+                    return []
+                
+                # Парсим hex результат
+                result = data.get("result", "0x0")
+                if isinstance(result, str) and result.startswith("0x"):
+                    latest_block = int(result, 16)
+                else:
+                    print(f"❌ [MONITOR] Неверный формат блока для {chain}: {result}")
+                    return []
             
             # Определяем сколько блоков сканировать
             time_window_minutes = (datetime.utcnow() - start_time).total_seconds() / 60
@@ -469,23 +496,38 @@ class BlockchainMonitor:
         block_num: int
     ) -> Optional[Dict]:
         """
-        Получает блок с транзакциями
+        Получает блок с транзакциями через JSON-RPC (V2)
         """
         
         try:
-            params = {
-                "module": "proxy",
-                "action": "eth_getBlockByNumber",
-                "tag": hex(block_num),
-                "boolean": "true",
-                "apikey": api_key
+            # Используем JSON-RPC эндпоинт вместо устаревшего proxy
+            rpc_url = api_url.replace('/api', '')
+            
+            # JSON-RPC payload для получения блока
+            rpc_payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [hex(block_num), True],  # True = include full transactions
+                "id": 1
             }
             
-            async with self.session.get(api_url, params=params) as response:
+            headers = {"Content-Type": "application/json"}
+            
+            async with self.session.post(
+                f"{rpc_url}?apikey={api_key}",
+                json=rpc_payload,
+                headers=headers,
+                timeout=10
+            ) as response:
                 if response.status != 200:
                     return None
                 
                 data = await response.json()
+                
+                # Проверяем на RPC ошибки
+                if "error" in data:
+                    return None
+                
                 return data.get("result")
         
         except Exception:
