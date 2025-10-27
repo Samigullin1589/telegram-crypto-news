@@ -383,37 +383,23 @@ class BlockchainMonitor:
         events = []
         
         try:
-            # Получаем последний блок через JSON-RPC (V2)
-            # Etherscan перешел на V2 API и требует использовать прямые RPC эндпоинты
-            rpc_url = api_url.rsplit('/api', 1)[0] if '/api' in api_url else api_url  # ИСПРАВЛЕНО: удаляем только последний /api
+            # ИСПРАВЛЕНО v7: Получаем последний блок через Etherscan Proxy API
+            # Etherscan требует GET запросы через module=proxy, а не JSON-RPC POST
             
-            # JSON-RPC request для получения последнего блока
-            rpc_payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_blockNumber",
-                "params": [],
-                "id": 1
-            }
+            # Формируем URL для Etherscan Proxy API
+            block_url = f"{api_url}?module=proxy&action=eth_blockNumber&apikey={api_key}"
             
-            headers = {"Content-Type": "application/json"}
-            
-            async with self.session.post(
-                f"{rpc_url}?apikey={api_key}",
-                json=rpc_payload,
-                headers=headers
-            ) as response:
+            async with self.session.get(block_url) as response:
                 if response.status != 200:
                     print(f"❌ [MONITOR] HTTP {response.status} для {chain}")
                     return []
                 
                 data = await response.json()
                 
-                # Проверяем на ошибки API
-                if "error" in data:
-                    error_msg = data.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    print(f"❌ [MONITOR] RPC error для {chain}: {error_msg}")
+                # Проверяем статус API (Etherscan возвращает status: "0" при ошибке)
+                if data.get("status") == "0":
+                    error_msg = data.get("message", "Unknown error")
+                    print(f"❌ [MONITOR] API error для {chain}: {error_msg}")
                     return []
                 
                 # Парсим hex результат
@@ -423,6 +409,7 @@ class BlockchainMonitor:
                 else:
                     print(f"❌ [MONITOR] Неверный формат блока для {chain}: {result}")
                     return []
+
             
             # Определяем сколько блоков сканировать
             time_window_minutes = (datetime.utcnow() - start_time).total_seconds() / 60
@@ -496,42 +483,28 @@ class BlockchainMonitor:
         block_num: int
     ) -> Optional[Dict]:
         """
-        Получает блок с транзакциями через JSON-RPC (V2)
+        ИСПРАВЛЕНО v7: Получает блок с транзакциями через Etherscan Proxy API
         """
         
         try:
-            # Используем JSON-RPC эндпоинт вместо устаревшего proxy
-            rpc_url = api_url.replace('/api', '')
+            # Формируем URL для Etherscan Proxy API
+            block_url = f"{api_url}?module=proxy&action=eth_getBlockByNumber&tag={hex(block_num)}&boolean=true&apikey={api_key}"
             
-            # JSON-RPC payload для получения блока
-            rpc_payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_getBlockByNumber",
-                "params": [hex(block_num), True],  # True = include full transactions
-                "id": 1
-            }
-            
-            headers = {"Content-Type": "application/json"}
-            
-            async with self.session.post(
-                f"{rpc_url}?apikey={api_key}",
-                json=rpc_payload,
-                headers=headers,
-                timeout=10
-            ) as response:
+            async with self.session.get(block_url, timeout=10) as response:
                 if response.status != 200:
                     return None
                 
                 data = await response.json()
                 
-                # Проверяем на RPC ошибки
-                if "error" in data:
+                # Проверяем статус API
+                if data.get("status") == "0":
                     return None
                 
                 return data.get("result")
         
         except Exception:
             return None
+
     
     async def _parse_evm_native_transaction(
         self,
