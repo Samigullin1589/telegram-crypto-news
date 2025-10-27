@@ -383,40 +383,55 @@ class BlockchainMonitor:
         events = []
         
         try:
-            # ИСПРАВЛЕНО v7: Получаем последний блок через Etherscan Proxy API
-            # Etherscan требует GET запросы через module=proxy, а не JSON-RPC POST
+            # ИСПРАВЛЕНО v9: Используем прямой JSON-RPC endpoint
+            # Etherscan API V1 устарел, переходим на публичные RPC endpoints
             
-            # Формируем URL для Etherscan Proxy API
-            block_url = f"{api_url}?module=proxy&action=eth_blockNumber&apikey={api_key}"
+            # Публичные RPC endpoints для каждого chain
+            rpc_endpoints = {
+                "ethereum": "https://eth.llamarpc.com",
+                "bsc": "https://bsc-dataseed.binance.org",
+                "base": "https://mainnet.base.org",
+                "arbitrum": "https://arb1.arbitrum.io/rpc",
+                "polygon": "https://polygon-rpc.com"
+            }
             
-            # DEBUG v8: Логируем запрос
-            print(f"🔍 [DEBUG] {chain} - Запрос к API:")
-            print(f"   URL: {api_url}")
-            print(f"   Full URL: {block_url[:100]}...")  # Скрываем API ключ в конце
+            # Используем публичный RPC вместо Etherscan API
+            rpc_url = rpc_endpoints.get(chain, api_url)
             
-            async with self.session.get(block_url) as response:
+            # JSON-RPC запрос для получения последнего блока
+            rpc_payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
+            }
+            
+            # DEBUG v9: Логируем запрос
+            print(f"🔍 [DEBUG] {chain} - Запрос к RPC:")
+            print(f"   RPC URL: {rpc_url}")
+            
+            headers = {"Content-Type": "application/json"}
+            
+            async with self.session.post(rpc_url, json=rpc_payload, headers=headers) as response:
                 if response.status != 200:
                     print(f"❌ [MONITOR] HTTP {response.status} для {chain}")
                     return []
                 
                 data = await response.json()
                 
-                # УЛУЧШЕНО v8: Детальное логирование ошибок API для диагностики
-                if data.get("status") == "0":
-                    error_msg = data.get("message", "Unknown error")
-                    result_msg = data.get("result", "")
-                    print(f"❌ [MONITOR] API error для {chain}:")
-                    print(f"   📝 Message: {error_msg}")
-                    print(f"   📊 Result: {result_msg}")
-                    print(f"   🔗 URL: {block_url}")
-                    print(f"   📦 Full response: {data}")
+                # Проверяем на ошибки RPC
+                if "error" in data:
+                    error_msg = data.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    print(f"❌ [MONITOR] RPC error для {chain}: {error_msg}")
                     return []
                 
                 # Парсим hex результат
                 result = data.get("result", "0x0")
                 if isinstance(result, str) and result.startswith("0x"):
                     latest_block = int(result, 16)
-                    # DEBUG v8: Логируем успешный ответ
+                    # DEBUG v9: Логируем успешный ответ
                     print(f"✅ [DEBUG] {chain} - Успешный ответ:")
                     print(f"   Latest block: {latest_block} ({result})")
                 else:
@@ -497,21 +512,40 @@ class BlockchainMonitor:
         block_num: int
     ) -> Optional[Dict]:
         """
-        ИСПРАВЛЕНО v7: Получает блок с транзакциями через Etherscan Proxy API
+        ИСПРАВЛЕНО v9: Получает блок с транзакциями через прямой JSON-RPC
         """
         
         try:
-            # Формируем URL для Etherscan Proxy API
-            block_url = f"{api_url}?module=proxy&action=eth_getBlockByNumber&tag={hex(block_num)}&boolean=true&apikey={api_key}"
+            # Публичные RPC endpoints
+            rpc_endpoints = {
+                "https://api.etherscan.io/api": "https://eth.llamarpc.com",
+                "https://api.bscscan.com/api": "https://bsc-dataseed.binance.org",
+                "https://api.basescan.org/api": "https://mainnet.base.org",
+                "https://api.arbiscan.io/api": "https://arb1.arbitrum.io/rpc",
+                "https://api.polygonscan.com/api": "https://polygon-rpc.com"
+            }
             
-            async with self.session.get(block_url, timeout=10) as response:
+            # Используем публичный RPC вместо Etherscan API
+            rpc_url = rpc_endpoints.get(api_url, api_url)
+            
+            # JSON-RPC запрос для получения блока
+            rpc_payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [hex(block_num), True],  # True = включить транзакции
+                "id": 1
+            }
+            
+            headers = {"Content-Type": "application/json"}
+            
+            async with self.session.post(rpc_url, json=rpc_payload, headers=headers, timeout=10) as response:
                 if response.status != 200:
                     return None
                 
                 data = await response.json()
                 
-                # Проверяем статус API
-                if data.get("status") == "0":
+                # Проверяем на ошибки RPC
+                if "error" in data:
                     return None
                 
                 return data.get("result")
@@ -519,7 +553,6 @@ class BlockchainMonitor:
         except Exception:
             return None
 
-    
     async def _parse_evm_native_transaction(
         self,
         tx: Dict,
