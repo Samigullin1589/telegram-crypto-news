@@ -1,4 +1,3 @@
-# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -23,55 +22,84 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Virtual environments
 venv/
 env/
 ENV/
 .venv
+env.bak/
+venv.bak/
 
-# IDEs
+.env
+.env.local
+.env.*.local
+
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.project
+.pydevproject
+.settings/
 
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Data files
 data/
 *.db
 *.sqlite
 *.sqlite3
 
-# Logs
 logs/
 *.log
 
-# OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# Render
 .render/
 
-# Temporary
 tmp/
 temp/
 *.tmp
 
-# Jupyter
 .ipynb_checkpoints/
+*.ipynb
 
-# Coverage
 .coverage
 htmlcov/
-
-# pytest
 .pytest_cache/
-
-# mypy
+.tox/
 .mypy_cache/
+.dmypy.json
+dmypy.json
+
+*.sage.py
+*.mo
+*.pot
+
+instance/
+.webassets-cache
+
+.scrapy
+
+celerybeat-schedule
+celerybeat.pid
+
+*.sage.py
+
+.env.swp
+
+.spyderproject
+.spyproject
+
+.ropeproject
+
+/site
+
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+.pyre/
+
+.pytype/
+
+cython_debug/

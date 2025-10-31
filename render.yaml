@@ -5,38 +5,55 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     autoDeploy: true
+    
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
+      
       - key: CHAT_ID
         sync: false
+      
       - key: PORT
         value: "8000"
+      
       - key: PYTHONUNBUFFERED
         value: "1"
+      
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
+      
       - key: FETCH_INTERVAL
         value: "900"
+      
       - key: POSTS_PER_HOUR_CAP
         value: "3"
+      
       - key: WHALE_MIN_VALUE_USD
         value: "100000"
+      
       - key: TRADING_ENABLED
         value: "true"
+      
       - key: CHAINS_ENABLED
         value: "true"
+      
       - key: ANALYTICS_ENABLED
         value: "true"
+      
       - key: ETH_RPC_URL
         value: https://eth.llamarpc.com
+      
       - key: BSC_RPC_URL
         value: https://bsc-dataseed.binance.org
+      
       - key: SOLANA_RPC_URL
         value: https://api.mainnet-beta.solana.com
+      
       - key: BASE_RPC_URL
         value: https://mainnet.base.org
+      
       - key: ARBITRUM_RPC_URL
         value: https://arb1.arbitrum.io/rpc
+      
       - key: POLYGON_RPC_URL
         value: https://polygon-rpc.com
