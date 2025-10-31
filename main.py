@@ -15,6 +15,7 @@ Unified system: News Bot + Whale Monitor + Trading System + Telegram Commands
 ✅ Position Management
 ✅ Risk Management
 ✅ User Commands (/start, /positions, /signal, etc.)
+✅ HTTP Health Check Server (для Render.com)
 """
 
 import asyncio
@@ -27,10 +28,46 @@ from typing import Optional, List, Dict
 import traceback as tb
 from collections import defaultdict
 
-# Проверка Python версии
 if sys.version_info < (3, 8):
     print("❌ Требуется Python 3.8 или выше")
     sys.exit(1)
+
+from aiohttp import web
+
+
+async def health_check_handler(request):
+    """Health check endpoint для Render.com и других хостингов"""
+    return web.Response(
+        text="OK - Crypto Compass Running",
+        status=200,
+        headers={'Content-Type': 'text/plain'}
+    )
+
+
+async def start_health_server():
+    """
+    Запуск HTTP сервера для health checks
+    
+    КРИТИЧНО для Render.com:
+    - Render проверяет здоровье через HTTP
+    - Без этого может убить процесс
+    - Порт берётся из env PORT (по умолчанию 8000)
+    """
+    app = web.Application()
+    app.router.add_get('/', health_check_handler)
+    app.router.add_get('/health', health_check_handler)
+    app.router.add_get('/ping', health_check_handler)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get('PORT', 8000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    print(f"✅ [HEALTH] HTTP server started on port {port}")
+    print(f"   Available endpoints: /, /health, /ping")
+    return runner
 
 
 class SystemHealthMonitor:
@@ -48,7 +85,6 @@ class SystemHealthMonitor:
     """
     
     def __init__(self):
-        # Heartbeats
         self.news_alive = False
         self.whale_alive = False
         self.trading_alive = False
@@ -59,7 +95,6 @@ class SystemHealthMonitor:
         self.last_trading_heartbeat: Optional[datetime] = None
         self.last_bot_heartbeat: Optional[datetime] = None
         
-        # Metrics
         self.news_cycles = 0
         self.whale_cycles = 0
         self.trading_cycles = 0
@@ -70,12 +105,11 @@ class SystemHealthMonitor:
         self.trading_errors = 0
         self.bot_errors = 0
         
-        # Configuration
-        self.check_interval = 300  # 5 минут
-        self.news_silence_threshold = 1800  # 30 минут
-        self.whale_silence_threshold = 600  # 10 минут
-        self.trading_silence_threshold = 3900  # 65 минут (чуть больше 1 часа)
-        self.bot_silence_threshold = 86400  # 24 часа (бот может долго не получать команды)
+        self.check_interval = 300
+        self.news_silence_threshold = 1800
+        self.whale_silence_threshold = 600
+        self.trading_silence_threshold = 3900
+        self.bot_silence_threshold = 86400
         
         self.start_time = datetime.now(timezone.utc)
         
@@ -121,16 +155,10 @@ class SystemHealthMonitor:
             self.bot_errors += 1
     
     def check_health(self) -> tuple[bool, List[str]]:
-        """
-        Проверка здоровья всех систем
-        
-        Returns:
-            (is_healthy, issues): Кортеж с общим статусом и списком проблем
-        """
+        """Проверка здоровья всех систем"""
         issues = []
         now = datetime.now(timezone.utc)
         
-        # Проверка новостной системы
         if self.last_news_heartbeat:
             silence = (now - self.last_news_heartbeat).seconds
             if silence > self.news_silence_threshold:
@@ -141,7 +169,6 @@ class SystemHealthMonitor:
         elif self.news_cycles > 0:
             issues.append("📰 News Bot: No recent heartbeat")
         
-        # Проверка whale системы
         if self.last_whale_heartbeat:
             silence = (now - self.last_whale_heartbeat).seconds
             if silence > self.whale_silence_threshold:
@@ -152,7 +179,6 @@ class SystemHealthMonitor:
         elif self.whale_cycles > 0:
             issues.append("🐋 Whale Monitor: No recent heartbeat")
         
-        # Проверка trading системы
         if self.last_trading_heartbeat:
             silence = (now - self.last_trading_heartbeat).seconds
             if silence > self.trading_silence_threshold:
@@ -163,7 +189,6 @@ class SystemHealthMonitor:
         elif self.trading_cycles > 0:
             issues.append("📈 Trading System: No recent heartbeat")
         
-        # Проверка bot (более мягкая - может долго не получать команды)
         if self.last_bot_heartbeat:
             silence = (now - self.last_bot_heartbeat).seconds
             if silence > self.bot_silence_threshold:
@@ -172,13 +197,12 @@ class SystemHealthMonitor:
                     f"(threshold: {self.bot_silence_threshold//3600}h)"
                 )
         
-        # Проверка error rate
         total_cycles = self.news_cycles + self.whale_cycles + self.trading_cycles
         total_errors = self.news_errors + self.whale_errors + self.trading_errors + self.bot_errors
         
         if total_cycles > 0:
             error_rate = (total_errors / total_cycles) * 100
-            if error_rate > 10:  # Больше 10% ошибок
+            if error_rate > 10:
                 issues.append(f"⚠️ High error rate: {error_rate:.1f}%")
         
         return len(issues) == 0, issues
@@ -248,6 +272,7 @@ class IntegratedCryptoMonitor:
     2. Whale Monitor - Отслеживание крупных перемещений и smart money
     3. Trading System - Генерация торговых сигналов с ML предсказаниями
     4. Telegram Bot - Интерактивный обработчик команд пользователя
+    5. HTTP Health Server - Endpoint для мониторинга (Render.com)
     
     Все системы публикуют в один канал с умной приоритизацией
     и координацией для избежания перегрузки канала
@@ -258,7 +283,6 @@ class IntegratedCryptoMonitor:
         print("🚀 INITIALIZING INTEGRATED CRYPTO MONITOR")
         print("="*80 + "\n")
         
-        # Импортируем компоненты
         try:
             from bot.processor import NewsProcessor
             self.news_processor = NewsProcessor()
@@ -275,30 +299,22 @@ class IntegratedCryptoMonitor:
             print(f"⚠️ Failed to load Whale Scheduler: {e}")
             self.whale_scheduler = None
         
-        # ====================================================================
-        # TELEGRAM BOT INTEGRATION (НОВОЕ!)
-        # ====================================================================
         try:
             from app.bot import application as bot_application
             self.bot_application = bot_application
             print("✅ Bot Commands Handler loaded")
-            
-            # Патчим обработчики для отслеживания команд
             self._patch_bot_handlers()
-            
         except Exception as e:
             print(f"⚠️ Bot Commands Handler not loaded: {e}")
             self.bot_application = None
         
-        # Health monitoring
         self.health_monitor = SystemHealthMonitor()
         
-        # Shutdown coordination
         self.shutdown_event = asyncio.Event()
         self._tasks: List[asyncio.Task] = []
         self._shutdown_in_progress = False
+        self._health_server_runner = None
         
-        # Statistics
         self.stats = {
             "start_time": datetime.now(timezone.utc),
             "total_publications": 0,
@@ -313,17 +329,11 @@ class IntegratedCryptoMonitor:
         print("\n✅ Integrated Crypto Monitor инициализирован")
     
     def _patch_bot_handlers(self):
-        """
-        Патчим обработчики команд для мониторинга
-        
-        Добавляет отслеживание команд в health monitor
-        """
-        
+        """Патчим обработчики команд для мониторинга"""
         if not self.bot_application:
             return
         
         try:
-            # Обёртка для всех обработчиков
             original_handlers = list(self.bot_application.handlers[0])
             
             for handler in original_handlers:
@@ -331,12 +341,10 @@ class IntegratedCryptoMonitor:
                     original_callback = handler.callback
                     
                     async def wrapped_callback(update, context, original=original_callback):
-                        # Регистрируем команду
                         self.health_monitor.record_bot_command()
                         self.stats["bot_commands"] += 1
                         
                         try:
-                            # Вызываем оригинальный обработчик
                             return await original(update, context)
                         except Exception as e:
                             self.health_monitor.record_error("bot")
@@ -345,28 +353,21 @@ class IntegratedCryptoMonitor:
                     handler.callback = wrapped_callback
             
             print("   ✓ Bot handlers патчнуты для мониторинга")
-        
         except Exception as e:
             print(f"   ⚠️ Не удалось пропатчить bot handlers: {e}")
     
     async def run(self):
-        """
-        Главный цикл выполнения
-        
-        Запускает все подсистемы параллельно с мониторингом
-        и координацией между ними
-        """
+        """Главный цикл выполнения"""
         
         self._print_startup_banner()
         
-        # Настраиваем обработчики сигналов
         self._setup_signal_handlers()
         
+        self._health_server_runner = await start_health_server()
+        
         try:
-            # Создаём задачи для всех систем
             self._tasks = []
             
-            # News Bot
             if self.news_processor:
                 self._tasks.append(
                     asyncio.create_task(
@@ -375,7 +376,6 @@ class IntegratedCryptoMonitor:
                     )
                 )
             
-            # Whale Monitor
             if self.whale_scheduler:
                 self._tasks.append(
                     asyncio.create_task(
@@ -384,7 +384,6 @@ class IntegratedCryptoMonitor:
                     )
                 )
             
-            # Telegram Bot Commands Handler (НОВОЕ!)
             if self.bot_application:
                 self._tasks.append(
                     asyncio.create_task(
@@ -393,7 +392,6 @@ class IntegratedCryptoMonitor:
                     )
                 )
             
-            # Health Monitor
             self._tasks.append(
                 asyncio.create_task(
                     self._health_check_loop(),
@@ -401,7 +399,6 @@ class IntegratedCryptoMonitor:
                 )
             )
             
-            # Coordinator (для балансировки публикаций)
             self._tasks.append(
                 asyncio.create_task(
                     self._coordination_loop(),
@@ -409,7 +406,6 @@ class IntegratedCryptoMonitor:
                 )
             )
             
-            # Shutdown Waiter
             self._tasks.append(
                 asyncio.create_task(
                     self._wait_for_shutdown(),
@@ -422,20 +418,17 @@ class IntegratedCryptoMonitor:
                 print(f"   • {task.get_name()}")
             print()
             
-            # Ждём завершения любой задачи
             done, pending = await asyncio.wait(
                 self._tasks,
                 return_when=asyncio.FIRST_COMPLETED
             )
             
-            # Проверяем причину завершения
             for task in done:
                 task_name = task.get_name()
                 
                 if task_name == "shutdown_waiter":
                     print("✅ Получен сигнал graceful shutdown")
                 else:
-                    # Неожиданное завершение задачи
                     exc = task.exception()
                     if exc:
                         print(f"\n❌ [CRITICAL] Task '{task_name}' crashed with exception:")
@@ -446,7 +439,6 @@ class IntegratedCryptoMonitor:
                     else:
                         print(f"⚠️ Task '{task_name}' завершилась без ошибок")
             
-            # Инициируем shutdown если ещё не начат
             if not self._shutdown_in_progress:
                 print("\n⚠️ Инициируется shutdown из-за завершения задачи...")
                 await self.shutdown()
@@ -469,27 +461,15 @@ class IntegratedCryptoMonitor:
             await self.cleanup()
     
     async def _run_news_system(self):
-        """
-        Обёртка для новостной системы
-        
-        Добавляет heartbeat, error handling и restart logic
-        """
-        
+        """Обёртка для новостной системы"""
         consecutive_errors = 0
         max_consecutive_errors = 3
         
         while not self.shutdown_event.is_set():
             try:
-                # Обновляем heartbeat
                 self.health_monitor.update_news_heartbeat()
-                
-                # Запускаем цикл обработки новостей
                 await self.news_processor.run()
-                
-                # Сброс счётчика ошибок при успехе
                 consecutive_errors = 0
-                
-                # Небольшая пауза между циклами
                 await asyncio.sleep(1)
             
             except asyncio.CancelledError:
@@ -510,7 +490,6 @@ class IntegratedCryptoMonitor:
                     consecutive_errors = 0
                     self.stats["restarts"] += 1
                 else:
-                    # Экспоненциальная задержка
                     delay = min(60 * (2 ** consecutive_errors), 300)
                     print(f"⏳ [NEWS] Повторная попытка через {delay}с...")
                     await asyncio.sleep(delay)
@@ -518,28 +497,18 @@ class IntegratedCryptoMonitor:
         print("📰 [NEWS] Система остановлена")
     
     async def _run_whale_system(self):
-        """
-        Обёртка для whale monitoring системы
-        
-        Добавляет heartbeat, error handling и restart logic
-        """
-        
+        """Обёртка для whale monitoring системы"""
         consecutive_errors = 0
         max_consecutive_errors = 3
         
         while not self.shutdown_event.is_set():
             try:
-                # Обновляем heartbeat
                 self.health_monitor.update_whale_heartbeat()
                 
-                # Trading system внутри whale_scheduler также получит heartbeat
                 if self.whale_scheduler.trading_enabled:
                     self.health_monitor.update_trading_heartbeat()
                 
-                # Запускаем scheduler
                 await self.whale_scheduler.run()
-                
-                # Сброс счётчика ошибок при успехе
                 consecutive_errors = 0
             
             except asyncio.CancelledError:
@@ -561,7 +530,6 @@ class IntegratedCryptoMonitor:
                     consecutive_errors = 0
                     self.stats["restarts"] += 1
                 else:
-                    # Экспоненциальная задержка
                     delay = min(120 * (2 ** consecutive_errors), 600)
                     print(f"⏳ [WHALE] Повторная попытка через {delay}с...")
                     await asyncio.sleep(delay)
@@ -569,17 +537,7 @@ class IntegratedCryptoMonitor:
         print("🐋 [WHALE] Система остановлена")
     
     async def _run_bot_polling(self):
-        """
-        Запуск Telegram bot для обработки пользовательских команд
-        
-        Обрабатывает команды типа:
-        - /start, /help
-        - /positions, /performance
-        - /signal <ASSET>
-        - /close <position_id>
-        и т.д.
-        """
-        
+        """Запуск Telegram bot для обработки пользовательских команд"""
         consecutive_errors = 0
         max_consecutive_errors = 3
         
@@ -587,28 +545,24 @@ class IntegratedCryptoMonitor:
             try:
                 print("🤖 [BOT] Инициализация command handler...")
                 
-                # Инициализируем приложение
                 await self.bot_application.initialize()
                 await self.bot_application.start()
                 
                 print("🤖 [BOT] Запускаем polling...")
                 
-                # Запускаем polling
                 await self.bot_application.updater.start_polling(
                     drop_pending_updates=True,
                     allowed_updates=None
                 )
                 
-                # Обновляем heartbeat
                 self.health_monitor.update_bot_heartbeat()
                 
                 print("✅ [BOT] Command handler активен и готов к приёму команд")
                 print("   Доступные команды: /start, /help, /status, /positions, /performance")
                 
-                # Ждём сигнала остановки
                 while not self.shutdown_event.is_set():
                     self.health_monitor.update_bot_heartbeat()
-                    await asyncio.sleep(60)  # Heartbeat каждую минуту
+                    await asyncio.sleep(60)
                 
                 print("🤖 [BOT] Получен сигнал остановки")
                 break
@@ -626,7 +580,6 @@ class IntegratedCryptoMonitor:
                 print(f"   {e}")
                 tb.print_exc()
                 
-                # Останавливаем перед повторной попыткой
                 try:
                     if self.bot_application.updater.running:
                         await self.bot_application.updater.stop()
@@ -645,7 +598,6 @@ class IntegratedCryptoMonitor:
                     print(f"⏳ [BOT] Повторная попытка через {delay}с...")
                     await asyncio.sleep(delay)
         
-        # Graceful shutdown
         print("🤖 [BOT] Останавливаем command handler...")
         try:
             if self.bot_application.updater.running:
@@ -665,13 +617,7 @@ class IntegratedCryptoMonitor:
         print("✅ [BOT] Command handler полностью остановлен")
     
     async def _health_check_loop(self):
-        """
-        Периодическая проверка здоровья всех систем
-        
-        Выводит предупреждения при обнаружении проблем
-        """
-        
-        # Первая проверка через 5 минут после запуска
+        """Периодическая проверка здоровья всех систем"""
         await asyncio.sleep(300)
         
         while not self.shutdown_event.is_set():
@@ -686,7 +632,6 @@ class IntegratedCryptoMonitor:
                         print(f"   {issue}")
                     print("="*80 + "\n")
                 
-                # Следующая проверка
                 await asyncio.sleep(self.health_monitor.check_interval)
             
             except asyncio.CancelledError:
@@ -699,21 +644,11 @@ class IntegratedCryptoMonitor:
         print("💚 [HEALTH] Health Monitor остановлен")
     
     async def _coordination_loop(self):
-        """
-        Координация между системами
-        
-        Задачи:
-        - Балансировка публикаций между системами
-        - Предотвращение спама в канале
-        - Приоритизация важных сигналов
-        - Агрегация метрик
-        """
-        
-        await asyncio.sleep(60)  # Первый запуск через минуту
+        """Координация между системами"""
+        await asyncio.sleep(60)
         
         while not self.shutdown_event.is_set():
             try:
-                # Собираем метрики от всех систем
                 if self.news_processor and hasattr(self.news_processor, 'metrics'):
                     self.stats["news_publications"] = self.news_processor.metrics.articles_published
                 
@@ -728,8 +663,7 @@ class IntegratedCryptoMonitor:
                     self.stats["trading_publications"]
                 )
                 
-                # Следующая итерация
-                await asyncio.sleep(300)  # Каждые 5 минут
+                await asyncio.sleep(300)
             
             except asyncio.CancelledError:
                 break
@@ -746,12 +680,7 @@ class IntegratedCryptoMonitor:
         print("🛑 [SHUTDOWN] Сигнал shutdown получен")
     
     def _setup_signal_handlers(self):
-        """
-        Настройка обработчиков системных сигналов
-        
-        Обеспечивает graceful shutdown при получении SIGINT/SIGTERM
-        """
-        
+        """Настройка обработчиков системных сигналов"""
         if sys.platform == "win32":
             print("⚠️ [WARN] Signal handlers не поддерживаются на Windows")
             print("         Используйте Ctrl+C для остановки")
@@ -775,16 +704,7 @@ class IntegratedCryptoMonitor:
         await self.shutdown()
     
     async def shutdown(self):
-        """
-        Корректное завершение работы всех систем
-        
-        Последовательность:
-        1. Установка флага shutdown
-        2. Graceful shutdown каждой системы (с таймаутом)
-        3. Отмена оставшихся задач
-        4. Финальная очистка
-        """
-        
+        """Корректное завершение работы всех систем"""
         if self._shutdown_in_progress:
             print("⚠️ Shutdown уже в процессе...")
             return
@@ -795,19 +715,12 @@ class IntegratedCryptoMonitor:
         print("⏹️ SHUTDOWN SEQUENCE INITIATED")
         print("="*80)
         
-        # Сигнализируем всем системам
         self.shutdown_event.set()
         
         print("\n⏳ Останавливаем подсистемы (макс 60 секунд)...")
         
         shutdown_tasks = []
         
-        # Telegram Bot
-        if self.bot_application:
-            print("   • Останавливаем Telegram Bot...")
-            # Bot остановится сам через _run_bot_polling
-        
-        # Whale Scheduler (включая Trading System)
         if self.whale_scheduler and hasattr(self.whale_scheduler, 'shutdown'):
             print("   • Останавливаем Whale Monitor + Trading System...")
             shutdown_tasks.append(
@@ -817,7 +730,6 @@ class IntegratedCryptoMonitor:
                 )
             )
         
-        # News Processor
         if self.news_processor and hasattr(self.news_processor, 'shutdown'):
             print("   • Останавливаем News Processor...")
             shutdown_tasks.append(
@@ -827,7 +739,6 @@ class IntegratedCryptoMonitor:
                 )
             )
         
-        # Ждём завершения с таймаутом
         if shutdown_tasks:
             try:
                 results = await asyncio.wait_for(
@@ -835,7 +746,6 @@ class IntegratedCryptoMonitor:
                     timeout=60.0
                 )
                 
-                # Проверяем результаты
                 for i, result in enumerate(results):
                     if isinstance(result, Exception):
                         print(f"   ⚠️ Ошибка при shutdown задачи {shutdown_tasks[i].get_name()}: {result}")
@@ -845,7 +755,6 @@ class IntegratedCryptoMonitor:
             except asyncio.TimeoutError:
                 print("   ⚠️ Таймаут graceful shutdown, принудительная остановка...")
         
-        # Отменяем все оставшиеся задачи
         print("\n⏳ Отменяем оставшиеся задачи...")
         
         cancelled_count = 0
@@ -856,26 +765,26 @@ class IntegratedCryptoMonitor:
         
         if cancelled_count > 0:
             print(f"   • Отменено задач: {cancelled_count}")
-            
-            # Ждём завершения отменённых задач
             await asyncio.gather(*self._tasks, return_exceptions=True)
         
         print("   ✅ Все задачи остановлены")
+        
+        if self._health_server_runner:
+            print("\n⏳ Останавливаем health check server...")
+            try:
+                await self._health_server_runner.cleanup()
+                print("   ✅ Health check server остановлен")
+            except Exception as e:
+                print(f"   ⚠️ Ошибка остановки health server: {e}")
         
         print("\n" + "="*80)
         print("✅ SHUTDOWN SEQUENCE COMPLETED")
         print("="*80)
     
     async def cleanup(self):
-        """
-        Финальная очистка ресурсов
-        
-        Выполняется после shutdown всех систем
-        """
-        
+        """Финальная очистка ресурсов"""
         print("\n🧹 [CLEANUP] Очистка ресурсов...")
         
-        # Сохраняем финальное состояние
         try:
             if self.whale_scheduler and hasattr(self.whale_scheduler, '_save_state'):
                 self.whale_scheduler._save_state()
@@ -883,7 +792,6 @@ class IntegratedCryptoMonitor:
         except Exception as e:
             print(f"   ⚠️ Ошибка сохранения состояния: {e}")
         
-        # Выводим финальную статистику
         self._print_final_statistics()
         
         print("\n" + "="*80)
@@ -892,14 +800,12 @@ class IntegratedCryptoMonitor:
     
     def _print_startup_banner(self):
         """Вывод баннера при запуске"""
-        
         print("\n" + "="*80)
         print("🚀 INTEGRATED CRYPTO MONITOR v4.0 - STARTING UP")
         print("="*80)
         
         print("\n📦 АКТИВНЫЕ КОМПОНЕНТЫ:\n")
         
-        # News Bot
         if self.news_processor:
             print("📰 News Bot")
             print("   ├─ AI-powered content processing")
@@ -912,7 +818,6 @@ class IntegratedCryptoMonitor:
         
         print()
         
-        # Whale Monitor
         if self.whale_scheduler:
             print("🐋 Whale Monitor")
             print("   ├─ Blockchain event tracking")
@@ -948,7 +853,6 @@ class IntegratedCryptoMonitor:
         
         print()
         
-        # Telegram Bot (НОВОЕ!)
         if self.bot_application:
             print("🤖 Telegram Bot Commands")
             print("   ├─ User command handling")
@@ -968,7 +872,6 @@ class IntegratedCryptoMonitor:
         
         print()
         
-        # Health Monitor
         print("💚 Health Monitor")
         print("   ├─ System heartbeat tracking")
         print("   ├─ Error rate monitoring")
@@ -978,7 +881,14 @@ class IntegratedCryptoMonitor:
         
         print()
         
-        # Coordinator
+        print("🌐 HTTP Health Server")
+        print("   ├─ Render.com health checks")
+        print("   ├─ Endpoints: /, /health, /ping")
+        print(f"   ├─ Port: {os.environ.get('PORT', 8000)}")
+        print("   └─ Status: ✅ Active")
+        
+        print()
+        
         print("🔄 Coordinator")
         print("   ├─ Publication balancing")
         print("   ├─ Priority management")
@@ -991,16 +901,13 @@ class IntegratedCryptoMonitor:
     
     def _print_final_statistics(self):
         """Вывод финальной статистики"""
-        
         print("\n" + "="*80)
         print("📊 ФИНАЛЬНАЯ СТАТИСТИКА")
         print("="*80)
         
-        # Uptime
         uptime = self.health_monitor.get_uptime()
         print(f"\n⏱️ UPTIME: {self.health_monitor._format_duration(uptime.total_seconds())}")
         
-        # Health Stats
         health_stats = self.health_monitor.get_stats()
         
         print(f"\n💚 HEALTH MONITOR:")
@@ -1012,7 +919,6 @@ class IntegratedCryptoMonitor:
             error_rate = (health_stats['total_errors'] / health_stats['total_cycles']) * 100
             print(f"   Error Rate: {error_rate:.2f}%")
         
-        # News Bot Stats
         if self.news_processor and hasattr(self.news_processor, 'metrics'):
             news_metrics = self.news_processor.metrics
             
@@ -1027,7 +933,6 @@ class IntegratedCryptoMonitor:
             
             print(f"   Errors: {news_metrics.errors}")
         
-        # Whale Monitor Stats
         if self.whale_scheduler and hasattr(self.whale_scheduler, 'stats'):
             whale_stats = self.whale_scheduler.stats
             
@@ -1046,49 +951,18 @@ class IntegratedCryptoMonitor:
             print(f"   Wallets Discovered: {whale_stats.get('wallets_discovered', 0)}")
             print(f"   Wallets Removed: {whale_stats.get('wallets_removed', 0)}")
             
-            # Trading Stats
             if self.whale_scheduler.trading_enabled:
                 print(f"\n📈 TRADING SYSTEM:")
                 print(f"   Signals Generated: {whale_stats.get('trading_signals_generated', 0)}")
                 print(f"   Signals Sent: {whale_stats.get('trading_signals_sent', 0)}")
                 print(f"   Positions Opened: {whale_stats.get('positions_opened', 0)}")
                 print(f"   Positions Closed: {whale_stats.get('positions_closed', 0)}")
-                
-                try:
-                    positions_summary = self.whale_scheduler.signal_generator.positions.get_summary()
-                    print(f"   Open Positions: {positions_summary['total_open']}")
-                    print(f"   Unrealized P&L: ${positions_summary['total_unrealized_pnl_usd']:,.2f}")
-                    
-                    # Performance metrics (используем asyncio.run для получения async данных)
-                    try:
-                        loop = asyncio.new_event_loop()
-                        metrics = loop.run_until_complete(
-                            self.whale_scheduler.signal_generator.performance.calculate_metrics(
-                                period_days=30
-                            )
-                        )
-                        loop.close()
-                        
-                        if metrics.total_trades > 0:
-                            print(f"\n   📊 Performance (30d):")
-                            print(f"      Total Trades: {metrics.total_trades}")
-                            print(f"      Win Rate: {metrics.win_rate:.1f}%")
-                            print(f"      Total P&L: ${metrics.total_pnl_usd:,.2f}")
-                            print(f"      Profit Factor: {metrics.profit_factor:.2f}")
-                            print(f"      Sharpe Ratio: {metrics.sharpe_ratio:.2f}")
-                    except Exception as e:
-                        print(f"   ⚠️ Ошибка получения performance метрик: {e}")
-                
-                except Exception as e:
-                    print(f"   ⚠️ Ошибка получения trading метрик: {e}")
         
-        # Telegram Bot Stats (НОВОЕ!)
         if self.bot_application:
             print(f"\n🤖 TELEGRAM BOT:")
             print(f"   Commands Processed: {health_stats['total_bot_commands']}")
             print(f"   Errors: {health_stats['systems']['bot']['errors']}")
         
-        # Overall Stats
         print(f"\n📊 ОБЩАЯ СТАТИСТИКА:")
         print(f"   Total Publications: {self.stats['total_publications']}")
         print(f"   ├─ News: {self.stats['news_publications']}")
@@ -1102,13 +976,7 @@ class IntegratedCryptoMonitor:
 
 
 def check_dependencies():
-    """
-    Проверка установленных зависимостей
-    
-    Returns:
-        bool: True если все зависимости установлены
-    """
-    
+    """Проверка установленных зависимостей"""
     print("🔍 Проверка зависимостей...\n")
     
     required_packages = {
@@ -1142,7 +1010,6 @@ def check_dependencies():
 
 def create_directories():
     """Создание необходимых директорий"""
-    
     print("\n📁 Создание директорий...\n")
     
     directories = [
@@ -1155,7 +1022,6 @@ def create_directories():
         Path("logs"),
     ]
     
-    # Добавляем /tmp только если не существует
     if not Path("/tmp").exists():
         directories.append(Path("/tmp"))
     
@@ -1171,7 +1037,6 @@ def create_directories():
 
 def print_system_info():
     """Вывод информации о системе"""
-    
     print("="*80)
     print("💎 CRYPTO COMPASS - Integrated Monitoring System v4.0")
     print("="*80)
@@ -1183,38 +1048,22 @@ def print_system_info():
 
 
 def main():
-    """
-    Главная точка входа в приложение
-    
-    Последовательность запуска:
-    1. Вывод информации о системе
-    2. Проверка зависимостей
-    3. Создание директорий
-    4. Инициализация бота
-    5. Запуск главного цикла
-    """
-    
-    # Информация о системе
+    """Главная точка входа в приложение"""
     print_system_info()
     
-    # Проверка зависимостей
     if not check_dependencies():
         sys.exit(1)
     
-    # Создание директорий
     create_directories()
     
-    # Создаём и запускаем бота
     print("🚀 Запуск Integrated Crypto Monitor...\n")
     
     bot = IntegratedCryptoMonitor()
     
     try:
-        # Запускаем через asyncio.run() (Python 3.7+)
         if sys.version_info >= (3, 7):
             asyncio.run(bot.run())
         else:
-            # Fallback для старых версий Python
             loop = asyncio.get_event_loop()
             try:
                 loop.run_until_complete(bot.run())
