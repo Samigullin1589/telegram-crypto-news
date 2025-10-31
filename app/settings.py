@@ -9,6 +9,7 @@ INTELLIGENT CRYPTO MONITOR - Configuration
 ✅ Adaptive Thresholds - динамические пороги
 ✅ Learning System - параметры самообучения
 ✅ Market Regime Detection - определение bull/bear
+✅ Trading System - генерация торговых сигналов
 """
 
 import os
@@ -92,6 +93,32 @@ RETRY_TIMEOUT = int(os.getenv('RETRY_TIMEOUT', '30'))
 HEALTH_CHECK_ENABLED = int(os.getenv('HEALTH_CHECK_ENABLED', '1')) == 1
 HEALTH_CHECK_INTERVAL = int(os.getenv('HEALTH_CHECK_INTERVAL', '300'))
 HEALTH_CHECK_MAX_SILENCE = int(os.getenv('HEALTH_CHECK_MAX_SILENCE', '600'))
+
+# ============================================================================
+# TRADING SYSTEM
+# ============================================================================
+
+# Главный переключатель Trading System
+TRADING_ENABLED = os.getenv('TRADING_ENABLED', 'false').lower() == 'true'
+
+# Настройки торговых сигналов
+TRADING_MIN_CONFIDENCE = int(os.getenv('TRADING_MIN_CONFIDENCE', '70'))
+TRADING_MAX_SIGNALS_PER_DAY = int(os.getenv('TRADING_MAX_SIGNALS_PER_DAY', '10'))
+TRADING_SIGNAL_COOLDOWN_MINUTES = int(os.getenv('TRADING_SIGNAL_COOLDOWN_MINUTES', '60'))
+
+# Risk Management
+TRADING_MAX_POSITION_SIZE_USD = float(os.getenv('TRADING_MAX_POSITION_SIZE_USD', '10000'))
+TRADING_MAX_OPEN_POSITIONS = int(os.getenv('TRADING_MAX_OPEN_POSITIONS', '5'))
+TRADING_DEFAULT_STOP_LOSS_PERCENT = float(os.getenv('TRADING_DEFAULT_STOP_LOSS_PERCENT', '3.0'))
+TRADING_DEFAULT_TAKE_PROFIT_PERCENT = float(os.getenv('TRADING_DEFAULT_TAKE_PROFIT_PERCENT', '8.0'))
+
+# Signal Filters
+TRADING_MIN_TECHNICAL_SCORE = int(os.getenv('TRADING_MIN_TECHNICAL_SCORE', '70'))
+TRADING_MIN_FUNDAMENTAL_SCORE = int(os.getenv('TRADING_MIN_FUNDAMENTAL_SCORE', '60'))
+TRADING_MIN_ML_CONFIDENCE = int(os.getenv('TRADING_MIN_ML_CONFIDENCE', '75'))
+
+# Dry Run Mode (для тестирования)
+TRADING_DRY_RUN = os.getenv('TRADING_DRY_RUN', 'false').lower() == 'true'
 
 # ============================================================================
 # НОВОЕ: SMART MONEY DISCOVERY (Автопоиск успешных трейдеров)
@@ -368,6 +395,15 @@ def validate_config():
     if not TRONSCAN_API_KEY:
         errors.append("TRONSCAN_API_KEY обязателен для TRON мониторинга")
     
+    # НОВОЕ: Проверка Trading System
+    if TRADING_ENABLED:
+        if TRADING_MIN_CONFIDENCE < 50 or TRADING_MIN_CONFIDENCE > 100:
+            warnings.append(f"TRADING_MIN_CONFIDENCE={TRADING_MIN_CONFIDENCE} необычное значение. Рекомендуется 60-80")
+        if TRADING_MAX_SIGNALS_PER_DAY < 1:
+            warnings.append(f"TRADING_MAX_SIGNALS_PER_DAY={TRADING_MAX_SIGNALS_PER_DAY} слишком мало")
+        if TRADING_DRY_RUN:
+            warnings.append("Trading System работает в DRY RUN режиме (тестирование)")
+    
     # НОВОЕ: Проверка Smart Discovery
     if SMART_DISCOVERY_ENABLED:
         if not ETHERSCAN_API_KEY:
@@ -454,6 +490,18 @@ def validate_config():
     # НОВЫЕ СИСТЕМЫ
     # ========================================================================
     print(f"\n🧠 СИСТЕМЫ САМООБУЧЕНИЯ")
+    
+    # Trading System
+    print(f"\n  📈 Trading System: {'✅ Включен' if TRADING_ENABLED else '❌ Отключен'}")
+    if TRADING_ENABLED:
+        print(f"     • Мин. confidence: {TRADING_MIN_CONFIDENCE}/100")
+        print(f"     • Макс. сигналов/день: {TRADING_MAX_SIGNALS_PER_DAY}")
+        print(f"     • Cooldown: {TRADING_SIGNAL_COOLDOWN_MINUTES} мин")
+        print(f"     • Макс. размер позиции: ${TRADING_MAX_POSITION_SIZE_USD:,.0f}")
+        print(f"     • Макс. открытых позиций: {TRADING_MAX_OPEN_POSITIONS}")
+        print(f"     • Stop Loss: {TRADING_DEFAULT_STOP_LOSS_PERCENT}%")
+        print(f"     • Take Profit: {TRADING_DEFAULT_TAKE_PROFIT_PERCENT}%")
+        print(f"     • Dry Run: {'да' if TRADING_DRY_RUN else 'нет'}")
     
     # Smart Money Discovery
     print(f"\n  🔍 Smart Money Discovery: {'✅ Включен' if SMART_DISCOVERY_ENABLED else '❌ Отключен'}")
@@ -578,6 +626,8 @@ def validate_config():
     
     # Итоговая сводка
     enabled_systems = []
+    if TRADING_ENABLED:
+        enabled_systems.append("Trading System")
     if SMART_DISCOVERY_ENABLED:
         enabled_systems.append("Smart Discovery")
     if VALIDATION_ENABLED:
@@ -590,10 +640,10 @@ def validate_config():
         enabled_systems.append("Learning System")
     
     if enabled_systems:
-        print(f"✅ Активные системы самообучения: {', '.join(enabled_systems)}")
+        print(f"✅ Активные системы: {', '.join(enabled_systems)}")
         print(f"🎯 Система работает в ИНТЕЛЛЕКТУАЛЬНОМ режиме")
     else:
-        print(f"⚠️  Все системы самообучения отключены")
+        print(f"⚠️  Все интеллектуальные системы отключены")
         print(f"🎯 Система работает в БАЗОВОМ режиме")
     
     print()
@@ -621,6 +671,12 @@ def get_all_settings() -> Dict:
             "assets": ASSETS,
             "poll_seconds": POLL_SECONDS,
             "posts_per_hour": POSTS_PER_HOUR_CAP,
+        },
+        "trading_system": {
+            "enabled": TRADING_ENABLED,
+            "min_confidence": TRADING_MIN_CONFIDENCE,
+            "max_signals_per_day": TRADING_MAX_SIGNALS_PER_DAY,
+            "dry_run": TRADING_DRY_RUN,
         },
         "smart_discovery": {
             "enabled": SMART_DISCOVERY_ENABLED,
