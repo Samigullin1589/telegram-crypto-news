@@ -1,0 +1,133 @@
+# ============================================================================
+# RENDER.COM CONFIGURATION
+# Crypto Compass - Production Deploy
+# ============================================================================
+
+services:
+  - type: web
+    name: crypto-compass
+    runtime: python
+    env: python
+    region: frankfurt  # Или oregon/singapore
+    plan: free  # Или starter
+    
+    # ============================================================================
+    # BUILD CONFIGURATION
+    # ============================================================================
+    buildCommand: |
+      echo "🚀 Starting build for Crypto Compass..."
+      echo "Python version: $(python --version)"
+      
+      # Обновляем pip
+      pip install --upgrade pip setuptools wheel
+      
+      # Устанавливаем numpy ПЕРВЫМ (критично!)
+      pip install numpy==1.26.4
+      
+      # Устанавливаем pandas из pre-built wheel
+      pip install --only-binary=pandas pandas==2.1.4
+      
+      # Остальные зависимости (предпочитаем wheels)
+      pip install -r requirements.txt --prefer-binary
+      
+      echo "✅ Build completed successfully!"
+    
+    # ============================================================================
+    # START CONFIGURATION
+    # ============================================================================
+    startCommand: python main.py
+    
+    # ============================================================================
+    # AUTO DEPLOY
+    # ============================================================================
+    autoDeploy: true
+    
+    # ============================================================================
+    # HEALTH CHECK
+    # ============================================================================
+    healthCheckPath: /
+    
+    # ============================================================================
+    # ENVIRONMENT VARIABLES
+    # ============================================================================
+    envVars:
+      # Python version (критично!)
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      
+      # Telegram credentials
+      - key: TELEGRAM_TOKEN
+        sync: false  # Установи в Render Dashboard
+      
+      - key: CHAT_ID
+        sync: false  # Установи в Render Dashboard
+      
+      # API Keys
+      - key: COINGECKO_API_KEY
+        sync: false
+      
+      - key: ETHERSCAN_API_KEY
+        sync: false
+      
+      - key: BSCSCAN_API_KEY
+        sync: false
+      
+      # RPC URLs (опционально)
+      - key: ETH_RPC_URL
+        value: https://eth.llamarpc.com
+      
+      - key: BSC_RPC_URL
+        value: https://bsc-dataseed.binance.org
+      
+      - key: SOLANA_RPC_URL
+        value: https://api.mainnet-beta.solana.com
+      
+      # Configuration
+      - key: FETCH_INTERVAL
+        value: "900"  # 15 минут
+      
+      - key: POSTS_PER_HOUR_CAP
+        value: "3"
+      
+      - key: WHALE_MIN_VALUE_USD
+        value: "100000"  # $100k
+      
+      - key: TRADING_ENABLED
+        value: "true"
+      
+      - key: CHAINS_ENABLED
+        value: "true"
+      
+      - key: ANALYTICS_ENABLED
+        value: "true"
+      
+      # Python optimization
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"
+
+# ============================================================================
+# DATABASE (если нужен)
+# ============================================================================
+# databases:
+#   - name: crypto-db
+#     databaseName: cryptodb
+#     user: cryptouser
+#     plan: free
+
+# ============================================================================
+# CRON JOBS (если нужны фоновые задачи)
+# ============================================================================
+# - type: cron
+#   name: daily-cleanup
+#   env: python
+#   schedule: "0 0 * * *"  # Каждый день в полночь
+#   buildCommand: pip install -r requirements.txt
+#   startCommand: python scripts/cleanup.py
+#   envVars:
+#     - fromService:
+#         type: web
+#         name: crypto-compass
+#         envVarKey: TELEGRAM_TOKEN
