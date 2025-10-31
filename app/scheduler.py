@@ -1,6 +1,5 @@
-# app/scheduler.py
 """
-INTELLIGENT WHALE SCHEDULER v3.0 - Self-Learning System with Multi-Chain Support
+INTEGRATED SCHEDULER v4.0 - Complete Trading & Whale Monitoring System
 
 РЕВОЛЮЦИОННЫЕ ВОЗМОЖНОСТИ:
 ✅ Multi-Chain Support (7+ blockchains)
@@ -11,20 +10,34 @@ INTELLIGENT WHALE SCHEDULER v3.0 - Self-Learning System with Multi-Chain Support
 ✅ Adaptive Thresholds - динамические пороги
 ✅ Learning System - самообучение на ошибках
 ✅ Cross-Chain Wallet Tracking - мониторинг на всех chains
+
+НОВОЕ В v4.0:
+🔥 Full Trading System Integration
+🔥 Technical Analysis (50+ indicators)
+🔥 Fundamental Analysis (tokenomics, metrics)
+🔥 Hot Wallet Accumulation/Distribution Detection
+🔥 ML Price Predictions (1h, 4h, 24h, 7d)
+🔥 Automated Position Management
+🔥 Risk Management (Stop-Loss, Take-Profit)
+🔥 Performance Analytics & Reporting
 """
 
 import asyncio
 import aiohttp
 import json
+import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Set, Tuple
 from collections import deque, defaultdict
 from pathlib import Path
 import statistics
+import traceback
 
 from app import settings
 
-# Основные импорты (всегда доступны)
+# ============================================================================
+# WHALE MONITORING IMPORTS
+# ============================================================================
 from app.whales.discovery import DiscoveryEngine
 from app.whales.monitor import BlockchainMonitor
 from app.whales.normalize import WhaleEvent
@@ -35,13 +48,29 @@ from app.whales.publish import WhalePublisher
 from app.whales.history import HistoryManager
 from app.charts.sparkline import SparklineRenderer
 
+# ============================================================================
+# TRADING SYSTEM IMPORTS (НОВОЕ)
+# ============================================================================
+try:
+    from app.trading.signal_generator import SignalGenerator
+    from app.trading.position_tracker import PositionTracker
+    from app.trading.performance_stats import PerformanceStats
+    TRADING_AVAILABLE = True
+except ImportError:
+    TRADING_AVAILABLE = False
+    print("⚠️ Trading System не найден - работаем без него")
+
+# ============================================================================
+# OPTIONAL FEATURES
+# ============================================================================
+
 # Multi-Chain Support
 try:
     from app.chains import initialize_all_chains, unified_api, get_supported_chains
     CHAINS_AVAILABLE = True
 except ImportError:
     CHAINS_AVAILABLE = False
-    print("⚠️  Multi-Chain Support не найден")
+    print("⚠️ Multi-Chain Support не найден")
 
 # Advanced Analytics
 try:
@@ -49,7 +78,7 @@ try:
     ANALYTICS_AVAILABLE = True
 except ImportError:
     ANALYTICS_AVAILABLE = False
-    print("⚠️  Analytics Engine не найден")
+    print("⚠️ Analytics Engine не найден")
 
 # Mining System
 try:
@@ -57,7 +86,7 @@ try:
     MINING_AVAILABLE = True
 except ImportError:
     MINING_AVAILABLE = False
-    print("⚠️  Mining System не найден")
+    print("⚠️ Mining System не найден")
 
 # Алерты
 try:
@@ -65,7 +94,7 @@ try:
     ALERTS_AVAILABLE = True
 except ImportError:
     ALERTS_AVAILABLE = False
-    print("⚠️  Alerts не найдены - работаем без них")
+    print("⚠️ Alerts не найдены - работаем без них")
 
 # Smart Money Discovery
 try:
@@ -73,7 +102,7 @@ try:
     SMART_DISCOVERY_AVAILABLE = True
 except ImportError:
     SMART_DISCOVERY_AVAILABLE = False
-    print("⚠️  Smart Discovery не найден - работаем без него")
+    print("⚠️ Smart Discovery не найден - работаем без него")
 
 
 class AdaptiveThresholds:
@@ -111,7 +140,7 @@ class AdaptiveThresholds:
             }
         }
         
-        print(f"⚙️  [ADAPTIVE] Инициализирован. Базовые пороги: "
+        print(f"⚙️ [ADAPTIVE] Инициализирован. Базовые пороги: "
               f"confidence≥{self.base_thresholds['min_confidence']}, "
               f"size_rel≥{self.base_thresholds['min_size_rel']:.2%}")
     
@@ -150,7 +179,7 @@ class AdaptiveThresholds:
             if recent_accuracy < settings.ADAPTIVE_LOW_ACCURACY_THRESHOLD:
                 adjustment = settings.ADAPTIVE_ACCURACY_ADJUSTMENT
                 thresholds["min_confidence"] += adjustment
-                print(f"⚠️  [ADAPTIVE] Низкая точность ({recent_accuracy:.1%}), "
+                print(f"⚠️ [ADAPTIVE] Низкая точность ({recent_accuracy:.1%}), "
                       f"повышаю min_confidence до {thresholds['min_confidence']}")
             
             elif recent_accuracy > settings.ADAPTIVE_HIGH_ACCURACY_THRESHOLD:
@@ -220,7 +249,7 @@ class WalletDatabase:
                 self.wallets = []
                 self._save()
         except Exception as e:
-            print(f"⚠️  [WALLET_DB] Ошибка загрузки: {e}")
+            print(f"⚠️ [WALLET_DB] Ошибка загрузки: {e}")
             self.wallets = []
     
     def _save(self):
@@ -231,7 +260,7 @@ class WalletDatabase:
             with open(self.db_path, 'w') as f:
                 json.dump(self.wallets, f, indent=2)
         except Exception as e:
-            print(f"⚠️  [WALLET_DB] Ошибка сохранения: {e}")
+            print(f"⚠️ [WALLET_DB] Ошибка сохранения: {e}")
     
     def add_wallet(self, wallet_stats) -> bool:
         """Добавляет новый кошелёк"""
@@ -312,13 +341,21 @@ class WalletDatabase:
             )
 
 
-class WhaleScheduler:
+class IntegratedScheduler:
     """
-    Главный координатор с полной интеграцией всех систем
+    Главный координатор с полной интеграцией whale monitoring и trading system
     """
     
     def __init__(self):
-        # Основные компоненты
+        print("\n" + "="*80)
+        print("🚀 INTEGRATED SCHEDULER v4.0 - INITIALIZATION")
+        print("="*80 + "\n")
+        
+        # ====================================================================
+        # WHALE MONITORING COMPONENTS
+        # ====================================================================
+        print("📦 [1/3] Инициализация Whale Monitoring...")
+        
         self.discovery = DiscoveryEngine()
         self.scorer = EventScorer()
         self.price_provider = PriceProvider()
@@ -327,22 +364,62 @@ class WhaleScheduler:
         self.chart_renderer = SparklineRenderer()
         self.history_manager = HistoryManager()
         
+        print("   ✓ Discovery Engine")
+        print("   ✓ Event Scorer")
+        print("   ✓ Price Provider")
+        print("   ✓ News Gate")
+        print("   ✓ Publisher")
+        print("   ✓ Chart Renderer")
+        print("   ✓ History Manager")
+        
         # Адаптивные системы
         if settings.ADAPTIVE_THRESHOLDS_ENABLED:
             self.adaptive_thresholds = AdaptiveThresholds()
+            print("   ✓ Adaptive Thresholds")
         else:
             self.adaptive_thresholds = None
         
         if settings.SMART_DISCOVERY_ENABLED or settings.VALIDATION_ENABLED:
             self.wallet_db = WalletDatabase()
+            print("   ✓ Wallet Database")
         else:
             self.wallet_db = None
+        
+        # ====================================================================
+        # TRADING SYSTEM COMPONENTS (НОВОЕ)
+        # ====================================================================
+        print("\n📦 [2/3] Инициализация Trading System...")
+        
+        self.trading_enabled = False
+        if TRADING_AVAILABLE:
+            try:
+                coingecko_key = getattr(settings, 'COINGECKO_API_KEY', None)
+                
+                self.signal_generator = SignalGenerator(coingecko_key)
+                self.trading_enabled = True
+                
+                print("   ✓ Signal Generator")
+                print("   ✓ Technical Analysis")
+                print("   ✓ Fundamental Analysis")
+                print("   ✓ Hot Wallet Tracker")
+                print("   ✓ ML Predictor")
+                print("   ✓ Position Tracker")
+                print("   ✓ Performance Stats")
+            except Exception as e:
+                print(f"   ✗ Trading System Error: {e}")
+                self.trading_enabled = False
+        else:
+            print("   ✗ Trading System не доступен")
+        
+        # ====================================================================
+        # OPTIONAL FEATURES
+        # ====================================================================
+        print("\n📦 [3/3] Инициализация Optional Features...")
         
         # Multi-Chain Support
         self.chains_enabled = False
         if CHAINS_AVAILABLE and hasattr(settings, 'ETHERSCAN_API_KEY'):
             try:
-                # Инициализируем chains
                 api_keys = {
                     "base": getattr(settings, 'BASE_API_KEY', settings.ETHERSCAN_API_KEY),
                     "arbitrum": getattr(settings, 'ARBITRUM_API_KEY', settings.ETHERSCAN_API_KEY),
@@ -358,9 +435,9 @@ class WhaleScheduler:
                 self.supported_chains = get_supported_chains()
                 self.chains_enabled = True
                 
-                print(f"✅ [MULTI-CHAIN] Поддержка включена: {', '.join(self.supported_chains)}")
+                print(f"   ✓ Multi-Chain: {', '.join(self.supported_chains)}")
             except Exception as e:
-                print(f"⚠️  [MULTI-CHAIN] Ошибка инициализации: {e}")
+                print(f"   ✗ Multi-Chain Error: {e}")
                 self.chains_enabled = False
         
         # Advanced Analytics
@@ -369,19 +446,18 @@ class WhaleScheduler:
             try:
                 self.analytics_engine = get_analytics_engine()
                 self.analytics_enabled = True
-                print("✅ [ANALYTICS] Engine инициализирован")
+                print("   ✓ Analytics Engine")
             except Exception as e:
-                print(f"⚠️  [ANALYTICS] Ошибка: {e}")
-                self.analytics_enabled = False
+                print(f"   ✗ Analytics Error: {e}")
         
         # Mining System
         self.mining_system = None
         if MINING_AVAILABLE and self.wallet_db:
             try:
                 self.mining_system = create_mining_system(self.wallet_db)
-                print("✅ [MINING] System инициализирован")
+                print("   ✓ Mining System")
             except Exception as e:
-                print(f"⚠️  [MINING] Ошибка: {e}")
+                print(f"   ✗ Mining Error: {e}")
         
         # Smart Money Discovery
         self.smart_discovery = None
@@ -391,15 +467,20 @@ class WhaleScheduler:
                     etherscan_key=settings.ETHERSCAN_API_KEY,
                     coingecko_key=getattr(settings, 'COINGECKO_API_KEY', None)
                 )
-                print("✅ [SMART_DISCOVERY] Инициализирован")
+                print("   ✓ Smart Discovery")
             else:
-                print("⚠️  [SMART_DISCOVERY] Отключен (нет ETHERSCAN_API_KEY)")
+                print("   ✗ Smart Discovery (no API key)")
         
         # Алерты
         if ALERTS_AVAILABLE:
             self.alert_manager = get_alert_manager_sync(settings.ADMIN_CHAT_ID)
+            print("   ✓ Alert Manager")
         else:
             self.alert_manager = None
+        
+        # ====================================================================
+        # STATE & QUEUES
+        # ====================================================================
         
         # Очереди и кэши
         self.publication_queue: List[Dict] = []
@@ -408,6 +489,7 @@ class WhaleScheduler:
         
         # Статистика
         self.stats = {
+            # Whale monitoring
             "events_collected": 0,
             "events_qualified": 0,
             "events_published": 0,
@@ -416,10 +498,20 @@ class WhaleScheduler:
             "wallets_discovered": 0,
             "wallets_removed": 0,
             "errors": 0,
+            
+            # Trading system
+            "trading_signals_generated": 0,
+            "trading_signals_sent": 0,
+            "positions_opened": 0,
+            "positions_closed": 0,
+            "trading_pnl_total": 0.0,
+            
+            # General
             "last_cycle_time": None,
             "last_discovery_run": None,
             "last_validation_run": None,
             "last_smart_discovery_run": None,
+            "last_trading_signal": None,
             "start_time": datetime.utcnow(),
             "analytics_calls": 0,
             "chains_events": defaultdict(int)
@@ -435,10 +527,12 @@ class WhaleScheduler:
         
         self._load_state()
         
-        print("🐋 [SCHEDULER] Инициализирован с полной интеграцией")
+        print("\n" + "="*80)
+        print("✅ INITIALIZATION COMPLETE")
+        print("="*80 + "\n")
     
     async def run(self):
-        """Главный цикл с интеллектуальными компонентами"""
+        """Главный цикл с полной интеграцией всех систем"""
         
         self._print_banner()
         
@@ -447,43 +541,80 @@ class WhaleScheduler:
             try:
                 await self.alert_manager.send_startup_notification()
             except Exception as e:
-                print(f"⚠️  Не удалось отправить startup notification: {e}")
+                print(f"⚠️ Не удалось отправить startup notification: {e}")
         
-        # Запускаем параллельные циклы
-        tasks = [
-            asyncio.create_task(self._discovery_loop(), name="discovery"),
+        # ====================================================================
+        # СОЗДАЕМ ВСЕ ЦИКЛЫ
+        # ====================================================================
+        
+        tasks = []
+        
+        # Основные циклы (всегда активны)
+        tasks.extend([
             asyncio.create_task(self._whale_monitor_loop(), name="whale_monitor"),
             asyncio.create_task(self._stats_reporter_loop(), name="stats"),
             asyncio.create_task(self._health_check_loop(), name="health"),
-        ]
+        ])
         
-        # Добавляем опциональные циклы
+        # Discovery цикл
+        if settings.ASSETS == '*':
+            tasks.append(asyncio.create_task(self._discovery_loop(), name="discovery"))
+        
+        # Adaptive thresholds
         if settings.ADAPTIVE_THRESHOLDS_ENABLED:
             tasks.append(asyncio.create_task(self._market_regime_updater_loop(), name="regime_updater"))
         
+        # Performance tracking
         if settings.PERFORMANCE_TRACKING_ENABLED:
             tasks.append(asyncio.create_task(self._performance_tracker_loop(), name="performance"))
         
+        # Validation
         if settings.VALIDATION_ENABLED and self.wallet_db:
             tasks.append(asyncio.create_task(self._validation_loop(), name="validation"))
         
+        # Smart discovery
         if settings.SMART_DISCOVERY_ENABLED and self.smart_discovery:
             tasks.append(asyncio.create_task(self._smart_discovery_loop(), name="smart_discovery"))
         
-        # НОВОЕ: Mining system loop
+        # Mining system
         if self.mining_system and MINING_AVAILABLE:
             tasks.append(asyncio.create_task(self._mining_loop(), name="mining"))
         
+        # ====================================================================
+        # TRADING SYSTEM LOOPS (НОВОЕ)
+        # ====================================================================
+        
+        if self.trading_enabled:
+            tasks.extend([
+                asyncio.create_task(self._trading_signal_loop(), name="trading_signals"),
+                asyncio.create_task(self._position_management_loop(), name="position_management"),
+            ])
+        
+        # ====================================================================
+        # ЗАПУСКАЕМ ВСЕ ЦИКЛЫ
+        # ====================================================================
+        
         try:
+            print(f"\n🚀 [SCHEDULER] Запущено {len(tasks)} циклов:")
+            for task in tasks:
+                print(f"   • {task.get_name()}")
+            print()
+            
             await asyncio.gather(*tasks)
+        
         except asyncio.CancelledError:
-            print("\n⏹️  [SCHEDULER] Получен сигнал остановки")
+            print("\n⏹️ [SCHEDULER] Получен сигнал остановки")
+        
         except Exception as e:
             print(f"\n❌ [SCHEDULER] Критическая ошибка: {e}")
-            import traceback
             traceback.print_exc()
+        
         finally:
-            self._save_state()
+            await self.shutdown()
+    
+    # ========================================================================
+    # WHALE MONITORING LOOPS
+    # ========================================================================
     
     async def _whale_monitor_loop(self):
         """Основной цикл мониторинга крупных перемещений"""
@@ -503,7 +634,7 @@ class WhaleScheduler:
                     if not events:
                         print("👍 [WHALE] Новых перемещений не найдено")
                     else:
-                        await self._process_events(events)
+                        await self._process_whale_events(events)
                 
                 start_time = datetime.utcnow()
                 await self._publish_from_queue()
@@ -518,6 +649,7 @@ class WhaleScheduler:
                 self.stats["errors"] += 1
                 
                 print(f"❌ [WHALE] Ошибка ({consecutive_errors}/3): {e}")
+                traceback.print_exc()
                 
                 if consecutive_errors >= 3 and self.alert_manager:
                     try:
@@ -531,15 +663,15 @@ class WhaleScheduler:
                 
                 await asyncio.sleep(300)
     
-    async def _process_events(self, events: List[WhaleEvent]):
-        """Обработка событий с полной интеграцией analytics и multi-chain"""
+    async def _process_whale_events(self, events: List[WhaleEvent]):
+        """Обработка whale событий с полной интеграцией analytics и multi-chain"""
         
         print(f"🔄 [PIPELINE] Обработка {len(events)} событий")
         
         # Получаем текущие пороги
         if self.adaptive_thresholds:
             thresholds = self.adaptive_thresholds.get_current_thresholds()
-            print(f"⚙️  [THRESHOLDS] Confidence≥{thresholds['min_confidence']}, "
+            print(f"⚙️ [THRESHOLDS] Confidence≥{thresholds['min_confidence']}, "
                   f"SizeRel≥{thresholds['min_size_rel']:.2%}, "
                   f"Volume≥${thresholds['min_volume_24h']:,}")
         else:
@@ -608,12 +740,11 @@ class WhaleScheduler:
                         continue
                     
                     # ================================================================
-                    # НОВОЕ: ADVANCED ANALYTICS INTEGRATION
+                    # ADVANCED ANALYTICS INTEGRATION
                     # ================================================================
                     
                     if self.analytics_enabled:
                         try:
-                            # Подготавливаем данные для аналитики
                             wallet_data = None
                             if self.wallet_db:
                                 wallet = self.wallet_db.get_wallet(event.from_address, event.chain)
@@ -637,7 +768,6 @@ class WhaleScheduler:
                                 }
                             }
                             
-                            # Запускаем полный анализ
                             analytics_result = self.analytics_engine.analyze_signal(
                                 signal_data,
                                 check_correlations=True,
@@ -646,15 +776,13 @@ class WhaleScheduler:
                             
                             self.stats["analytics_calls"] += 1
                             
-                            # Фильтруем по risk score
                             risk_score = analytics_result["risk"]["risk_score"]
                             
                             if risk_score > 85:
                                 filter_stats["risk_too_high"] += 1
-                                print(f"⚠️  [RISK] Пропускаю {event.asset} - риск {risk_score}/100")
+                                print(f"⚠️ [RISK] Пропускаю {event.asset} - риск {risk_score}/100")
                                 continue
                             
-                            # Добавляем аналитику к событию
                             event.analytics = analytics_result
                             event.final_score = analytics_result["final_score"]
                             
@@ -664,41 +792,37 @@ class WhaleScheduler:
                                   f"Sentiment={analytics_result['sentiment']['label']}")
                         
                         except Exception as e:
-                            print(f"⚠️  [ANALYTICS] Ошибка анализа: {e}")
-                            # Продолжаем без аналитики
+                            print(f"⚠️ [ANALYTICS] Ошибка анализа: {e}")
                     
                     # ================================================================
-                    # НОВОЕ: CROSS-CHAIN WALLET TRACKING
+                    # CROSS-CHAIN WALLET TRACKING
                     # ================================================================
                     
                     if self.chains_enabled and hasattr(event, 'from_address'):
                         try:
-                            # Проверяем активность кошелька на других chains
                             cross_chain_analysis = await self.unified_api.analyze_wallet_cross_chain(
                                 event.from_address
                             )
                             
                             if cross_chain_analysis["active_chains_count"] >= 3:
-                                print(f"🏆 [CROSS-CHAIN] Sophisticated trader detected: "
+                                print(f"🏆 [CROSS-CHAIN] Sophisticated trader: "
                                       f"{event.from_address[:10]}... "
-                                      f"(active on {cross_chain_analysis['active_chains_count']} chains)")
+                                      f"({cross_chain_analysis['active_chains_count']} chains)")
                                 
-                                # Повышаем приоритет
                                 event.cross_chain_score = cross_chain_analysis["risk_score"]
                         
                         except Exception as e:
-                            print(f"⚠️  [CROSS-CHAIN] Ошибка анализа: {e}")
+                            print(f"⚠️ [CROSS-CHAIN] Ошибка: {e}")
                     
                     # Прошло все фильтры
                     filter_stats["passed"] += 1
                     qualified_events.append(event)
                     self.seen_keys.add(dedup_key)
                     
-                    # Статистика по chains
                     self.stats["chains_events"][event.chain] += 1
                 
                 except Exception as e:
-                    print(f"⚠️  [FILTER] Ошибка обработки: {e}")
+                    print(f"⚠️ [FILTER] Ошибка обработки: {e}")
                     self.stats["errors"] += 1
                     continue
             
@@ -731,7 +855,7 @@ class WhaleScheduler:
                     if history_hint:
                         event.history_hint = history_hint
                     
-                    # Приоритет с учётом analytics
+                    # Приоритет
                     if hasattr(event, 'final_score'):
                         priority = event.final_score
                     else:
@@ -745,24 +869,24 @@ class WhaleScheduler:
                         "queued_at": datetime.utcnow()
                     })
                 except Exception as e:
-                    print(f"⚠️  [SCORE] Ошибка оценки: {e}")
+                    print(f"⚠️ [SCORE] Ошибка оценки: {e}")
                     continue
             
             self.publication_queue.sort(key=lambda x: x["priority"], reverse=True)
             print(f"📋 [QUEUE] В очереди: {len(self.publication_queue)} событий")
     
     async def _publish_from_queue(self):
-        """Публикация из очереди с добавлением в tracking"""
+        """Публикация из очереди с tracking"""
         
         now = datetime.utcnow()
         
-        # Очищаем старые публикации (>1 часа)
+        # Очищаем старые публикации
         while self.recent_publications and (now - self.recent_publications[0]).seconds > 3600:
             self.recent_publications.popleft()
         
         # Проверяем лимит
         if len(self.recent_publications) >= settings.POSTS_PER_HOUR_CAP:
-            print(f"⏸️  [RATE] Лимит {settings.POSTS_PER_HOUR_CAP}/час достигнут")
+            print(f"⏸️ [RATE] Лимит {settings.POSTS_PER_HOUR_CAP}/час достигнут")
             return
         
         while self.publication_queue and len(self.recent_publications) < settings.POSTS_PER_HOUR_CAP:
@@ -792,7 +916,6 @@ class WhaleScheduler:
                         self.history_manager.save_event(event, verdict)
                         self.stats["events_published"] += 1
                         
-                        # Добавляем в очередь верификации
                         if self.pending_verification is not None:
                             self.pending_verification.append({
                                 "event": event,
@@ -809,19 +932,303 @@ class WhaleScheduler:
                 print(f"❌ [PUBLISH] Ошибка: {e}")
                 self.stats["errors"] += 1
     
+    # ========================================================================
+    # TRADING SYSTEM LOOPS (НОВОЕ)
+    # ========================================================================
+    
+    async def _trading_signal_loop(self):
+        """
+        Цикл генерации торговых сигналов
+        
+        Проверяет активы каждый час и генерирует сигналы
+        на основе полного анализа (технический + фундаментальный + ML)
+        """
+        
+        if not self.trading_enabled:
+            print("⏭️ [TRADING] Отключен")
+            return
+        
+        print("📊 [TRADING] Запущен цикл генерации сигналов")
+        
+        # Список активов для мониторинга
+        monitored_assets = getattr(settings, 'TRADING_MONITORED_ASSETS', [
+            'BTC', 'ETH', 'SOL', 'BNB', 'XRP',
+            'ADA', 'AVAX', 'DOT', 'MATIC', 'LINK',
+            'UNI', 'AAVE', 'ARB', 'OP'
+        ])
+        
+        # Интервал проверки (по умолчанию 1 час)
+        check_interval = getattr(settings, 'TRADING_SIGNAL_INTERVAL_HOURS', 1) * 3600
+        
+        # Первый запуск через 5 минут после старта
+        await asyncio.sleep(300)
+        
+        while not self._shutdown_flag:
+            try:
+                print(f"\n{'='*80}")
+                print(f"📈 [TRADING] Генерация сигналов: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+                print(f"{'='*80}")
+                
+                async with aiohttp.ClientSession() as session:
+                    signals_generated = 0
+                    signals_sent = 0
+                    
+                    for asset in monitored_assets:
+                        try:
+                            print(f"\n🔍 [TRADING] Анализ {asset}...")
+                            
+                            # Получаем исторические данные
+                            price_data = await self._fetch_ohlcv(asset, session)
+                            
+                            if price_data is None or len(price_data) < 50:
+                                print(f"   ⚠️ Недостаточно данных для {asset}")
+                                continue
+                            
+                            # Генерируем сигнал
+                            signal = await self.signal_generator.generate_signal(
+                                asset=asset,
+                                price_data=price_data,
+                                session=session
+                            )
+                            
+                            if not signal:
+                                print(f"   ⚠️ Не удалось сгенерировать сигнал для {asset}")
+                                continue
+                            
+                            signals_generated += 1
+                            self.stats["trading_signals_generated"] += 1
+                            
+                            # Фильтруем: отправляем только BUY/SELL сигналы
+                            if signal.signal in ['STRONG_BUY', 'BUY', 'STRONG_SELL', 'SELL']:
+                                await self._send_trading_signal(signal)
+                                signals_sent += 1
+                                self.stats["trading_signals_sent"] += 1
+                                self.stats["last_trading_signal"] = datetime.utcnow()
+                            else:
+                                print(f"   ⏸️ {asset}: {signal.signal} (не отправляем)")
+                            
+                            # Пауза между активами
+                            await asyncio.sleep(10)
+                            
+                        except Exception as e:
+                            print(f"❌ [TRADING] Ошибка для {asset}: {e}")
+                            traceback.print_exc()
+                            continue
+                
+                print(f"\n{'='*80}")
+                print(f"✅ [TRADING] Цикл завершён")
+                print(f"   Сигналов сгенерировано: {signals_generated}")
+                print(f"   Сигналов отправлено: {signals_sent}")
+                print(f"{'='*80}\n")
+                
+                # Ждём следующего цикла
+                print(f"⏰ [TRADING] Следующая проверка через {check_interval//3600}ч")
+                await asyncio.sleep(check_interval)
+                
+            except Exception as e:
+                print(f"❌ [TRADING] Критическая ошибка в signal loop: {e}")
+                traceback.print_exc()
+                await asyncio.sleep(600)
+    
+    async def _position_management_loop(self):
+        """
+        Цикл управления позициями
+        
+        Обновляет текущие цены и проверяет stop-loss/take-profit
+        каждую минуту для всех открытых позиций
+        """
+        
+        if not self.trading_enabled:
+            return
+        
+        print("💼 [POSITIONS] Запущен цикл управления позициями")
+        
+        # Интервал обновления (по умолчанию 1 минута)
+        update_interval = getattr(settings, 'POSITION_UPDATE_INTERVAL_SECONDS', 60)
+        
+        # Первый запуск через 1 минуту
+        await asyncio.sleep(60)
+        
+        while not self._shutdown_flag:
+            try:
+                # Получаем открытые позиции
+                open_positions = self.signal_generator.positions.get_open_positions()
+                
+                if not open_positions:
+                    await asyncio.sleep(update_interval)
+                    continue
+                
+                print(f"\n💼 [POSITIONS] Обновление {len(open_positions)} позиций...")
+                
+                # Получаем текущие цены
+                async with aiohttp.ClientSession() as session:
+                    prices = {}
+                    
+                    for position in open_positions:
+                        try:
+                            price = await self._fetch_current_price(position.asset, session)
+                            if price:
+                                prices[position.asset] = price
+                                
+                                # Лог текущего P&L
+                                old_price = position.current_price
+                                if old_price:
+                                    change_pct = ((price - old_price) / old_price) * 100
+                                    if abs(change_pct) > 1:  # Логируем только значительные изменения
+                                        print(f"   {position.asset}: ${old_price:,.2f} → ${price:,.2f} ({change_pct:+.2f}%)")
+                        
+                        except Exception as e:
+                            print(f"⚠️ [POSITIONS] Ошибка получения цены {position.asset}: {e}")
+                    
+                    # Обновляем позиции (автоматически закроет по SL/TP)
+                    if prices:
+                        await self.signal_generator.positions.update_prices(prices)
+                
+                # Проверяем закрытые позиции
+                closed_count = self.stats["positions_closed"]
+                new_closed = await self._count_closed_positions()
+                
+                if new_closed > closed_count:
+                    closed_diff = new_closed - closed_count
+                    self.stats["positions_closed"] = new_closed
+                    print(f"   ✅ Закрыто позиций: {closed_diff}")
+                
+                await asyncio.sleep(update_interval)
+                
+            except Exception as e:
+                print(f"❌ [POSITIONS] Ошибка в management loop: {e}")
+                traceback.print_exc()
+                await asyncio.sleep(60)
+    
+    async def _fetch_ohlcv(self, asset: str, session: aiohttp.ClientSession) -> Optional[pd.DataFrame]:
+        """
+        Получение OHLCV данных для актива
+        
+        Использует Binance API для получения исторических свечей
+        """
+        
+        try:
+            symbol = f"{asset}USDT"
+            
+            url = "https://api.binance.com/api/v3/klines"
+            params = {
+                'symbol': symbol,
+                'interval': '1h',
+                'limit': 200
+            }
+            
+            async with session.get(url, params=params, timeout=10) as resp:
+                if resp.status != 200:
+                    return None
+                
+                data = await resp.json()
+                
+                if not data:
+                    return None
+                
+                df = pd.DataFrame(data, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+                    'taker_buy_quote', 'ignore'
+                ])
+                
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = df[col].astype(float)
+                
+                df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+                
+                return df
+                
+        except Exception as e:
+            print(f"⚠️ [OHLCV] Ошибка для {asset}: {e}")
+            return None
+    
+    async def _fetch_current_price(self, asset: str, session: aiohttp.ClientSession) -> Optional[float]:
+        """Получение текущей цены актива"""
+        
+        try:
+            symbol = f"{asset}USDT"
+            url = "https://api.binance.com/api/v3/ticker/price"
+            params = {'symbol': symbol}
+            
+            async with session.get(url, params=params, timeout=5) as resp:
+                if resp.status != 200:
+                    return None
+                
+                data = await resp.json()
+                return float(data.get('price', 0))
+                
+        except Exception as e:
+            print(f"⚠️ [PRICE] Ошибка для {asset}: {e}")
+            return None
+    
+    async def _send_trading_signal(self, signal):
+        """Отправка торгового сигнала в Telegram"""
+        
+        try:
+            message = self.signal_generator.format_signal_message(signal)
+            
+            from app.bot import bot
+            
+            await bot.send_message(
+                chat_id=settings.TELEGRAM_CHANNEL_ID,
+                text=message,
+                parse_mode='HTML'
+            )
+            
+            print(f"✅ [TRADING] Сигнал отправлен: {signal.asset} - {signal.signal}")
+            
+        except Exception as e:
+            print(f"❌ [TRADING] Ошибка отправки сигнала: {e}")
+            traceback.print_exc()
+    
+    async def _count_closed_positions(self) -> int:
+        """Подсчёт закрытых позиций"""
+        try:
+            closed = await self.signal_generator.positions.get_closed_positions(limit=1000)
+            return len(closed)
+        except:
+            return 0
+    
+    # ========================================================================
+    # OPTIONAL LOOPS
+    # ========================================================================
+    
+    async def _discovery_loop(self):
+        """Обновление watchlist"""
+        
+        try:
+            print(f"\n🔄 [DISCOVERY] Первичное обновление watchlist")
+            await self.discovery.refresh_watchlist()
+        except Exception as e:
+            print(f"❌ [DISCOVERY] Ошибка: {e}")
+        
+        while not self._shutdown_flag:
+            try:
+                wait_seconds = settings.DISCOVERY_REFRESH_HOURS * 3600
+                print(f"⏰ [DISCOVERY] Следующее обновление через {settings.DISCOVERY_REFRESH_HOURS}ч")
+                await asyncio.sleep(wait_seconds)
+                
+                print(f"\n🔄 [DISCOVERY] Плановое обновление watchlist")
+                await self.discovery.refresh_watchlist()
+                
+            except Exception as e:
+                print(f"❌ [DISCOVERY] Ошибка: {e}")
+                await asyncio.sleep(1800)
+    
     async def _mining_loop(self):
-        """НОВОЕ: Цикл mining system (интеграция discovery + validation)"""
+        """Цикл mining system (discovery + validation)"""
         
         if not self.mining_system:
             return
         
-        # Первый запуск через 1 час
         await asyncio.sleep(3600)
         
         while not self._shutdown_flag:
             try:
                 print(f"\n{'='*80}")
-                print(f"⛏️  [MINING] Запуск mining cycle")
+                print(f"⛏️ [MINING] Запуск mining cycle")
                 print(f"{'='*80}")
                 
                 # Discovery раз в 6 часов
@@ -845,22 +1252,18 @@ class WhaleScheduler:
                     self.stats["wallets_removed"] += result["removed"]
                     self.stats["last_mining_validation"] = datetime.utcnow()
                 
-                # Stats
                 self.mining_system.print_stats()
             
             except Exception as e:
                 print(f"❌ [MINING] Ошибка: {e}")
-                import traceback
                 traceback.print_exc()
             
-            # Следующая проверка через 1 час
             await asyncio.sleep(3600)
     
     async def _smart_discovery_loop(self):
         """Автоматический поиск успешных трейдеров"""
         
         if not self.smart_discovery or not self.wallet_db:
-            print("⏭️  [SMART_DISCOVERY] Отключен")
             return
         
         await asyncio.sleep(1800)
@@ -904,44 +1307,16 @@ class WhaleScheduler:
                 
             except Exception as e:
                 print(f"❌ [SMART_DISCOVERY] Ошибка: {e}")
-                import traceback
                 traceback.print_exc()
             
             wait_hours = settings.SMART_DISCOVERY_INTERVAL_HOURS
             print(f"⏰ [SMART_DISCOVERY] Следующий запуск через {wait_hours}ч")
             await asyncio.sleep(wait_hours * 3600)
     
-    async def _discovery_loop(self):
-        """Обновление watchlist"""
-        
-        if settings.ASSETS != '*':
-            print("⏭️  [DISCOVERY] Отключен (ALLOWLIST режим)")
-            return
-        
-        try:
-            print(f"\n🔄 [DISCOVERY] Первичное обновление watchlist")
-            await self.discovery.refresh_watchlist()
-        except Exception as e:
-            print(f"❌ [DISCOVERY] Ошибка: {e}")
-        
-        while not self._shutdown_flag:
-            try:
-                wait_seconds = settings.DISCOVERY_REFRESH_HOURS * 3600
-                print(f"⏰ [DISCOVERY] Следующее обновление через {settings.DISCOVERY_REFRESH_HOURS}ч")
-                await asyncio.sleep(wait_seconds)
-                
-                print(f"\n🔄 [DISCOVERY] Плановое обновление watchlist")
-                await self.discovery.refresh_watchlist()
-                
-            except Exception as e:
-                print(f"❌ [DISCOVERY] Ошибка: {e}")
-                await asyncio.sleep(1800)
-    
     async def _performance_tracker_loop(self):
         """Отслеживание результатов опубликованных сигналов"""
         
         if not self.pending_verification:
-            print("⏭️  [PERFORMANCE] Отключен")
             return
         
         await asyncio.sleep(3600)
@@ -1003,7 +1378,7 @@ class WhaleScheduler:
                                       f"({'успех' if success else 'провал'})")
                         
                         except Exception as e:
-                            print(f"   ⚠️  Ошибка проверки {event.asset}: {e}")
+                            print(f"   ⚠️ Ошибка проверки {event.asset}: {e}")
                     
                     if hours_passed > 48:
                         to_remove.append(item)
@@ -1015,7 +1390,7 @@ class WhaleScheduler:
                     stats = self.adaptive_thresholds.get_stats()
                     print(f"\n   📈 Текущая точность: {stats.get('accuracy', 0):.1%} ({stats['signals_tracked']} сигналов)")
                     print(f"   🎯 Режим рынка: {stats['regime']}")
-                    print(f"   ⚙️  Текущие пороги: confidence≥{stats['current_thresholds']['min_confidence']}\n")
+                    print(f"   ⚙️ Текущие пороги: confidence≥{stats['current_thresholds']['min_confidence']}\n")
             
             except Exception as e:
                 print(f"❌ [PERFORMANCE] Ошибка: {e}")
@@ -1068,7 +1443,6 @@ class WhaleScheduler:
         """Автоматическая очистка базы кошельков"""
         
         if not self.wallet_db:
-            print("⏭️  [VALIDATION] Отключен (нет wallet_db)")
             return
         
         await asyncio.sleep(86400)
@@ -1133,7 +1507,6 @@ class WhaleScheduler:
             
             except Exception as e:
                 print(f"❌ [VALIDATION] Ошибка: {e}")
-                import traceback
                 traceback.print_exc()
             
             print(f"⏰ [VALIDATION] Следующая проверка через {settings.VALIDATION_INTERVAL_DAYS} дней")
@@ -1143,7 +1516,6 @@ class WhaleScheduler:
         """Обновление режима рынка"""
         
         if not self.adaptive_thresholds:
-            print("⏭️  [REGIME] Отключен")
             return
         
         while not self._shutdown_flag:
@@ -1163,7 +1535,7 @@ class WhaleScheduler:
                             self.adaptive_thresholds.update_regime(btc_change)
             
             except Exception as e:
-                print(f"⚠️  [REGIME] Ошибка: {e}")
+                print(f"⚠️ [REGIME] Ошибка: {e}")
             
             await asyncio.sleep(settings.ADAPTIVE_MARKET_REGIME_UPDATE_HOURS * 3600)
     
@@ -1195,7 +1567,21 @@ class WhaleScheduler:
                     if self.chains_enabled:
                         extended_stats["chains_events"] = dict(self.stats.get("chains_events", {}))
                     
-                    await self.alert_manager.send_daily_stats({"whale": extended_stats})
+                    # Trading stats
+                    if self.trading_enabled:
+                        try:
+                            positions_summary = self.signal_generator.positions.get_summary()
+                            extended_stats["trading"] = {
+                                "signals_generated": self.stats.get("trading_signals_generated", 0),
+                                "signals_sent": self.stats.get("trading_signals_sent", 0),
+                                "positions_open": positions_summary["total_open"],
+                                "positions_closed": self.stats.get("positions_closed", 0),
+                                "unrealized_pnl": positions_summary["total_unrealized_pnl_usd"]
+                            }
+                        except:
+                            pass
+                    
+                    await self.alert_manager.send_daily_stats({"integrated": extended_stats})
                 
                 # Сброс счётчиков
                 self.stats["events_collected"] = 0
@@ -1208,9 +1594,11 @@ class WhaleScheduler:
                 self.stats["errors"] = 0
                 self.stats["analytics_calls"] = 0
                 self.stats["chains_events"] = defaultdict(int)
+                self.stats["trading_signals_generated"] = 0
+                self.stats["trading_signals_sent"] = 0
             
             except Exception as e:
-                print(f"⚠️  [STATS] Ошибка: {e}")
+                print(f"⚠️ [STATS] Ошибка: {e}")
             
             await asyncio.sleep(86400)
     
@@ -1232,12 +1620,16 @@ class WhaleScheduler:
                     if silence > settings.HEALTH_CHECK_MAX_SILENCE:
                         if self.alert_manager:
                             await self.alert_manager.send_warning(
-                                f"⚠️  Последний цикл был {silence//60} минут назад",
+                                f"⚠️ Последний цикл был {silence//60} минут назад",
                                 alert_type="health_check"
                             )
             
             except Exception as e:
-                print(f"⚠️  [HEALTH] Ошибка: {e}")
+                print(f"⚠️ [HEALTH] Ошибка: {e}")
+    
+    # ========================================================================
+    # UTILITY METHODS
+    # ========================================================================
     
     def _is_asset_allowed(self, event: WhaleEvent) -> bool:
         """Проверка разрешённости актива"""
@@ -1258,7 +1650,7 @@ class WhaleScheduler:
             else:
                 self.seen_keys = set()
         except Exception as e:
-            print(f"⚠️  [STATE] Ошибка загрузки: {e}")
+            print(f"⚠️ [STATE] Ошибка загрузки: {e}")
             self.seen_keys = set()
     
     def _save_state(self):
@@ -1277,23 +1669,33 @@ class WhaleScheduler:
             
             print(f"💾 [STATE] Сохранено")
         except Exception as e:
-            print(f"⚠️  [STATE] Ошибка: {e}")
+            print(f"⚠️ [STATE] Ошибка: {e}")
     
     def _print_banner(self):
         """Вывод баннера при запуске"""
         print("\n" + "="*80)
-        print("🐋 INTELLIGENT WHALE MONITOR v3.0 [FULL INTEGRATION]")
+        print("🐋 INTEGRATED SCHEDULER v4.0")
         print("="*80)
         print(f"Режим: {'DISCOVERY' if settings.ASSETS == '*' else 'ALLOWLIST'}")
         print(f"Канал: {settings.CHAT_ID}")
         print(f"Лимит: {settings.POSTS_PER_HOUR_CAP}/час")
         
-        print(f"\n🧠 ИНТЕЛЛЕКТУАЛЬНЫЕ СИСТЕМЫ:")
+        print(f"\n🐋 WHALE MONITORING:")
         print(f"  Smart Discovery: {'✅ каждые ' + str(settings.SMART_DISCOVERY_INTERVAL_HOURS) + 'ч' if settings.SMART_DISCOVERY_ENABLED and self.smart_discovery else '❌'}")
         print(f"  Adaptive Thresholds: {'✅' if settings.ADAPTIVE_THRESHOLDS_ENABLED else '❌'}")
         print(f"  Performance Tracking: {'✅' if settings.PERFORMANCE_TRACKING_ENABLED else '❌'}")
         print(f"  Validation: {'✅ каждые ' + str(settings.VALIDATION_INTERVAL_DAYS) + 'д' if settings.VALIDATION_ENABLED else '❌'}")
         print(f"  Mining System: {'✅' if self.mining_system else '❌'}")
+        
+        print(f"\n📈 TRADING SYSTEM:")
+        if self.trading_enabled:
+            print(f"  Status: ✅ Enabled")
+            print(f"  Signal Generation: Every {getattr(settings, 'TRADING_SIGNAL_INTERVAL_HOURS', 1)}h")
+            print(f"  Position Management: Real-time")
+            print(f"  ML Predictions: 1h, 4h, 24h, 7d")
+            print(f"  Risk Management: Auto SL/TP")
+        else:
+            print(f"  Status: ❌ Disabled")
         
         print(f"\n🌐 MULTI-CHAIN:")
         if self.chains_enabled:
@@ -1305,7 +1707,7 @@ class WhaleScheduler:
         print(f"\n📊 ANALYTICS:")
         if self.analytics_enabled:
             print(f"  Status: ✅ Enabled")
-            print(f"  Modules: Sentiment, Risk Scoring, Correlation, Anomaly")
+            print(f"  Modules: Sentiment, Risk, Correlation, Anomaly")
         else:
             print(f"  Status: ❌ Disabled")
         
@@ -1314,7 +1716,7 @@ class WhaleScheduler:
         
         if self.adaptive_thresholds:
             thresholds = self.adaptive_thresholds.get_current_thresholds()
-            print(f"\n⚙️  Стартовые пороги:")
+            print(f"\n⚙️ Стартовые пороги:")
             print(f"  Confidence: ≥{thresholds['min_confidence']}")
             print(f"  Size Rel: ≥{thresholds['min_size_rel']:.2%}")
             print(f"  Volume: ≥${thresholds['min_volume_24h']:,}")
@@ -1323,12 +1725,16 @@ class WhaleScheduler:
     
     async def shutdown(self):
         """Graceful shutdown"""
-        print("\n⏹️  [SCHEDULER] Shutdown initiated...")
+        print("\n⏹️ [SCHEDULER] Shutdown initiated...")
         self._shutdown_flag = True
         self._save_state()
         
         # Финальная статистика
-        print("\n📊 ФИНАЛЬНАЯ СТАТИСТИКА:")
+        print("\n" + "="*80)
+        print("📊 ФИНАЛЬНАЯ СТАТИСТИКА")
+        print("="*80)
+        
+        print(f"\n🐋 WHALE MONITORING:")
         print(f"  События собрано: {self.stats['events_collected']}")
         print(f"  Прошло фильтры: {self.stats['events_qualified']}")
         print(f"  Опубликовано: {self.stats['events_published']}")
@@ -1337,6 +1743,29 @@ class WhaleScheduler:
             total = self.stats['events_successful'] + self.stats['events_failed']
             accuracy = (self.stats['events_successful'] / total) * 100
             print(f"  Успешных: {self.stats['events_successful']}/{total} ({accuracy:.1f}%)")
+        
+        if self.trading_enabled:
+            print(f"\n📈 TRADING SYSTEM:")
+            print(f"  Сигналов сгенерировано: {self.stats.get('trading_signals_generated', 0)}")
+            print(f"  Сигналов отправлено: {self.stats.get('trading_signals_sent', 0)}")
+            print(f"  Позиций открыто: {self.stats.get('positions_opened', 0)}")
+            print(f"  Позиций закрыто: {self.stats.get('positions_closed', 0)}")
+            
+            try:
+                positions_summary = self.signal_generator.positions.get_summary()
+                print(f"  Открытых позиций: {positions_summary['total_open']}")
+                print(f"  Unrealized P&L: ${positions_summary['total_unrealized_pnl_usd']:,.2f}")
+                
+                # Performance metrics
+                metrics = await self.signal_generator.performance.calculate_metrics(period_days=30)
+                if metrics.total_trades > 0:
+                    print(f"\n  📊 Производительность (30д):")
+                    print(f"     Сделок: {metrics.total_trades}")
+                    print(f"     Win Rate: {metrics.win_rate:.1f}%")
+                    print(f"     Total P&L: ${metrics.total_pnl_usd:,.2f}")
+                    print(f"     Profit Factor: {metrics.profit_factor:.2f}")
+            except:
+                pass
         
         if self.analytics_enabled:
             print(f"\n📊 ANALYTICS:")
@@ -1361,6 +1790,12 @@ class WhaleScheduler:
             print(f"  Удалено: {self.stats['wallets_removed']}")
         
         uptime_hours = (datetime.utcnow() - self.stats['start_time']).total_seconds() / 3600
-        print(f"\n⏱️  Uptime: {uptime_hours:.1f}h")
+        print(f"\n⏱️ Uptime: {uptime_hours:.1f}h")
         
-        print("\n✅ [SCHEDULER] Shutdown complete")
+        print("\n" + "="*80)
+        print("✅ SHUTDOWN COMPLETE")
+        print("="*80 + "\n")
+
+
+# Глобальный экземпляр
+scheduler = IntegratedScheduler()
