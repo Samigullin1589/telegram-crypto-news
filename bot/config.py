@@ -1,3 +1,8 @@
+"""
+BOT CONFIG v3.1 - Enhanced with News Processor Support
+Централизованная конфигурация с валидацией и умными дефолтами
+"""
+
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,7 +16,7 @@ load_dotenv()
 class FeedConfig:
     """Конфигурация RSS фида с приоритетом и retry логикой"""
     url: str
-    priority: int  # 1-10, где 10 = максимальный приоритет
+    priority: int
     timeout: int = 30
     enabled: bool = True
     max_retries: int = 3
@@ -48,16 +53,14 @@ class Config:
         self.TELEGRAM_CHANNEL_ID = self._get_required_env('TELEGRAM_CHANNEL_ID')
         
         # === AI Configuration ===
-        self.GEMINI_API_KEY = self._get_required_env('GEMINI_API_KEY')
-        self.OPENAI_API_KEY = self._get_required_env('OPENAI_API_KEY')
+        self.GEMINI_API_KEY = self._get_optional_env('GEMINI_API_KEY', '')
+        self.OPENAI_API_KEY = self._get_optional_env('OPENAI_API_KEY', '')
         
-        # AI Models (ИСПРАВЛЕНО: правильная модель Gemini)
-        self.GEMINI_MODEL = 'gemini-1.5-flash'  # или 'gemini-pro' для старого API
+        self.GEMINI_MODEL = 'gemini-1.5-flash'
         self.OPENAI_MODEL = 'gpt-4o'
         
-        # AI Retry Strategy (улучшено)
         self.AI_MAX_RETRIES = 3
-        self.AI_BACKOFF_FACTOR = 2  # Экспоненциальный backoff
+        self.AI_BACKOFF_FACTOR = 2
         self.AI_TIMEOUT = 60
         
         # === Blockchain Scanner API Keys ===
@@ -76,7 +79,7 @@ class Config:
         self.CRYPTOPANIC_API_KEY = os.getenv('CRYPTOPANIC_API_KEY')
         self.NEWSAPI_KEY = os.getenv('NEWSAPI_KEY')
         
-        # === RSS Feeds Configuration (улучшено с fallback) ===
+        # === RSS Feeds Configuration ===
         self.RSS_FEEDS: Dict[str, FeedConfig] = {
             'Крипто и Блокчейн РФ/СНГ 🇷🇺': FeedConfig(
                 url='https://habr.com/ru/rss/hubs/cryptocurrency/',
@@ -91,9 +94,9 @@ class Config:
             'Новости Майнинга (Мир) ⚙️': FeedConfig(
                 url='https://cointelegraph.com/rss/tag/mining',
                 priority=7,
-                timeout=50,  # Увеличен для проблемного фида
-                max_retries=5,  # Больше попыток
-                retry_delay=10,  # Больше задержка
+                timeout=50,
+                max_retries=5,
+                retry_delay=10,
                 fallback_urls=[
                     'https://cointelegraph.com/rss',
                     'https://cryptopotato.com/feed/'
@@ -122,7 +125,7 @@ class Config:
             'Глубокая аналитика (Eng) 🧐': FeedConfig(
                 url='https://www.theblock.co/rss.xml',
                 priority=7,
-                timeout=50,  # Увеличен для проблемного фида
+                timeout=50,
                 max_retries=5,
                 retry_delay=10,
                 fallback_urls=[
@@ -131,7 +134,6 @@ class Config:
                     'https://thedefiant.io/feed'
                 ]
             ),
-            # НОВЫЙ: Альтернативный источник
             'Bitcoin Magazine 📰': FeedConfig(
                 url='https://bitcoinmagazine.com/.rss/full/',
                 priority=6,
@@ -140,22 +142,26 @@ class Config:
             )
         }
         
+        # === News Processor Configuration (НОВОЕ) ===
+        self.FETCH_INTERVAL = int(os.getenv('FETCH_INTERVAL', '300'))
+        self.POSTS_PER_HOUR_CAP = int(os.getenv('POSTS_PER_HOUR_CAP', '3'))
+        
         # === Whale Detection Thresholds ===
         self.WHALE_THRESHOLDS = {
             'ethereum': {
-                'min_native_value': 50,  # 50 ETH
-                'min_usd_value': 100000  # $100k
+                'min_native_value': 50,
+                'min_usd_value': 100000
             },
             'bsc': {
-                'min_native_value': 100,  # 100 BNB
+                'min_native_value': 100,
                 'min_usd_value': 50000
             },
             'polygon': {
-                'min_native_value': 50000,  # 50k MATIC
+                'min_native_value': 50000,
                 'min_usd_value': 25000
             },
             'arbitrum': {
-                'min_native_value': 50,  # 50 ETH
+                'min_native_value': 50,
                 'min_usd_value': 100000
             },
             'optimism': {
@@ -167,14 +173,14 @@ class Config:
                 'min_usd_value': 100000
             },
             'avalanche': {
-                'min_native_value': 500,  # 500 AVAX
+                'min_native_value': 500,
                 'min_usd_value': 15000
             }
         }
         
         # === Timing Configuration ===
-        self.POST_DELAY_SECONDS = int(os.getenv('POST_DELAY_SECONDS', '900'))  # 15 минут
-        self.IDLE_DELAY_SECONDS = int(os.getenv('IDLE_DELAY_SECONDS', '300'))  # 5 минут
+        self.POST_DELAY_SECONDS = int(os.getenv('POST_DELAY_SECONDS', '900'))
+        self.IDLE_DELAY_SECONDS = int(os.getenv('IDLE_DELAY_SECONDS', '300'))
         self.FEED_FETCH_TIMEOUT = 30
         
         # === Database Configuration ===
@@ -189,7 +195,7 @@ class Config:
         self.IMAGE_CHECK_TIMEOUT = 10
         self.IMAGE_PARTIAL_READ_BYTES = 8192
         
-        # === HTTP Configuration (улучшено) ===
+        # === HTTP Configuration ===
         self.COMMON_HEADERS = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -204,11 +210,10 @@ class Config:
             'Cache-Control': 'max-age=0'
         }
         
-        # Session Configuration (улучшено)
-        self.SESSION_TIMEOUT_TOTAL = 300  # 5 минут
+        self.SESSION_TIMEOUT_TOTAL = 300
         self.SESSION_TIMEOUT_CONNECT = 30
         self.SESSION_MAX_RETRIES = 3
-        self.SESSION_RETRY_DELAY = 5  # Секунды между попытками
+        self.SESSION_RETRY_DELAY = 5
         
         # === Content Parsing ===
         self.MAX_ARTICLE_TEXT_LENGTH = 12000
@@ -218,7 +223,7 @@ class Config:
         self.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
         self.VERBOSE_LOGGING = os.getenv('VERBOSE_LOGGING', 'false').lower() == 'true'
         
-        # === Rate Limiting (новое) ===
+        # === Rate Limiting ===
         self.RATE_LIMIT_ENABLED = True
         self.MAX_REQUESTS_PER_MINUTE = 60
         self.MAX_API_CALLS_PER_SECOND = 5
@@ -269,25 +274,21 @@ class Config:
     
     def _validate_config(self):
         """Валидация конфигурации при инициализации"""
-        # Проверка корректности ID канала
         if not self.TELEGRAM_CHANNEL_ID.startswith('@') and not self.TELEGRAM_CHANNEL_ID.startswith('-'):
             print(f"⚠️  [CONFIG] Channel ID '{self.TELEGRAM_CHANNEL_ID}' может быть некорректным")
         
-        # Проверка наличия хотя бы одного активного фида
         active_feeds = [name for name, feed in self.RSS_FEEDS.items() if feed.enabled]
         if not active_feeds:
             raise ValueError("No active RSS feeds configured")
         
         print(f"✅ [CONFIG] Валидация пройдена. Активных фидов: {len(active_feeds)}")
         
-        # Проверка blockchain scanner API keys
         missing_keys = self.get_missing_scanner_keys()
         if missing_keys:
             print(f"⚠️  [CONFIG] Отсутствуют API ключи для: {', '.join(missing_keys)}")
         else:
             print("✅ [CONFIG] Все blockchain scanner API ключи настроены")
         
-        # Информация об опциональных API
         if self.has_coingecko():
             print("✅ [CONFIG] CoinGecko API настроен")
         else:
@@ -331,7 +332,7 @@ class Config:
 # Глобальный экземпляр конфигурации
 config = Config()
 
-# Обратная совместимость со старым кодом
+# === Обратная совместимость со старым кодом ===
 TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN
 TELEGRAM_CHANNEL_ID = config.TELEGRAM_CHANNEL_ID
 GEMINI_API_KEY = config.GEMINI_API_KEY
@@ -343,3 +344,16 @@ DB_PATH = str(config.DB_PATH)
 MIN_IMAGE_WIDTH = config.MIN_IMAGE_WIDTH
 MIN_IMAGE_HEIGHT = config.MIN_IMAGE_HEIGHT
 COMMON_HEADERS = config.COMMON_HEADERS
+
+# === НОВОЕ: Экспорт для NewsProcessor ===
+NEWS_SOURCES = [
+    {
+        'name': name,
+        'url': feed.url,
+        'priority': feed.priority
+    }
+    for name, feed in config.RSS_FEEDS.items() if feed.enabled
+]
+
+FETCH_INTERVAL = config.FETCH_INTERVAL
+POSTS_PER_HOUR_CAP = config.POSTS_PER_HOUR_CAP
