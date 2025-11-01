@@ -39,7 +39,7 @@ from app import settings
 # ============================================================================
 
 # Создаем application
-application = Application.builder().token(settings.BOT_TOKEN).build()
+application = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
 bot = application.bot
 
 print("✅ [BOT] Telegram bot initialized")
@@ -51,7 +51,11 @@ print("✅ [BOT] Telegram bot initialized")
 
 def is_admin(user_id: int) -> bool:
     """Проверка прав администратора"""
-    return user_id == settings.ADMIN_CHAT_ID
+    try:
+        admin_id = int(settings.ADMIN_CHAT_ID) if isinstance(settings.ADMIN_CHAT_ID, str) else settings.ADMIN_CHAT_ID
+        return user_id == admin_id
+    except (ValueError, TypeError):
+        return False
 
 
 async def send_long_message(update: Update, text: str, parse_mode: str = 'HTML'):
