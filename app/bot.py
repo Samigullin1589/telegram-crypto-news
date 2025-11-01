@@ -35,7 +35,7 @@ from telegram.constants import ParseMode
 from app import settings
 
 # ============================================================================
-# BOT INITIALIZATION - SINGLETON PATTERN
+# BOT INITIALIZATION - SINGLETON PATTERN WITH LAZY LOADING
 # ============================================================================
 
 _application = None
@@ -58,9 +58,54 @@ def get_bot():
         get_application()
     return _bot
 
-# Экспортируем для обратной совместимости (для импорта из main.py)
-application = get_application()
-bot = get_bot()
+
+# ============================================================================
+# MODULE-LEVEL LAZY LOADING через __getattr__
+# ============================================================================
+
+def __getattr__(name):
+    """
+    Ленивая инициализация переменных уровня модуля
+    
+    Это позволяет импортировать 'application' и 'bot' без их немедленного создания
+    Объекты создаются только при первом обращении к ним
+    """
+    if name == 'application':
+        return get_application()
+    elif name == 'bot':
+        return get_bot()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+
+# Определяем что можно импортировать из модуля
+__all__ = [
+    'application',
+    'bot', 
+    'get_application',
+    'get_bot',
+    'register_handlers',
+    'cmd_start',
+    'cmd_help',
+    'cmd_menu',
+    'cmd_status',
+    'cmd_positions',
+    'cmd_performance',
+    'cmd_signal',
+    'cmd_close_position',
+    'cmd_trades',
+    'cmd_wallets',
+    'cmd_whales',
+    'cmd_discover',
+    'cmd_config',
+    'cmd_thresholds',
+    'cmd_regime',
+    'cmd_analytics',
+    'cmd_sentiment',
+    'cmd_pause',
+    'cmd_resume',
+    'cmd_logs',
+    'cmd_admin'
+]
 
 
 # ============================================================================
