@@ -35,14 +35,32 @@ from telegram.constants import ParseMode
 from app import settings
 
 # ============================================================================
-# BOT INITIALIZATION
+# BOT INITIALIZATION - SINGLETON PATTERN
 # ============================================================================
 
-# Создаем application
-application = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
-bot = application.bot
+_application = None
+_bot = None
+_handlers_registered = False
 
-print("✅ [BOT] Telegram bot initialized")
+def get_application():
+    """Получить или создать единственный экземпляр application"""
+    global _application, _bot
+    if _application is None:
+        _application = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
+        _bot = _application.bot
+        print("✅ [BOT] Telegram bot initialized")
+    return _application
+
+def get_bot():
+    """Получить bot instance"""
+    global _bot
+    if _bot is None:
+        get_application()
+    return _bot
+
+# Для обратной совместимости
+application = property(lambda self: get_application())
+bot = property(lambda self: get_bot())
 
 
 # ============================================================================
@@ -1215,8 +1233,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # HANDLER REGISTRATION
 # ============================================================================
 
-_handlers_registered = False
-
 def register_handlers():
     """Регистрация всех обработчиков команд"""
     
@@ -1226,46 +1242,48 @@ def register_handlers():
         print("⚠️ [BOT] Handlers already registered, skipping")
         return
     
+    app = get_application()
+    
     # General commands
-    application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler("help", cmd_help))
-    application.add_handler(CommandHandler("menu", cmd_menu))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("menu", cmd_menu))
     
     # Whale monitoring
-    application.add_handler(CommandHandler("status", cmd_status))
-    application.add_handler(CommandHandler("wallets", cmd_wallets))
-    application.add_handler(CommandHandler("whales", cmd_whales))
-    application.add_handler(CommandHandler("discover", cmd_discover))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("wallets", cmd_wallets))
+    app.add_handler(CommandHandler("whales", cmd_whales))
+    app.add_handler(CommandHandler("discover", cmd_discover))
     
     # Trading system
-    application.add_handler(CommandHandler("positions", cmd_positions))
-    application.add_handler(CommandHandler("performance", cmd_performance))
-    application.add_handler(CommandHandler("signal", cmd_signal))
-    application.add_handler(CommandHandler("close", cmd_close_position))
-    application.add_handler(CommandHandler("trades", cmd_trades))
+    app.add_handler(CommandHandler("positions", cmd_positions))
+    app.add_handler(CommandHandler("performance", cmd_performance))
+    app.add_handler(CommandHandler("signal", cmd_signal))
+    app.add_handler(CommandHandler("close", cmd_close_position))
+    app.add_handler(CommandHandler("trades", cmd_trades))
     
     # Configuration
-    application.add_handler(CommandHandler("config", cmd_config))
-    application.add_handler(CommandHandler("thresholds", cmd_thresholds))
-    application.add_handler(CommandHandler("regime", cmd_regime))
+    app.add_handler(CommandHandler("config", cmd_config))
+    app.add_handler(CommandHandler("thresholds", cmd_thresholds))
+    app.add_handler(CommandHandler("regime", cmd_regime))
     
     # Analytics
-    application.add_handler(CommandHandler("analytics", cmd_analytics))
-    application.add_handler(CommandHandler("sentiment", cmd_sentiment))
+    app.add_handler(CommandHandler("analytics", cmd_analytics))
+    app.add_handler(CommandHandler("sentiment", cmd_sentiment))
     
     # Control
-    application.add_handler(CommandHandler("pause", cmd_pause))
-    application.add_handler(CommandHandler("resume", cmd_resume))
-    application.add_handler(CommandHandler("logs", cmd_logs))
+    app.add_handler(CommandHandler("pause", cmd_pause))
+    app.add_handler(CommandHandler("resume", cmd_resume))
+    app.add_handler(CommandHandler("logs", cmd_logs))
     
     # Admin
-    application.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("admin", cmd_admin))
     
     # Callback handlers
-    application.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(CallbackQueryHandler(callback_handler))
     
     # Error handler
-    application.add_error_handler(error_handler)
+    app.add_error_handler(error_handler)
     
     _handlers_registered = True
     
@@ -1293,10 +1311,12 @@ async def main():
     # Регистрируем handlers
     register_handlers()
     
+    app = get_application()
+    
     # Инициализируем и запускаем
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
     
     print("✅ Bot is running...")
     print("Press Ctrl+C to stop\n")
@@ -1307,9 +1327,9 @@ async def main():
     except KeyboardInterrupt:
         print("\n⏹️ Stopping bot...")
     finally:
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
         print("✅ Bot stopped")
 
 
