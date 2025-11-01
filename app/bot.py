@@ -58,10 +58,6 @@ def get_bot():
         get_application()
     return _bot
 
-# Для обратной совместимости
-application = property(lambda self: get_application())
-bot = property(lambda self: get_bot())
-
 
 # ============================================================================
 # UTILITY FUNCTIONS
