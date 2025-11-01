@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
 import traceback as tb
 from collections import defaultdict
+from functools import wraps
 
 if sys.version_info < (3, 8):
     print("❌ Требуется Python 3.8 или выше")
@@ -49,7 +50,7 @@ class ResourceMonitor:
         self.max_memory_mb = max_memory_mb
         self.process = psutil.Process()
         self.last_gc = datetime.now(timezone.utc)
-        self.gc_interval = 300  # 5 minutes
+        self.gc_interval = 300
     
     def check_memory(self) -> bool:
         """Проверка использования памяти"""
@@ -59,7 +60,6 @@ class ResourceMonitor:
             if memory_mb > self.max_memory_mb * 0.9:
                 print(f"⚠️ [MEMORY] High usage: {memory_mb:.1f}MB / {self.max_memory_mb}MB")
                 
-                # Force GC
                 now = datetime.now(timezone.utc)
                 if (now - self.last_gc).seconds > 60:
                     print("   🧹 Running garbage collection...")
@@ -104,13 +104,11 @@ async def telegram_webhook_handler(request):
     вместо того чтобы мы их запрашивали через polling
     """
     try:
-        # Получаем bot application из app state
         bot_app = request.app.get('bot_application')
         
         if not bot_app or not bot_app.running:
             return web.Response(text="Bot not ready", status=503)
         
-        # Получаем JSON с обновлением (с таймаутом)
         try:
             data = await asyncio.wait_for(
                 request.json(),
@@ -119,11 +117,9 @@ async def telegram_webhook_handler(request):
         except asyncio.TimeoutError:
             return web.Response(text="Timeout", status=408)
         
-        # Обрабатываем обновление
         from telegram import Update
         update = Update.de_json(data, bot_app.bot)
         
-        # Передаём в bot application (с таймаутом)
         await asyncio.wait_for(
             bot_app.process_update(update),
             timeout=10.0
@@ -144,7 +140,6 @@ async def telegram_webhook_handler(request):
 async def health_check_handler(request):
     """Health check endpoint для Render.com и других хостингов"""
     try:
-        # Получаем resource monitor
         resource_monitor = request.app.get('resource_monitor')
         
         stats = {}
@@ -172,16 +167,13 @@ async def start_health_server(bot_application=None, resource_monitor=None):
     """
     app = web.Application()
     
-    # Сохраняем в app state
     app['bot_application'] = bot_application
     app['resource_monitor'] = resource_monitor
     
-    # Health check endpoints
     app.router.add_get('/', health_check_handler)
     app.router.add_get('/health', health_check_handler)
     app.router.add_get('/ping', health_check_handler)
     
-    # Telegram webhook endpoint
     if bot_application:
         app.router.add_post('/webhook/telegram', telegram_webhook_handler)
     
@@ -433,10 +425,15 @@ class IntegratedCryptoMonitor:
             from app.bot import application as bot_application
             self.bot_application = bot_application
             print("✅ Bot Commands Handler loaded")
-            patched = self._patch_bot_handlers()
-            print(f"   ⚠️ Не удалось пропатчить bot handlers: {0 if patched else 1}")
+            
+            handlers_patched = self._patch_bot_handlers()
+            if handlers_patched:
+                print(f"   ✓ Bot handlers патчинг успешен")
+            else:
+                print(f"   ⚠️ Bot handlers патчинг не требуется или недоступен")
         except Exception as e:
             print(f"⚠️ Bot Commands Handler not loaded: {e}")
+            tb.print_exc()
             self.bot_application = None
         
         self.health_monitor = SystemHealthMonitor()
@@ -463,32 +460,66 @@ class IntegratedCryptoMonitor:
         print("\n✅ Integrated Crypto Monitor инициализирован")
     
     def _patch_bot_handlers(self) -> bool:
-        """Патчим обработчики команд для мониторинга"""
+        """
+        Патчим обработчики команд для мониторинга
+        
+        НОВОЕ: Улучшенная версия с правильной обработкой handlers
+        """
         if not self.bot_application:
             return False
         
         try:
-            original_handlers = list(self.bot_application.handlers[0])
+            if not hasattr(self.bot_application, 'handlers'):
+                print("   ⚠️ Bot application не имеет handlers")
+                return False
             
-            for handler in original_handlers:
-                if hasattr(handler, 'callback'):
-                    original_callback = handler.callback
-                    
-                    async def wrapped_callback(update, context, original=original_callback):
-                        self.health_monitor.record_bot_command()
-                        self.stats["bot_commands"] += 1
-                        
-                        try:
-                            return await original(update, context)
-                        except Exception as e:
-                            self.health_monitor.record_error("bot")
-                            raise
-                    
-                    handler.callback = wrapped_callback
+            handlers_dict = self.bot_application.handlers
             
-            return True
+            if not handlers_dict or 0 not in handlers_dict:
+                print("   ⚠️ Handlers пусты или группа 0 не существует")
+                return False
+            
+            handlers_list = handlers_dict[0]
+            
+            if not handlers_list:
+                print("   ⚠️ Список handlers пуст")
+                return False
+            
+            patched_count = 0
+            
+            for handler in handlers_list:
+                if not hasattr(handler, 'callback'):
+                    continue
+                
+                original_callback = handler.callback
+                health_monitor = self.health_monitor
+                stats = self.stats
+                
+                @wraps(original_callback)
+                async def wrapped_callback(update, context, original=original_callback, monitor=health_monitor, stats_dict=stats):
+                    monitor.record_bot_command()
+                    stats_dict["bot_commands"] += 1
+                    
+                    try:
+                        return await original(update, context)
+                    except Exception as e:
+                        monitor.record_error("bot")
+                        print(f"❌ [BOT] Error in command handler: {e}")
+                        raise
+                
+                handler.callback = wrapped_callback
+                patched_count += 1
+            
+            if patched_count > 0:
+                print(f"   ✓ Патчинг {patched_count} handlers успешен")
+                return True
+            else:
+                print("   ⚠️ Нет handlers для патчинга")
+                return False
+            
         except Exception as e:
-            print(f"   ⚠️ Не удалось пропатчить bot handlers: {e}")
+            print(f"   ⚠️ Ошибка при патчинге handlers: {e}")
+            tb.print_exc()
             return False
     
     async def run(self):
@@ -607,7 +638,6 @@ class IntegratedCryptoMonitor:
             try:
                 self.health_monitor.update_news_heartbeat()
                 
-                # Run with timeout
                 await asyncio.wait_for(
                     self.news_processor.run(),
                     timeout=300.0
@@ -653,7 +683,6 @@ class IntegratedCryptoMonitor:
             try:
                 self.health_monitor.update_whale_heartbeat()
                 
-                # Run with timeout
                 await asyncio.wait_for(
                     self.whale_scheduler.run_cycle(),
                     timeout=120.0
@@ -661,7 +690,6 @@ class IntegratedCryptoMonitor:
                 
                 consecutive_errors = 0
                 
-                # Check memory
                 if not self.resource_monitor.check_memory():
                     print("⚠️ [WHALE] Memory pressure detected, slowing down...")
                     await asyncio.sleep(30)
@@ -709,7 +737,6 @@ class IntegratedCryptoMonitor:
         try:
             print("🤖 [BOT] Инициализация command handler (WEBHOOK MODE)...")
             
-            # Инициализируем application
             await asyncio.wait_for(
                 self.bot_application.initialize(),
                 timeout=30.0
@@ -719,7 +746,6 @@ class IntegratedCryptoMonitor:
                 timeout=30.0
             )
             
-            # Получаем webhook URL
             webhook_url = os.environ.get('WEBHOOK_URL', '')
             
             if not webhook_url:
@@ -727,19 +753,17 @@ class IntegratedCryptoMonitor:
                 if render_url:
                     webhook_url = f"{render_url}/webhook/telegram"
                 else:
-                    # Fallback для Render
-                    webhook_url = "https://crypto-compass.onrender.com/webhook/telegram"
+                    service_name = os.environ.get('RENDER_SERVICE_NAME', 'crypto-compass')
+                    webhook_url = f"https://{service_name}.onrender.com/webhook/telegram"
             
             print(f"🤖 [BOT] Устанавливаем webhook: {webhook_url}")
             
-            # Удаляем старый webhook
             await asyncio.wait_for(
                 self.bot_application.bot.delete_webhook(drop_pending_updates=True),
                 timeout=10.0
             )
             
-            # Устанавливаем новый webhook
-            await asyncio.wait_for(
+            webhook_info = await asyncio.wait_for(
                 self.bot_application.bot.set_webhook(
                     url=webhook_url,
                     allowed_updates=None,
@@ -748,13 +772,17 @@ class IntegratedCryptoMonitor:
                 timeout=10.0
             )
             
+            if webhook_info:
+                print("✅ [BOT] Webhook установлен успешно")
+            else:
+                print("⚠️ [BOT] Webhook set вернул False, но продолжаем")
+            
             self.health_monitor.update_bot_heartbeat()
             
             print("✅ [BOT] Command handler активен в WEBHOOK режиме")
             print(f"   Webhook URL: {webhook_url}")
             print("   Доступные команды: /start, /help, /status, /positions, /performance")
             
-            # Держим task alive
             while not self.shutdown_event.is_set():
                 self.health_monitor.update_bot_heartbeat()
                 await asyncio.sleep(60)
@@ -778,7 +806,6 @@ class IntegratedCryptoMonitor:
         finally:
             print("🤖 [BOT] Останавливаем command handler...")
             try:
-                # Удаляем webhook
                 await asyncio.wait_for(
                     self.bot_application.bot.delete_webhook(),
                     timeout=10.0
@@ -821,7 +848,6 @@ class IntegratedCryptoMonitor:
                         print(f"   {issue}")
                     print("="*80 + "\n")
                 
-                # Check resources
                 self.resource_monitor.check_memory()
                 
                 await asyncio.sleep(self.health_monitor.check_interval)
@@ -841,7 +867,6 @@ class IntegratedCryptoMonitor:
         
         while not self.shutdown_event.is_set():
             try:
-                # Periodic GC
                 if (datetime.now(timezone.utc) - self.resource_monitor.last_gc).seconds > self.resource_monitor.gc_interval:
                     gc.collect()
                     self.resource_monitor.last_gc = datetime.now(timezone.utc)
@@ -959,7 +984,6 @@ class IntegratedCryptoMonitor:
         except Exception as e:
             print(f"   ⚠️ Ошибка сохранения состояния: {e}")
         
-        # Final GC
         gc.collect()
         
         self._print_final_statistics()
@@ -1071,7 +1095,6 @@ class IntegratedCryptoMonitor:
             error_rate = (health_stats['total_errors'] / health_stats['total_cycles']) * 100
             print(f"   Error Rate: {error_rate:.2f}%")
         
-        # Resource stats
         resource_stats = self.resource_monitor.get_stats()
         if resource_stats:
             print(f"\n💾 RESOURCES:")
