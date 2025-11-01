@@ -240,7 +240,7 @@ class BlockchainMonitor:
         # Фильтруем chains с доступными API ключами
         chains_to_monitor = [
             chain for chain in chains_to_monitor
-            if self.apis[chain]["key"]
+            if self.apis[chain]["key"] or chain in ["solana", "tron"]
         ]
         
         if not chains_to_monitor:
