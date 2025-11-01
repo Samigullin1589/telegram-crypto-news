@@ -355,6 +355,9 @@ NEWS_API_KEY = os.getenv('NEWS_API_KEY')
 DATA_DIR = os.getenv('DATA_DIR', 'data')
 STATE_FILE = os.path.join(DATA_DIR, 'state.json')
 
+# History директория (для Whale Scheduler)
+HISTORY_DIR = os.path.join(DATA_DIR, 'history')
+
 # Learning System директории
 LEARNING_DIR = os.path.join(DATA_DIR, 'learning')
 LEARNING_MODELS_DIR = os.path.join(LEARNING_DIR, 'models')
@@ -367,6 +370,7 @@ PERFORMANCE_DIR = os.path.join(DATA_DIR, 'performance')
 
 # Создание директорий
 os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(HISTORY_DIR, exist_ok=True)
 os.makedirs(LEARNING_DIR, exist_ok=True)
 os.makedirs(LEARNING_MODELS_DIR, exist_ok=True)
 os.makedirs(LEARNING_HISTORY_DIR, exist_ok=True)
