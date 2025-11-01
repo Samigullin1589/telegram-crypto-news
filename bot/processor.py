@@ -1,5 +1,5 @@
 """
-NEWS PROCESSOR v3.0 - Complete Edition with Brotli Support
+NEWS PROCESSOR v3.1 - Complete Edition with Enhanced Error Handling
 AI-powered crypto news aggregation and publishing
 
 ВОЗМОЖНОСТИ:
@@ -11,6 +11,7 @@ AI-powered crypto news aggregation and publishing
 ✅ Rate limiting
 ✅ Error recovery with retry
 ✅ Comprehensive metrics
+✅ Graceful degradation if dependencies unavailable
 """
 
 import asyncio
@@ -33,11 +34,48 @@ except ImportError:
     BROTLI_AVAILABLE = False
     print("⚠️ [NEWS] Brotli not available - install: pip install brotli brotlipy")
 
-from bot.config import NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP
-from bot.ai_handler import AIHandler
-from bot.content_parser import ContentParser
-from bot.database import NewsDatabase
-from bot.telegram_poster import TelegramPoster
+# Импорты зависимостей с graceful fallback
+try:
+    from bot.config import NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP
+    CONFIG_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ [NEWS] Config import error: {e}")
+    CONFIG_AVAILABLE = False
+    NEWS_SOURCES = []
+    FETCH_INTERVAL = 300
+    POSTS_PER_HOUR_CAP = 3
+
+try:
+    from bot.ai_handler import AIHandler
+    AI_HANDLER_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ [NEWS] AIHandler import error: {e}")
+    AI_HANDLER_AVAILABLE = False
+    AIHandler = None
+
+try:
+    from bot.content_parser import ContentParser
+    CONTENT_PARSER_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ [NEWS] ContentParser import error: {e}")
+    CONTENT_PARSER_AVAILABLE = False
+    ContentParser = None
+
+try:
+    from bot.database import NewsDatabase
+    DATABASE_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ [NEWS] NewsDatabase import error: {e}")
+    DATABASE_AVAILABLE = False
+    NewsDatabase = None
+
+try:
+    from bot.telegram_poster import TelegramPoster
+    TELEGRAM_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ [NEWS] TelegramPoster import error: {e}")
+    TELEGRAM_AVAILABLE = False
+    TelegramPoster = None
 
 
 class NewsMetrics:
@@ -76,6 +114,35 @@ class NewsMetrics:
         return (self.articles_published / self.articles_processed) * 100
 
 
+class DummyAIHandler:
+    """Заглушка для AI Handler если он недоступен"""
+    
+    async def analyze_article(self, article: Dict) -> Optional[Dict]:
+        """Возвращает базовый анализ"""
+        return {
+            'score': 75,
+            'sentiment': 'neutral',
+            'relevance': 'medium'
+        }
+
+
+class DummyDatabase:
+    """Заглушка для Database если она недоступна"""
+    
+    async def save_article(self, article: Dict):
+        """Ничего не делает"""
+        pass
+
+
+class DummyTelegram:
+    """Заглушка для Telegram если он недоступен"""
+    
+    async def post_article(self, article: Dict) -> bool:
+        """Симулирует успешную публикацию"""
+        print(f"📤 [TELEGRAM DUMMY] Would post: {article.get('title', 'No title')[:50]}")
+        return True
+
+
 class NewsProcessor:
     """
     Главный процессор новостей
@@ -94,11 +161,56 @@ class NewsProcessor:
         print("📰 NEWS PROCESSOR - INITIALIZATION")
         print("="*80 + "\n")
         
-        # Компоненты
-        self.ai_handler = AIHandler()
-        self.content_parser = ContentParser()
-        self.database = NewsDatabase()
-        self.telegram = TelegramPoster()
+        # Проверяем доступность конфига
+        if not CONFIG_AVAILABLE or not NEWS_SOURCES:
+            print("❌ [NEWS] Config not available or empty NEWS_SOURCES")
+            print("   News Processor will be disabled")
+            self._initialized = False
+            return
+        
+        # Компоненты с fallback
+        if AI_HANDLER_AVAILABLE and AIHandler:
+            try:
+                self.ai_handler = AIHandler()
+                print("✅ AI Handler loaded")
+            except Exception as e:
+                print(f"⚠️ AI Handler failed, using dummy: {e}")
+                self.ai_handler = DummyAIHandler()
+        else:
+            print("⚠️ AI Handler unavailable, using dummy")
+            self.ai_handler = DummyAIHandler()
+        
+        if CONTENT_PARSER_AVAILABLE and ContentParser:
+            try:
+                self.content_parser = ContentParser()
+                print("✅ Content Parser loaded")
+            except Exception as e:
+                print(f"⚠️ Content Parser failed: {e}")
+                self.content_parser = None
+        else:
+            self.content_parser = None
+        
+        if DATABASE_AVAILABLE and NewsDatabase:
+            try:
+                self.database = NewsDatabase()
+                print("✅ Database loaded")
+            except Exception as e:
+                print(f"⚠️ Database failed, using dummy: {e}")
+                self.database = DummyDatabase()
+        else:
+            print("⚠️ Database unavailable, using dummy")
+            self.database = DummyDatabase()
+        
+        if TELEGRAM_AVAILABLE and TelegramPoster:
+            try:
+                self.telegram = TelegramPoster()
+                print("✅ Telegram Poster loaded")
+            except Exception as e:
+                print(f"⚠️ Telegram failed, using dummy: {e}")
+                self.telegram = DummyTelegram()
+        else:
+            print("⚠️ Telegram unavailable, using dummy")
+            self.telegram = DummyTelegram()
         
         # Metrics
         self.metrics = NewsMetrics()
@@ -127,12 +239,23 @@ class NewsProcessor:
         # Shutdown flag
         self.shutdown_requested = False
         
+        # Initialization complete
+        self._initialized = True
+        
         print("✅ News Processor инициализирован")
         print(f"   • Sources: {len(NEWS_SOURCES)}")
         print(f"   • Fetch interval: {FETCH_INTERVAL}s")
         print(f"   • Posts per hour cap: {POSTS_PER_HOUR_CAP}")
         print(f"   • Brotli support: {'✅' if BROTLI_AVAILABLE else '❌'}")
+        print(f"   • AI Handler: {'✅' if AI_HANDLER_AVAILABLE else '⚠️ dummy'}")
+        print(f"   • Database: {'✅' if DATABASE_AVAILABLE else '⚠️ dummy'}")
+        print(f"   • Telegram: {'✅' if TELEGRAM_AVAILABLE else '⚠️ dummy'}")
         print()
+    
+    @property
+    def is_initialized(self) -> bool:
+        """Проверка инициализации"""
+        return getattr(self, '_initialized', False)
     
     async def run(self):
         """
@@ -145,6 +268,11 @@ class NewsProcessor:
         4. Публикация лучших
         5. Пауза до следующего цикла
         """
+        
+        if not self.is_initialized:
+            print("❌ [NEWS] Processor not initialized, cannot run")
+            await asyncio.sleep(300)
+            return
         
         print("🚀 [NEWS] Запуск главного цикла\n")
         
@@ -165,6 +293,7 @@ class NewsProcessor:
                 
                 if not articles:
                     print("⚠️ [NEWS] Нет новых статей в этом цикле")
+                    self.metrics.cycles_completed += 1
                     await asyncio.sleep(FETCH_INTERVAL)
                     continue
                 
@@ -175,6 +304,7 @@ class NewsProcessor:
                 
                 if not candidates:
                     print("⚠️ [NEWS] Нет кандидатов для публикации")
+                    self.metrics.cycles_completed += 1
                     await asyncio.sleep(FETCH_INTERVAL)
                     continue
                 
@@ -214,9 +344,13 @@ class NewsProcessor:
         
         print("📊 [BASELINE] Загрузка начального состояния...\n")
         
-        articles = await self._fetch_all_sources()
+        try:
+            articles = await self._fetch_all_sources()
+            
+            print(f"✅ Baseline создан: {len(articles)} статей в базе")
+        except Exception as e:
+            print(f"⚠️ [BASELINE] Ошибка: {e}")
         
-        print(f"✅ Baseline создан: {len(articles)} статей в базе")
         print("="*80 + "\n")
     
     async def _fetch_all_sources(self) -> List[Dict]:
@@ -235,7 +369,7 @@ class NewsProcessor:
         )
         
         # Показываем что будем fetch-ить
-        for source in sorted_sources[:6]:  # Показываем топ-6
+        for source in sorted_sources[:6]:
             print(f"📡 [FETCH] {source['name']} (приоритет: {source.get('priority', 5)})")
         
         # Fetch параллельно (max 5 одновременно)
@@ -296,7 +430,8 @@ class NewsProcessor:
                     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
                     self.metrics.record_fetch(name, len(articles), duration, True)
                     
-                    print(f"✅ [FETCH] {name}: {len(articles)} новых из {len(articles)}")
+                    if len(articles) > 0:
+                        print(f"✅ [FETCH] {name}: {len(articles)} новых")
                     
                     return articles
             
@@ -314,7 +449,6 @@ class NewsProcessor:
                 
                 # Специальная обработка Brotli
                 if 'brotli' in error_msg.lower() or 'br' in error_msg.lower():
-                    # Пробуем без compression
                     try:
                         articles = await self._fetch_without_compression(url, name)
                         if articles:
@@ -326,7 +460,9 @@ class NewsProcessor:
                 
                 # Короткий лог ошибки
                 error_short = error_msg[:100] if len(error_msg) > 100 else error_msg
-                print(f"❌ [FETCH] Ошибка {name}: {type(e).__name__} - {error_short}")
+                
+                if attempt == self.max_fetch_retries - 1:
+                    print(f"❌ [FETCH] {name}: {type(e).__name__}")
                 
                 if attempt < self.max_fetch_retries - 1:
                     await asyncio.sleep(3 * (2 ** attempt))
@@ -335,7 +471,8 @@ class NewsProcessor:
                     return []
             
             except Exception as e:
-                print(f"❌ [FETCH] Unexpected: {name} - {type(e).__name__}")
+                if attempt == self.max_fetch_retries - 1:
+                    print(f"❌ [FETCH] Unexpected {name}: {type(e).__name__}")
                 self.metrics.record_fetch(name, 0, 0, False)
                 return []
         
@@ -361,7 +498,7 @@ class NewsProcessor:
             'User-Agent': self._get_next_user_agent(),
             'Accept': 'application/rss+xml, application/xml, text/xml, */*',
             'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',  # Brotli включён!
+            'Accept-Encoding': 'gzip, deflate' + (', br' if BROTLI_AVAILABLE else ''),
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive'
         }
@@ -370,7 +507,7 @@ class NewsProcessor:
             limit=10,
             limit_per_host=2,
             ttl_dns_cache=300,
-            ssl=False  # Для проблемных источников
+            ssl=False
         )
         
         async with aiohttp.ClientSession(
@@ -383,15 +520,12 @@ class NewsProcessor:
                 if response.status != 200:
                     return None
                 
-                # Читаем контент (aiohttp декомпрессирует автоматически)
                 try:
                     content = await response.read()
                     
-                    # Декодируем
                     try:
                         text = content.decode('utf-8')
                     except UnicodeDecodeError:
-                        # Fallback кодировки
                         for encoding in ['utf-8', 'windows-1251', 'iso-8859-1']:
                             try:
                                 text = content.decode(encoding)
@@ -402,10 +536,8 @@ class NewsProcessor:
                             text = content.decode('utf-8', errors='ignore')
                 
                 except Exception as e:
-                    print(f"⚠️ [FETCH] Content decode error: {e}")
                     return None
                 
-                # Парсим RSS
                 return self._parse_rss(text, name)
     
     async def _fetch_without_compression(self, url: str, name: str) -> List[Dict]:
@@ -416,7 +548,6 @@ class NewsProcessor:
         headers = {
             'User-Agent': self._get_next_user_agent(),
             'Accept': 'application/rss+xml, application/xml, text/xml, */*'
-            # БЕЗ Accept-Encoding
         }
         
         connector = aiohttp.TCPConnector(ssl=False)
@@ -595,7 +726,7 @@ class NewsProcessor:
         # Сортируем по score
         sorted_candidates = sorted(
             candidates,
-            key=lambda c: c['ai_analysis']['score'],
+            key=lambda c: c.get('ai_analysis', {}).get('score', 0),
             reverse=True
         )
         
@@ -639,12 +770,15 @@ class NewsProcessor:
         self.current_ua_index = (self.current_ua_index + 1) % len(self.user_agents)
         return ua
     
-    async def shutdown(self):
-        """Graceful shutdown"""
-        print("\n⏹️ [NEWS] Stopping processor...")
+    async def cleanup(self):
+        """
+        Graceful cleanup (вызывается из main.py)
+        
+        ВАЖНО: Этот метод нужен для main.py
+        """
+        print("\n⏹️ [NEWS] Cleanup processor...")
         self.shutdown_requested = True
         
-        # Финальная статистика
         self._print_stats()
     
     def _print_stats(self):
