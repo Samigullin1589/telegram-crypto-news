@@ -58,6 +58,10 @@ def get_bot():
         get_application()
     return _bot
 
+# Экспортируем для обратной совместимости (для импорта из main.py)
+application = get_application()
+bot = get_bot()
+
 
 # ============================================================================
 # UTILITY FUNCTIONS
