@@ -432,9 +432,14 @@ class PolygonChain(EVMChain):
     def __init__(self, rpc_urls: List[str] = None, api_key: Optional[str] = None):
         if rpc_urls is None:
             rpc_urls = [
-                "https://polygon-rpc.com",
+                "https://polygon.llamarpc.com",
+                "https://polygon-mainnet.public.blastapi.io",
+                "https://polygon.blockpi.network/v1/rpc/public",
+                "https://polygon-bor.publicnode.com",
+                "https://rpc.ankr.com/polygon",
+                "https://polygon.rpc.blxrbdn.com",
                 "https://rpc-mainnet.matic.network",
-                "https://rpc.ankr.com/polygon"
+                "https://polygon-rpc.com"
             ]
         
         super().__init__(

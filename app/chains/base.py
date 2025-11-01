@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+import asyncio
 
 
 class ChainType(Enum):
@@ -191,9 +192,11 @@ class ChainBase(ABC):
         """
         Вызывает RPC метод с автоматическим fallback
         
-        Пробует все доступные RPC endpoints
+        Пробует все доступные RPC endpoints с улучшенной обработкой ошибок
         """
         import aiohttp
+        
+        last_error = None
         
         for i, rpc_url in enumerate(self.rpc_urls):
             try:
@@ -205,17 +208,41 @@ class ChainBase(ABC):
                         "id": 1
                     }
                     
-                    async with session.post(rpc_url, json=payload, timeout=30) as response:
+                    async with session.post(rpc_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
                         if response.status == 200:
                             data = await response.json()
                             if "result" in data:
+                                # Успешный запрос
+                                if i > 0:
+                                    print(f"✅ RPC fallback успешен: использован endpoint #{i+1}")
                                 return data["result"]
+                            elif "error" in data:
+                                error_msg = data["error"].get("message", "Unknown error")
+                                last_error = error_msg
+                                
+                                # Проверяем rate limit
+                                if "rate limit" in error_msg.lower() or "too many requests" in error_msg.lower():
+                                    print(f"⚠️  RPC #{i+1} rate limited, переключаюсь на следующий...")
+                                    continue
+                                else:
+                                    print(f"⚠️  RPC #{i+1} error: {error_msg}")
+                                    continue
+                        else:
+                            print(f"⚠️  RPC #{i+1} returned status {response.status}")
+                            continue
                 
+            except asyncio.TimeoutError:
+                print(f"⚠️  RPC #{i+1} timeout")
+                last_error = "Timeout"
+                continue
             except Exception as e:
                 print(f"⚠️  RPC #{i+1} failed: {e}")
+                last_error = str(e)
                 continue
         
-        print(f"❌ All RPC endpoints failed for {method}")
+        print(f"❌ All {len(self.rpc_urls)} RPC endpoints failed for {method}")
+        if last_error:
+            print(f"   Last error: {last_error}")
         return None
     
     # ========================================================================
