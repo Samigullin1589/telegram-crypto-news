@@ -1,4 +1,8 @@
-# bot/database.py
+"""
+DATABASE v3.1 - Enhanced with NewsDatabase Support
+Умный менеджер базы данных с connection pooling, автобэкапами и аналитикой
+"""
+
 import sqlite3
 import threading
 from pathlib import Path
@@ -6,7 +10,16 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Set, List, Optional, Dict
 import json
-from .config import config
+
+try:
+    from .config import config
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    # Fallback config
+    class DummyConfig:
+        DB_PATH = 'news_database.sqlite'
+    config = DummyConfig()
 
 
 class DatabaseManager:
@@ -29,7 +42,6 @@ class DatabaseManager:
     def setup(self):
         """Инициализация БД с расширенной схемой"""
         with self._get_connection() as conn:
-            # Основная таблица статей
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS posted_articles (
                     link TEXT PRIMARY KEY,
@@ -44,7 +56,6 @@ class DatabaseManager:
                 )
             """)
             
-            # Индексы для быстрого поиска
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_published_at 
                 ON posted_articles(published_at DESC)
@@ -60,7 +71,6 @@ class DatabaseManager:
                 ON posted_articles(source_feed)
             """)
             
-            # Таблица статистики
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS statistics (
                     date TEXT PRIMARY KEY,
@@ -71,7 +81,6 @@ class DatabaseManager:
                 )
             """)
             
-            # Таблица метаданных
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
@@ -82,10 +91,7 @@ class DatabaseManager:
             
             conn.commit()
         
-        # Миграция старых данных если нужно
         self._migrate_legacy_data()
-        
-        # Инициализация статистики
         self._update_stats()
         
         print(f"💾 [DB] База данных готова: {self.db_path}")
@@ -98,14 +104,13 @@ class DatabaseManager:
             self._local.conn = sqlite3.connect(
                 str(self.db_path),
                 timeout=30.0,
-                isolation_level=None,  # autocommit mode
+                isolation_level=None,
                 check_same_thread=False
             )
             self._local.conn.row_factory = sqlite3.Row
-            # Оптимизация для SSD/Render
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
-            self._local.conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            self._local.conn.execute("PRAGMA cache_size=-64000")
             self._local.conn.execute("PRAGMA temp_store=MEMORY")
         
         try:
@@ -117,7 +122,6 @@ class DatabaseManager:
     def _migrate_legacy_data(self):
         """Миграция данных из старой схемы"""
         with self._get_connection() as conn:
-            # Проверяем есть ли колонка normalized_link
             cursor = conn.execute("PRAGMA table_info(posted_articles)")
             columns = [row[1] for row in cursor.fetchall()]
             
@@ -129,15 +133,32 @@ class DatabaseManager:
     
     def save_article(
         self,
-        link: str,
-        normalized_link: str,
+        link: str = None,
+        normalized_link: str = None,
         source_feed: str = None,
         title: str = None,
         has_image: bool = False,
         ai_provider: str = None,
-        status: str = 'success'
+        status: str = 'success',
+        article: Dict = None
     ):
-        """Сохранение статьи с полной метаинформацией"""
+        """
+        Сохранение статьи с полной метаинформацией
+        
+        Поддерживает два формата:
+        1. Именованные параметры (старый формат)
+        2. Dict article (новый формат для NewsProcessor)
+        """
+        if article:
+            link = article.get('url') or article.get('link')
+            normalized_link = link
+            source_feed = article.get('source')
+            title = article.get('title')
+        
+        if not link or not normalized_link:
+            print("⚠️ [DB] Попытка сохранить статью без ссылки")
+            return
+        
         with self._lock:
             with self._get_connection() as conn:
                 try:
@@ -147,7 +168,6 @@ class DatabaseManager:
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (link, normalized_link, source_feed, title, has_image, ai_provider, status))
                     
-                    # Обновляем статистику
                     today = datetime.now().strftime('%Y-%m-%d')
                     conn.execute("""
                         INSERT INTO statistics (date, articles_posted, articles_with_images)
@@ -160,7 +180,7 @@ class DatabaseManager:
                     
                     conn.commit()
                 except sqlite3.IntegrityError:
-                    pass  # Дубликат - игнорируем
+                    pass
     
     def save_links_bulk(self, links: List[tuple]):
         """
@@ -241,11 +261,9 @@ class DatabaseManager:
     def _update_stats(self):
         """Обновление внутренней статистики"""
         with self._get_connection() as conn:
-            # Всего статей
             cursor = conn.execute("SELECT COUNT(*) FROM posted_articles")
             self._stats['total_articles'] = cursor.fetchone()[0]
             
-            # Статей сегодня
             today = datetime.now().strftime('%Y-%m-%d')
             cursor = conn.execute("""
                 SELECT COUNT(*) FROM posted_articles 
@@ -269,7 +287,6 @@ class DatabaseManager:
                 if deleted > 0:
                     print(f"🧹 [DB] Удалено {deleted} записей старше {days} дней")
                 
-                # Vacuum для освобождения места
                 conn.execute("VACUUM")
     
     def backup(self, backup_path: Optional[Path] = None) -> bool:
@@ -308,3 +325,18 @@ class DatabaseManager:
                 self._local.conn.close()
             except:
                 pass
+
+
+# НОВОЕ: Alias для NewsProcessor compatibility
+class NewsDatabase(DatabaseManager):
+    """
+    Alias для DatabaseManager для совместимости с NewsProcessor
+    
+    Поддерживает оба интерфейса:
+    - Старый: save_article(link, normalized_link, ...)
+    - Новый: save_article(article={...})
+    """
+    
+    def __init__(self):
+        super().__init__()
+        print("✅ [DB] NewsDatabase инициализирован (совместимость с NewsProcessor)")
