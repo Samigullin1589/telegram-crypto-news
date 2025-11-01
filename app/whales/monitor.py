@@ -237,7 +237,7 @@ class BlockchainMonitor:
         # Определяем chains для мониторинга
         chains_to_monitor = chains or list(self.apis.keys())
         
-        # Фильтруем chains с доступными API ключами
+        # ИСПРАВЛЕНО: Фильтруем chains с доступными API ключами (кроме Solana/Tron - работают с публичными RPC)
         chains_to_monitor = [
             chain for chain in chains_to_monitor
             if self.apis[chain]["key"] or chain in ["solana", "tron"]
@@ -635,12 +635,12 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Получает крупные ERC-20 трансферы для указанных токенов
+        
+        Note: Требует знания контрактных адресов токенов
+        Возвращает пустой список - расширенный функционал
         """
         
         events = []
-        
-        # TODO: Реализовать мониторинг ERC-20 через event logs
-        # Требует знания контрактных адресов токенов
         
         return events
     
@@ -653,12 +653,12 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Мониторит крупные DEX swaps
+        
+        Note: Требует парсинг event logs (Swap events)
+        Возвращает пустой список - расширенный функционал
         """
         
         events = []
-        
-        # TODO: Реализовать мониторинг DEX swaps через event logs
-        # Swap events: Uniswap V2/V3, PancakeSwap, etc
         
         return events
     
@@ -679,6 +679,9 @@ class BlockchainMonitor:
         events = []
         
         try:
+            print(f"🔍 [DEBUG] solana - Запрос к RPC:")
+            print(f"   RPC URL: {api_url}")
+            
             # Получаем последние подписи транзакций
             payload = {
                 "jsonrpc": "2.0",
@@ -692,10 +695,17 @@ class BlockchainMonitor:
             
             async with self.session.post(api_url, json=payload) as response:
                 if response.status != 200:
+                    print(f"❌ [MONITOR] Solana HTTP {response.status}")
                     return []
                 
                 data = await response.json()
+                
+                if "error" in data:
+                    print(f"❌ [MONITOR] Solana RPC error: {data.get('error')}")
+                    return []
+                
                 signatures = data.get("result", [])
+                print(f"✅ [DEBUG] solana - Получено {len(signatures)} сигнатур")
             
             # Получаем детали транзакций (batch)
             tx_tasks = [
@@ -717,6 +727,8 @@ class BlockchainMonitor:
                         continue
                     
                     events.append(event)
+            
+            print(f"✅ [DEBUG] solana - Найдено {len(events)} событий")
         
         except Exception as e:
             print(f"❌ [MONITOR] Ошибка Solana: {e}")
@@ -878,6 +890,9 @@ class BlockchainMonitor:
         events = []
         
         try:
+            print(f"🔍 [DEBUG] tron - Запрос к API:")
+            print(f"   API URL: {api_url}")
+            
             params = {
                 "limit": 50,
                 "start": 0,
@@ -885,7 +900,9 @@ class BlockchainMonitor:
                 "count": "true"
             }
             
-            headers = {"TRON-PRO-API-KEY": api_key}
+            headers = {}
+            if api_key:
+                headers["TRON-PRO-API-KEY"] = api_key
             
             async with self.session.get(
                 f"{api_url}/transfer",
@@ -893,10 +910,12 @@ class BlockchainMonitor:
                 headers=headers
             ) as response:
                 if response.status != 200:
+                    print(f"❌ [MONITOR] Tron HTTP {response.status}")
                     return []
                 
                 data = await response.json()
                 transfers = data.get("data", [])
+                print(f"✅ [DEBUG] tron - Получено {len(transfers)} трансферов")
             
             # Парсим трансферы
             for transfer in transfers:
@@ -907,6 +926,8 @@ class BlockchainMonitor:
                         continue
                     
                     events.append(event)
+            
+            print(f"✅ [DEBUG] tron - Найдено {len(events)} событий")
         
         except Exception as e:
             print(f"❌ [MONITOR] Ошибка Tron: {e}")
