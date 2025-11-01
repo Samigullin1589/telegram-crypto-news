@@ -1169,7 +1169,9 @@ class IntegratedScheduler:
         try:
             message = self.signal_generator.format_signal_message(signal)
             
-            from app.bot import bot
+            # Используем прямой Bot (как whale alerts)
+            import telegram
+            bot = telegram.Bot(token=settings.TELEGRAM_BOT_TOKEN)
             
             await bot.send_message(
                 chat_id=settings.TELEGRAM_CHANNEL_ID,
