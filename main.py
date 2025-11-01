@@ -6,7 +6,7 @@ Unified system: News Bot + Whale Monitor + Trading System + Telegram Commands
 ✅ News Bot - AI-powered crypto news aggregation
 ✅ Whale Monitor - Smart money tracking & discovery
 ✅ Trading System - Technical + Fundamental + ML signals
-✅ Telegram Bot - Interactive command handler
+✅ Telegram Bot - Interactive command handler (WEBHOOK MODE)
 ✅ Unified Health Monitoring
 ✅ Graceful Shutdown
 ✅ Performance Analytics
@@ -35,6 +35,42 @@ if sys.version_info < (3, 8):
 from aiohttp import web
 
 
+# ============================================================================
+# TELEGRAM WEBHOOK HANDLER
+# ============================================================================
+
+async def telegram_webhook_handler(request):
+    """
+    Обработчик Telegram webhook
+    
+    Telegram будет отправлять обновления на этот endpoint
+    вместо того чтобы мы их запрашивали через polling
+    """
+    try:
+        # Получаем bot application из app state
+        bot_app = request.app['bot_application']
+        
+        if not bot_app or not bot_app.running:
+            return web.Response(text="Bot not ready", status=503)
+        
+        # Получаем JSON с обновлением
+        data = await request.json()
+        
+        # Обрабатываем обновление
+        from telegram import Update
+        update = Update.de_json(data, bot_app.bot)
+        
+        # Передаём в bot application
+        await bot_app.process_update(update)
+        
+        return web.Response(text="OK", status=200)
+    
+    except Exception as e:
+        print(f"❌ [WEBHOOK] Error: {e}")
+        tb.print_exc()
+        return web.Response(text="Error", status=500)
+
+
 async def health_check_handler(request):
     """Health check endpoint для Render.com и других хостингов"""
     return web.Response(
@@ -44,19 +80,29 @@ async def health_check_handler(request):
     )
 
 
-async def start_health_server():
+async def start_health_server(bot_application=None):
     """
-    Запуск HTTP сервера для health checks
+    Запуск HTTP сервера для health checks и webhook
     
     КРИТИЧНО для Render.com:
     - Render проверяет здоровье через HTTP
     - Без этого может убить процесс
     - Порт берётся из env PORT (по умолчанию 8000)
+    - Также обрабатывает Telegram webhook
     """
     app = web.Application()
+    
+    # Сохраняем bot application в app state
+    app['bot_application'] = bot_application
+    
+    # Health check endpoints
     app.router.add_get('/', health_check_handler)
     app.router.add_get('/health', health_check_handler)
     app.router.add_get('/ping', health_check_handler)
+    
+    # Telegram webhook endpoint
+    if bot_application:
+        app.router.add_post('/webhook/telegram', telegram_webhook_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -67,6 +113,9 @@ async def start_health_server():
     
     print(f"✅ [HEALTH] HTTP server started on port {port}")
     print(f"   Available endpoints: /, /health, /ping")
+    if bot_application:
+        print(f"   Webhook endpoint: /webhook/telegram")
+    
     return runner
 
 
@@ -271,8 +320,8 @@ class IntegratedCryptoMonitor:
     1. News Bot - Умная агрегация криптовалютных новостей с AI обработкой
     2. Whale Monitor - Отслеживание крупных перемещений и smart money
     3. Trading System - Генерация торговых сигналов с ML предсказаниями
-    4. Telegram Bot - Интерактивный обработчик команд пользователя
-    5. HTTP Health Server - Endpoint для мониторинга (Render.com)
+    4. Telegram Bot - Интерактивный обработчик команд пользователя (WEBHOOK)
+    5. HTTP Health Server - Endpoint для мониторинга и webhook (Render.com)
     
     Все системы публикуют в один канал с умной приоритизацией
     и координацией для избежания перегрузки канала
@@ -363,7 +412,7 @@ class IntegratedCryptoMonitor:
         
         self._setup_signal_handlers()
         
-        self._health_server_runner = await start_health_server()
+        self._health_server_runner = await start_health_server(self.bot_application)
         
         try:
             self._tasks = []
@@ -387,7 +436,7 @@ class IntegratedCryptoMonitor:
             if self.bot_application:
                 self._tasks.append(
                     asyncio.create_task(
-                        self._run_bot_polling(),
+                        self._run_bot_webhook(),
                         name="bot_commands"
                     )
                 )
@@ -481,7 +530,7 @@ class IntegratedCryptoMonitor:
                 self.health_monitor.record_error("news")
                 self.stats["errors_caught"] += 1
                 
-                print(f"\n❌ [NEWS] Ошибка в цикле ({consecutive_errors}/{max_consecutive_errors}):")
+                print(f"\n❌ [NEWS] Ошибка ({consecutive_errors}/{max_consecutive_errors}):")
                 print(f"   {e}")
                 
                 if consecutive_errors >= max_consecutive_errors:
@@ -490,11 +539,11 @@ class IntegratedCryptoMonitor:
                     consecutive_errors = 0
                     self.stats["restarts"] += 1
                 else:
-                    delay = min(60 * (2 ** consecutive_errors), 300)
+                    delay = min(30 * (2 ** consecutive_errors), 300)
                     print(f"⏳ [NEWS] Повторная попытка через {delay}с...")
                     await asyncio.sleep(delay)
         
-        print("📰 [NEWS] Система остановлена")
+        print("📰 [NEWS] News system остановлена")
     
     async def _run_whale_system(self):
         """Обёртка для whale monitoring системы"""
@@ -504,12 +553,9 @@ class IntegratedCryptoMonitor:
         while not self.shutdown_event.is_set():
             try:
                 self.health_monitor.update_whale_heartbeat()
-                
-                if self.whale_scheduler.trading_enabled:
-                    self.health_monitor.update_trading_heartbeat()
-                
-                await self.whale_scheduler.run()
+                await self.whale_scheduler.run_cycle()
                 consecutive_errors = 0
+                await asyncio.sleep(1)
             
             except asyncio.CancelledError:
                 print("🐋 [WHALE] Получен сигнал остановки")
@@ -520,101 +566,104 @@ class IntegratedCryptoMonitor:
                 self.health_monitor.record_error("whale")
                 self.stats["errors_caught"] += 1
                 
-                print(f"\n❌ [WHALE] Ошибка в цикле ({consecutive_errors}/{max_consecutive_errors}):")
+                print(f"\n❌ [WHALE] Ошибка ({consecutive_errors}/{max_consecutive_errors}):")
                 print(f"   {e}")
-                tb.print_exc()
                 
                 if consecutive_errors >= max_consecutive_errors:
-                    print(f"❌ [WHALE] Слишком много ошибок подряд, перезапуск через 10 минут...")
-                    await asyncio.sleep(600)
-                    consecutive_errors = 0
-                    self.stats["restarts"] += 1
-                else:
-                    delay = min(120 * (2 ** consecutive_errors), 600)
-                    print(f"⏳ [WHALE] Повторная попытка через {delay}с...")
-                    await asyncio.sleep(delay)
-        
-        print("🐋 [WHALE] Система остановлена")
-    
-    async def _run_bot_polling(self):
-        """Запуск Telegram bot для обработки пользовательских команд"""
-        consecutive_errors = 0
-        max_consecutive_errors = 3
-        
-        while not self.shutdown_event.is_set():
-            try:
-                print("🤖 [BOT] Инициализация command handler...")
-                
-                await self.bot_application.initialize()
-                await self.bot_application.start()
-                
-                print("🤖 [BOT] Запускаем polling...")
-                
-                await self.bot_application.updater.start_polling(
-                    drop_pending_updates=True,
-                    allowed_updates=None
-                )
-                
-                self.health_monitor.update_bot_heartbeat()
-                
-                print("✅ [BOT] Command handler активен и готов к приёму команд")
-                print("   Доступные команды: /start, /help, /status, /positions, /performance")
-                
-                while not self.shutdown_event.is_set():
-                    self.health_monitor.update_bot_heartbeat()
-                    await asyncio.sleep(60)
-                
-                print("🤖 [BOT] Получен сигнал остановки")
-                break
-            
-            except asyncio.CancelledError:
-                print("🤖 [BOT] Получен сигнал отмены")
-                break
-            
-            except Exception as e:
-                consecutive_errors += 1
-                self.health_monitor.record_error("bot")
-                self.stats["errors_caught"] += 1
-                
-                print(f"\n❌ [BOT] Ошибка ({consecutive_errors}/{max_consecutive_errors}):")
-                print(f"   {e}")
-                tb.print_exc()
-                
-                try:
-                    if self.bot_application.updater.running:
-                        await self.bot_application.updater.stop()
-                    if self.bot_application.running:
-                        await self.bot_application.stop()
-                except:
-                    pass
-                
-                if consecutive_errors >= max_consecutive_errors:
-                    print(f"❌ [BOT] Слишком много ошибок подряд, перезапуск через 5 минут...")
+                    print(f"❌ [WHALE] Слишком много ошибок подряд, перезапуск через 5 минут...")
                     await asyncio.sleep(300)
                     consecutive_errors = 0
                     self.stats["restarts"] += 1
                 else:
                     delay = min(30 * (2 ** consecutive_errors), 300)
-                    print(f"⏳ [BOT] Повторная попытка через {delay}с...")
+                    print(f"⏳ [WHALE] Повторная попытка через {delay}с...")
                     await asyncio.sleep(delay)
         
-        print("🤖 [BOT] Останавливаем command handler...")
+        print("🐋 [WHALE] Whale system остановлена")
+    
+    async def _run_bot_webhook(self):
+        """
+        Запуск Telegram bot в режиме WEBHOOK (вместо polling)
+        
+        ПРЕИМУЩЕСТВА WEBHOOK:
+        - Нет конфликтов между экземплярами
+        - Меньше нагрузка на Telegram API
+        - Мгновенная доставка обновлений
+        - Production-ready решение
+        """
         try:
-            if self.bot_application.updater.running:
-                await self.bot_application.updater.stop()
-                print("   ✓ Updater остановлен")
+            print("🤖 [BOT] Инициализация command handler (WEBHOOK MODE)...")
             
-            if self.bot_application.running:
-                await self.bot_application.stop()
-                print("   ✓ Application остановлен")
+            # Инициализируем application
+            await self.bot_application.initialize()
+            await self.bot_application.start()
             
-            await self.bot_application.shutdown()
-            print("   ✓ Shutdown завершён")
+            # Получаем webhook URL из env
+            webhook_url = os.environ.get('WEBHOOK_URL', '')
+            
+            if not webhook_url:
+                # Если WEBHOOK_URL не задан, пробуем определить по RENDER_EXTERNAL_URL
+                render_url = os.environ.get('RENDER_EXTERNAL_URL', '')
+                if render_url:
+                    webhook_url = f"{render_url}/webhook/telegram"
+                else:
+                    print("⚠️ [BOT] WEBHOOK_URL не установлен, используется заглушка")
+                    webhook_url = "https://example.com/webhook/telegram"
+            
+            print(f"🤖 [BOT] Устанавливаем webhook: {webhook_url}")
+            
+            # Удаляем старый webhook если был
+            await self.bot_application.bot.delete_webhook(drop_pending_updates=True)
+            
+            # Устанавливаем новый webhook
+            await self.bot_application.bot.set_webhook(
+                url=webhook_url,
+                allowed_updates=None,
+                drop_pending_updates=True
+            )
+            
+            self.health_monitor.update_bot_heartbeat()
+            
+            print("✅ [BOT] Command handler активен в WEBHOOK режиме")
+            print(f"   Webhook URL: {webhook_url}")
+            print("   Доступные команды: /start, /help, /status, /positions, /performance")
+            
+            # Держим task alive пока не придёт shutdown signal
+            while not self.shutdown_event.is_set():
+                self.health_monitor.update_bot_heartbeat()
+                await asyncio.sleep(60)
+            
+            print("🤖 [BOT] Получен сигнал остановки")
+        
+        except asyncio.CancelledError:
+            print("🤖 [BOT] Получен сигнал отмены")
         
         except Exception as e:
-            print(f"   ⚠️ Ошибка при shutdown: {e}")
+            self.health_monitor.record_error("bot")
+            self.stats["errors_caught"] += 1
+            
+            print(f"\n❌ [BOT] Ошибка при установке webhook:")
+            print(f"   {e}")
+            tb.print_exc()
         
-        print("✅ [BOT] Command handler полностью остановлен")
+        finally:
+            print("🤖 [BOT] Останавливаем command handler...")
+            try:
+                # Удаляем webhook
+                await self.bot_application.bot.delete_webhook()
+                print("   ✓ Webhook удалён")
+                
+                if self.bot_application.running:
+                    await self.bot_application.stop()
+                    print("   ✓ Application остановлен")
+                
+                await self.bot_application.shutdown()
+                print("   ✓ Shutdown завершён")
+            
+            except Exception as e:
+                print(f"   ⚠️ Ошибка при shutdown: {e}")
+            
+            print("✅ [BOT] Command handler полностью остановлен")
     
     async def _health_check_loop(self):
         """Периодическая проверка здоровья всех систем"""
@@ -638,144 +687,96 @@ class IntegratedCryptoMonitor:
                 break
             
             except Exception as e:
-                print(f"⚠️ [HEALTH] Ошибка мониторинга: {e}")
-                await asyncio.sleep(60)
+                print(f"❌ [HEALTH] Ошибка проверки здоровья: {e}")
+                await asyncio.sleep(self.health_monitor.check_interval)
         
-        print("💚 [HEALTH] Health Monitor остановлен")
+        print("💚 [HEALTH] Health monitor остановлен")
     
     async def _coordination_loop(self):
-        """Координация между системами"""
-        await asyncio.sleep(60)
+        """Координация публикаций между системами"""
+        await asyncio.sleep(10)
         
         while not self.shutdown_event.is_set():
             try:
-                if self.news_processor and hasattr(self.news_processor, 'metrics'):
-                    self.stats["news_publications"] = self.news_processor.metrics.articles_published
-                
-                if self.whale_scheduler and hasattr(self.whale_scheduler, 'stats'):
-                    whale_stats = self.whale_scheduler.stats
-                    self.stats["whale_publications"] = whale_stats.get("events_published", 0)
-                    self.stats["trading_publications"] = whale_stats.get("trading_signals_sent", 0)
-                
-                self.stats["total_publications"] = (
-                    self.stats["news_publications"] +
-                    self.stats["whale_publications"] +
-                    self.stats["trading_publications"]
-                )
-                
-                await asyncio.sleep(300)
+                await asyncio.sleep(60)
             
             except asyncio.CancelledError:
                 break
             
             except Exception as e:
-                print(f"⚠️ [COORDINATOR] Ошибка: {e}")
+                print(f"❌ [COORDINATOR] Ошибка: {e}")
                 await asyncio.sleep(60)
         
         print("🔄 [COORDINATOR] Coordinator остановлен")
     
     async def _wait_for_shutdown(self):
-        """Ожидание сигнала остановки"""
+        """Ожидание сигнала shutdown"""
         await self.shutdown_event.wait()
-        print("🛑 [SHUTDOWN] Сигнал shutdown получен")
+        print("✅ [SHUTDOWN] Shutdown signal получен")
     
     def _setup_signal_handlers(self):
-        """Настройка обработчиков системных сигналов"""
-        if sys.platform == "win32":
-            print("⚠️ [WARN] Signal handlers не поддерживаются на Windows")
-            print("         Используйте Ctrl+C для остановки")
-            return
+        """Настройка обработчиков сигналов для graceful shutdown"""
+        def signal_handler(signum, frame):
+            print(f"\n⚠️ [SIGNAL] Получен сигнал {signal.Signals(signum).name}")
+            asyncio.create_task(self.shutdown())
         
-        loop = asyncio.get_event_loop()
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
         
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(
-                    sig,
-                    lambda s=sig: asyncio.create_task(self._handle_signal(s))
-                )
-                print(f"✅ Установлен обработчик для {sig.name}")
-            except (NotImplementedError, RuntimeError) as e:
-                print(f"⚠️ [WARN] Не удалось установить обработчик для {sig.name}: {e}")
-    
-    async def _handle_signal(self, sig):
-        """Обработка системного сигнала"""
-        print(f"\n⚡ [SIGNAL] Получен {sig.name}")
-        await self.shutdown()
+        print("✅ Установлен обработчик для SIGINT")
+        print("✅ Установлен обработчик для SIGTERM")
     
     async def shutdown(self):
-        """Корректное завершение работы всех систем"""
+        """Graceful shutdown всех систем"""
         if self._shutdown_in_progress:
-            print("⚠️ Shutdown уже в процессе...")
+            print("⚠️ [SHUTDOWN] Shutdown уже в процессе, игнорируем")
             return
         
         self._shutdown_in_progress = True
-        
-        print("\n" + "="*80)
-        print("⏹️ SHUTDOWN SEQUENCE INITIATED")
-        print("="*80)
-        
         self.shutdown_event.set()
         
-        print("\n⏳ Останавливаем подсистемы (макс 60 секунд)...")
+        print("\n" + "="*80)
+        print("🛑 INITIATING GRACEFUL SHUTDOWN")
+        print("="*80 + "\n")
         
-        shutdown_tasks = []
-        
-        if self.whale_scheduler and hasattr(self.whale_scheduler, 'shutdown'):
-            print("   • Останавливаем Whale Monitor + Trading System...")
-            shutdown_tasks.append(
-                asyncio.create_task(
-                    self.whale_scheduler.shutdown(),
-                    name="whale_shutdown"
-                )
-            )
-        
-        if self.news_processor and hasattr(self.news_processor, 'shutdown'):
-            print("   • Останавливаем News Processor...")
-            shutdown_tasks.append(
-                asyncio.create_task(
-                    self.news_processor.shutdown(),
-                    name="news_shutdown"
-                )
-            )
-        
-        if shutdown_tasks:
-            try:
-                results = await asyncio.wait_for(
-                    asyncio.gather(*shutdown_tasks, return_exceptions=True),
-                    timeout=60.0
-                )
-                
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        print(f"   ⚠️ Ошибка при shutdown задачи {shutdown_tasks[i].get_name()}: {result}")
-                    else:
-                        print(f"   ✅ {shutdown_tasks[i].get_name()} завершён успешно")
-            
-            except asyncio.TimeoutError:
-                print("   ⚠️ Таймаут graceful shutdown, принудительная остановка...")
-        
-        print("\n⏳ Отменяем оставшиеся задачи...")
-        
-        cancelled_count = 0
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
-                cancelled_count += 1
-        
-        if cancelled_count > 0:
-            print(f"   • Отменено задач: {cancelled_count}")
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        
-        print("   ✅ Все задачи остановлены")
-        
-        if self._health_server_runner:
-            print("\n⏳ Останавливаем health check server...")
-            try:
+        print("⏳ [1/4] Останавливаем HTTP health server...")
+        try:
+            if self._health_server_runner:
                 await self._health_server_runner.cleanup()
-                print("   ✅ Health check server остановлен")
+                print("   ✓ Health server остановлен")
+        except Exception as e:
+            print(f"   ⚠️ Ошибка остановки health server: {e}")
+        
+        print("\n⏳ [2/4] Ждём завершения всех задач...")
+        if self._tasks:
+            for task in self._tasks:
+                if not task.done() and task.get_name() != "shutdown_waiter":
+                    task.cancel()
+            
+            try:
+                await asyncio.wait(self._tasks, timeout=10)
+                print("   ✓ Все задачи завершены")
+            except asyncio.TimeoutError:
+                print("   ⚠️ Timeout при ожидании задач")
+        
+        print("\n⏳ [3/4] Останавливаем подсистемы...")
+        
+        if self.news_processor and hasattr(self.news_processor, 'cleanup'):
+            try:
+                await self.news_processor.cleanup()
+                print("   ✓ News Processor остановлен")
             except Exception as e:
-                print(f"   ⚠️ Ошибка остановки health server: {e}")
+                print(f"   ⚠️ Ошибка остановки News Processor: {e}")
+        
+        if self.whale_scheduler and hasattr(self.whale_scheduler, 'cleanup'):
+            try:
+                await self.whale_scheduler.cleanup()
+                print("   ✓ Whale Scheduler остановлен")
+            except Exception as e:
+                print(f"   ⚠️ Ошибка остановки Whale Scheduler: {e}")
+        
+        print("\n⏳ [4/4] Финальная очистка...")
+        await asyncio.sleep(1)
         
         print("\n" + "="*80)
         print("✅ SHUTDOWN SEQUENCE COMPLETED")
@@ -799,18 +800,19 @@ class IntegratedCryptoMonitor:
         print("="*80)
     
     def _print_startup_banner(self):
-        """Вывод баннера при запуске"""
+        """Вывод стартового баннера"""
         print("\n" + "="*80)
         print("🚀 INTEGRATED CRYPTO MONITOR v4.0 - STARTING UP")
-        print("="*80)
+        print("="*80 + "\n")
         
-        print("\n📦 АКТИВНЫЕ КОМПОНЕНТЫ:\n")
+        print("📦 АКТИВНЫЕ КОМПОНЕНТЫ:\n")
         
         if self.news_processor:
             print("📰 News Bot")
-            print("   ├─ AI-powered content processing")
-            print("   ├─ Smart gate filtering")
+            print("   ├─ AI-powered article analysis")
             print("   ├─ Multi-source aggregation")
+            print("   ├─ Sentiment analysis")
+            print("   ├─ Smart deduplication")
             print("   └─ Status: ✅ Active")
         else:
             print("📰 News Bot")
@@ -820,32 +822,11 @@ class IntegratedCryptoMonitor:
         
         if self.whale_scheduler:
             print("🐋 Whale Monitor")
-            print("   ├─ Blockchain event tracking")
-            print("   ├─ Smart money discovery")
+            print("   ├─ Smart money tracking")
+            print("   ├─ Wallet discovery")
+            print("   ├─ Pattern recognition")
             print("   ├─ Adaptive thresholds")
-            print("   ├─ Performance tracking")
-            
-            if self.whale_scheduler.trading_enabled:
-                print("   ├─ Trading System: ✅ Enabled")
-                print("   │  ├─ Technical Analysis (50+ indicators)")
-                print("   │  ├─ Fundamental Analysis")
-                print("   │  ├─ Hot Wallet Tracking")
-                print("   │  ├─ ML Predictions (1h, 4h, 24h, 7d)")
-                print("   │  ├─ Position Management")
-                print("   │  └─ Risk Management (Auto SL/TP)")
-            else:
-                print("   ├─ Trading System: ❌ Disabled")
-            
-            if self.whale_scheduler.chains_enabled:
-                print(f"   ├─ Multi-Chain: ✅ {', '.join(self.whale_scheduler.supported_chains)}")
-            else:
-                print("   ├─ Multi-Chain: ❌ Disabled")
-            
-            if self.whale_scheduler.analytics_enabled:
-                print("   ├─ Analytics: ✅ Sentiment, Risk, Correlation, Anomaly")
-            else:
-                print("   ├─ Analytics: ❌ Disabled")
-            
+            print("   ├─ Performance validation")
             print("   └─ Status: ✅ Active")
         else:
             print("🐋 Whale Monitor")
@@ -854,7 +835,7 @@ class IntegratedCryptoMonitor:
         print()
         
         if self.bot_application:
-            print("🤖 Telegram Bot Commands")
+            print("🤖 Telegram Bot Commands (WEBHOOK MODE)")
             print("   ├─ User command handling")
             print("   ├─ Interactive keyboards")
             print("   ├─ Position management")
@@ -884,6 +865,8 @@ class IntegratedCryptoMonitor:
         print("🌐 HTTP Health Server")
         print("   ├─ Render.com health checks")
         print("   ├─ Endpoints: /, /health, /ping")
+        if self.bot_application:
+            print("   ├─ Telegram webhook: /webhook/telegram")
         print(f"   ├─ Port: {os.environ.get('PORT', 8000)}")
         print("   └─ Status: ✅ Active")
         
