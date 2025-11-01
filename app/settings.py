@@ -10,6 +10,7 @@ INTELLIGENT CRYPTO MONITOR - Configuration
 ✅ Learning System - параметры самообучения
 ✅ Market Regime Detection - определение bull/bear
 ✅ Trading System - генерация торговых сигналов
+✅ Bot Commands - интерактивные команды (/stats, /positions, /help)
 """
 
 import os
@@ -35,6 +36,12 @@ if not TELEGRAM_TOKEN or not CHAT_ID:
 # Старые настройки (совместимость)
 TELEGRAM_BOT_TOKEN = TELEGRAM_TOKEN
 TELEGRAM_CHANNEL_ID = CHAT_ID
+
+# ============================================================================
+# BOT COMMANDS - НОВОЕ!
+# ============================================================================
+# Используем тот же токен для команд (или отдельный если указан)
+BOT_TOKEN = os.getenv('BOT_TOKEN', TELEGRAM_BOT_TOKEN)
 
 # ============================================================================
 # WHALE MONITOR - ОСНОВНЫЕ ПАРАМЕТРЫ
@@ -105,6 +112,7 @@ TRADING_ENABLED = os.getenv('TRADING_ENABLED', 'false').lower() == 'true'
 TRADING_MIN_CONFIDENCE = int(os.getenv('TRADING_MIN_CONFIDENCE', '70'))
 TRADING_MAX_SIGNALS_PER_DAY = int(os.getenv('TRADING_MAX_SIGNALS_PER_DAY', '10'))
 TRADING_SIGNAL_COOLDOWN_MINUTES = int(os.getenv('TRADING_SIGNAL_COOLDOWN_MINUTES', '60'))
+TRADING_SIGNAL_INTERVAL_HOURS = int(os.getenv('TRADING_SIGNAL_INTERVAL_HOURS', '1'))
 
 # Risk Management
 TRADING_MAX_POSITION_SIZE_USD = float(os.getenv('TRADING_MAX_POSITION_SIZE_USD', '10000'))
@@ -118,7 +126,7 @@ TRADING_MIN_FUNDAMENTAL_SCORE = int(os.getenv('TRADING_MIN_FUNDAMENTAL_SCORE', '
 TRADING_MIN_ML_CONFIDENCE = int(os.getenv('TRADING_MIN_ML_CONFIDENCE', '75'))
 
 # Dry Run Mode (для тестирования)
-TRADING_DRY_RUN = os.getenv('TRADING_DRY_RUN', 'false').lower() == 'true'
+TRADING_DRY_RUN = os.getenv('TRADING_DRY_RUN', 'true').lower() == 'true'
 
 # ============================================================================
 # НОВОЕ: SMART MONEY DISCOVERY (Автопоиск успешных трейдеров)
@@ -177,21 +185,20 @@ VALIDATION_NOTIFY_THRESHOLD = int(os.getenv('VALIDATION_NOTIFY_THRESHOLD', '5'))
 # Главный переключатель
 PERFORMANCE_TRACKING_ENABLED = int(os.getenv('PERFORMANCE_TRACKING_ENABLED', '1')) == 1
 
-# Интервалы проверки (часы)
-PERFORMANCE_CHECK_INTERVALS = [
-    int(x) for x in os.getenv('PERFORMANCE_CHECK_INTERVALS', '1,6,24').split(',')
-]  # [1, 6, 24] часа
+# Интервалы проверки (в минутах)
+PERFORMANCE_CHECK_INTERVALS = [int(x) for x in os.getenv('PERFORMANCE_CHECK_INTERVALS', '60,240,1440').split(',')]  # 1ч, 4ч, 24ч
 
-# Критерии успешности
-PERFORMANCE_SUCCESS_THRESHOLD_BULLISH = float(os.getenv('PERFORMANCE_SUCCESS_THRESHOLD_BULLISH', '0.02'))  # +2%
-PERFORMANCE_SUCCESS_THRESHOLD_BEARISH = float(os.getenv('PERFORMANCE_SUCCESS_THRESHOLD_BEARISH', '-0.02'))  # -2%
+# История
+PERFORMANCE_HISTORY_SIZE = int(os.getenv('PERFORMANCE_HISTORY_SIZE', '1000'))  # макс сигналов в истории
+PERFORMANCE_LOOKBACK_DAYS = int(os.getenv('PERFORMANCE_LOOKBACK_DAYS', '90'))  # период анализа
 
-# Размер истории
-PERFORMANCE_HISTORY_SIZE = int(os.getenv('PERFORMANCE_HISTORY_SIZE', '200'))  # последние 200 сигналов
+# Критерии успеха
+PERFORMANCE_SUCCESS_THRESHOLD = float(os.getenv('PERFORMANCE_SUCCESS_THRESHOLD', '0.05'))  # +5% минимум
+PERFORMANCE_MIN_CONFIDENCE_FOR_TRACKING = int(os.getenv('PERFORMANCE_MIN_CONFIDENCE_FOR_TRACKING', '50'))  # минимальная confidence для трекинга
 
-# Проверка кошельков
-PERFORMANCE_UPDATE_WALLET_SCORES = int(os.getenv('PERFORMANCE_UPDATE_WALLET_SCORES', '1')) == 1
-PERFORMANCE_SCORE_ADJUSTMENT = int(os.getenv('PERFORMANCE_SCORE_ADJUSTMENT', '5'))  # ±5 за успех/провал
+# Уведомления
+PERFORMANCE_NOTIFY_ON_MILESTONES = int(os.getenv('PERFORMANCE_NOTIFY_ON_MILESTONES', '1')) == 1
+PERFORMANCE_MILESTONE_SIGNALS = [int(x) for x in os.getenv('PERFORMANCE_MILESTONE_SIGNALS', '10,50,100,500').split(',')]
 
 # ============================================================================
 # НОВОЕ: ADAPTIVE THRESHOLDS (Динамические пороги)
@@ -200,340 +207,275 @@ PERFORMANCE_SCORE_ADJUSTMENT = int(os.getenv('PERFORMANCE_SCORE_ADJUSTMENT', '5'
 # Главный переключатель
 ADAPTIVE_THRESHOLDS_ENABLED = int(os.getenv('ADAPTIVE_THRESHOLDS_ENABLED', '1')) == 1
 
-# Базовые пороги (будут адаптироваться)
+# Базовые значения (отправная точка)
 ADAPTIVE_BASE_MIN_CONFIDENCE = int(os.getenv('ADAPTIVE_BASE_MIN_CONFIDENCE', '30'))
-ADAPTIVE_BASE_MIN_SIZE_REL = float(os.getenv('ADAPTIVE_BASE_MIN_SIZE_REL', '0.10'))  # 0.1%
+ADAPTIVE_BASE_MIN_SIZE_REL = float(os.getenv('ADAPTIVE_BASE_MIN_SIZE_REL', '0.10'))  # 10%
 ADAPTIVE_BASE_MIN_VOLUME_24H = int(os.getenv('ADAPTIVE_BASE_MIN_VOLUME_24H', '1000000'))  # $1M
 
-# Режимы рынка и модификаторы
-ADAPTIVE_BULL_THRESHOLD = float(os.getenv('ADAPTIVE_BULL_THRESHOLD', '10.0'))  # +10% BTC за 7д = bull
-ADAPTIVE_BEAR_THRESHOLD = float(os.getenv('ADAPTIVE_BEAR_THRESHOLD', '-10.0'))  # -10% BTC за 7д = bear
+# Market Regime Detection
+ADAPTIVE_BULL_THRESHOLD = float(os.getenv('ADAPTIVE_BULL_THRESHOLD', '10.0'))  # BTC +10% за неделю
+ADAPTIVE_BEAR_THRESHOLD = float(os.getenv('ADAPTIVE_BEAR_THRESHOLD', '-10.0'))  # BTC -10% за неделю
+ADAPTIVE_MARKET_REGIME_UPDATE_HOURS = int(os.getenv('ADAPTIVE_MARKET_REGIME_UPDATE_HOURS', '6'))
 
-# Модификаторы для bull market
-ADAPTIVE_BULL_CONFIDENCE_MODIFIER = int(os.getenv('ADAPTIVE_BULL_CONFIDENCE_MODIFIER', '+10').replace('+', ''))
-ADAPTIVE_BULL_SIZE_REL_MODIFIER = float(os.getenv('ADAPTIVE_BULL_SIZE_REL_MODIFIER', '+0.05').replace('+', ''))
-ADAPTIVE_BULL_VOLUME_MODIFIER = float(os.getenv('ADAPTIVE_BULL_VOLUME_MODIFIER', '1.5'))
+# Модификаторы для бычьего рынка
+ADAPTIVE_BULL_CONFIDENCE_MODIFIER = int(os.getenv('ADAPTIVE_BULL_CONFIDENCE_MODIFIER', '-5'))  # снижаем порог
+ADAPTIVE_BULL_SIZE_REL_MODIFIER = float(os.getenv('ADAPTIVE_BULL_SIZE_REL_MODIFIER', '-0.02'))  # -2%
+ADAPTIVE_BULL_VOLUME_MODIFIER = float(os.getenv('ADAPTIVE_BULL_VOLUME_MODIFIER', '0.8'))  # x0.8
 
-# Модификаторы для bear market
-ADAPTIVE_BEAR_CONFIDENCE_MODIFIER = int(os.getenv('ADAPTIVE_BEAR_CONFIDENCE_MODIFIER', '-5').replace('-', '').replace('+', ''))
-if os.getenv('ADAPTIVE_BEAR_CONFIDENCE_MODIFIER', '-5').startswith('-'):
-    ADAPTIVE_BEAR_CONFIDENCE_MODIFIER = -abs(ADAPTIVE_BEAR_CONFIDENCE_MODIFIER)
-
-ADAPTIVE_BEAR_SIZE_REL_MODIFIER = float(os.getenv('ADAPTIVE_BEAR_SIZE_REL_MODIFIER', '-0.03').replace('+', ''))
-if os.getenv('ADAPTIVE_BEAR_SIZE_REL_MODIFIER', '-0.03').startswith('-'):
-    ADAPTIVE_BEAR_SIZE_REL_MODIFIER = -abs(ADAPTIVE_BEAR_SIZE_REL_MODIFIER)
-
-ADAPTIVE_BEAR_VOLUME_MODIFIER = float(os.getenv('ADAPTIVE_BEAR_VOLUME_MODIFIER', '0.7'))
+# Модификаторы для медвежьего рынка
+ADAPTIVE_BEAR_CONFIDENCE_MODIFIER = int(os.getenv('ADAPTIVE_BEAR_CONFIDENCE_MODIFIER', '+10'))  # повышаем порог
+ADAPTIVE_BEAR_SIZE_REL_MODIFIER = float(os.getenv('ADAPTIVE_BEAR_SIZE_REL_MODIFIER', '+0.05'))  # +5%
+ADAPTIVE_BEAR_VOLUME_MODIFIER = float(os.getenv('ADAPTIVE_BEAR_VOLUME_MODIFIER', '1.5'))  # x1.5
 
 # Адаптация на основе производительности
-ADAPTIVE_LOW_ACCURACY_THRESHOLD = float(os.getenv('ADAPTIVE_LOW_ACCURACY_THRESHOLD', '0.60'))  # <60%
-ADAPTIVE_HIGH_ACCURACY_THRESHOLD = float(os.getenv('ADAPTIVE_HIGH_ACCURACY_THRESHOLD', '0.80'))  # >80%
-ADAPTIVE_ACCURACY_ADJUSTMENT = int(os.getenv('ADAPTIVE_ACCURACY_ADJUSTMENT', '10'))  # ±10 к confidence
-
-# Интервал обновления режима рынка (часы)
-ADAPTIVE_MARKET_REGIME_UPDATE_HOURS = int(os.getenv('ADAPTIVE_MARKET_REGIME_UPDATE_HOURS', '4'))
-
-# Минимум сигналов для адаптации
-ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION = int(os.getenv('ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION', '20'))
+ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION = int(os.getenv('ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION', '20'))  # минимум сигналов
+ADAPTIVE_LOW_ACCURACY_THRESHOLD = float(os.getenv('ADAPTIVE_LOW_ACCURACY_THRESHOLD', '0.40'))  # 40%
+ADAPTIVE_HIGH_ACCURACY_THRESHOLD = float(os.getenv('ADAPTIVE_HIGH_ACCURACY_THRESHOLD', '0.65'))  # 65%
+ADAPTIVE_ACCURACY_ADJUSTMENT = int(os.getenv('ADAPTIVE_ACCURACY_ADJUSTMENT', '5'))  # ±5 к порогам
 
 # ============================================================================
-# НОВОЕ: LEARNING SYSTEM (Система обучения)
+# НОВОЕ: LEARNING SYSTEM (Система самообучения)
 # ============================================================================
 
 # Главный переключатель
 LEARNING_SYSTEM_ENABLED = int(os.getenv('LEARNING_SYSTEM_ENABLED', '1')) == 1
 
-# Типы обучения
+# Что учить
 LEARNING_ENABLE_WALLET_SCORING = int(os.getenv('LEARNING_ENABLE_WALLET_SCORING', '1')) == 1
 LEARNING_ENABLE_SIGNAL_TYPE_WEIGHTS = int(os.getenv('LEARNING_ENABLE_SIGNAL_TYPE_WEIGHTS', '1')) == 1
 LEARNING_ENABLE_PATTERN_DETECTION = int(os.getenv('LEARNING_ENABLE_PATTERN_DETECTION', '1')) == 1
 
 # Параметры обучения
 LEARNING_RATE = float(os.getenv('LEARNING_RATE', '0.1'))  # скорость обучения
-LEARNING_MIN_SAMPLES = int(os.getenv('LEARNING_MIN_SAMPLES', '50'))  # минимум данных для обучения
-LEARNING_WINDOW_DAYS = int(os.getenv('LEARNING_WINDOW_DAYS', '30'))  # окно обучения
+LEARNING_MIN_SAMPLES = int(os.getenv('LEARNING_MIN_SAMPLES', '30'))  # минимум данных для обучения
+LEARNING_WINDOW_DAYS = int(os.getenv('LEARNING_WINDOW_DAYS', '30'))  # окно данных
 
-# Веса типов сигналов (начальные, будут обучаться)
+# Начальные веса типов сигналов
 LEARNING_SIGNAL_TYPE_WEIGHTS = {
-    "smart_money": float(os.getenv('LEARNING_WEIGHT_SMART_MONEY', '0.40')),
-    "mining": float(os.getenv('LEARNING_WEIGHT_MINING', '0.30')),
-    "onchain": float(os.getenv('LEARNING_WEIGHT_ONCHAIN', '0.20')),
-    "social": float(os.getenv('LEARNING_WEIGHT_SOCIAL', '0.10'))
+    'large_buy': float(os.getenv('LEARNING_WEIGHT_LARGE_BUY', '1.0')),
+    'accumulation': float(os.getenv('LEARNING_WEIGHT_ACCUMULATION', '1.2')),
+    'new_wallet': float(os.getenv('LEARNING_WEIGHT_NEW_WALLET', '0.8')),
+    'dex_listing': float(os.getenv('LEARNING_WEIGHT_DEX_LISTING', '0.9')),
+    'whale_transfer': float(os.getenv('LEARNING_WEIGHT_WHALE_TRANSFER', '1.0')),
 }
 
-# Корректировка весов
-LEARNING_MAX_WEIGHT_ADJUSTMENT = float(os.getenv('LEARNING_MAX_WEIGHT_ADJUSTMENT', '0.15'))  # макс ±15%
-LEARNING_WEIGHT_UPDATE_INTERVAL_DAYS = int(os.getenv('LEARNING_WEIGHT_UPDATE_INTERVAL_DAYS', '7'))
+# Сохранение моделей
+LEARNING_SAVE_MODELS = int(os.getenv('LEARNING_SAVE_MODELS', '1')) == 1
+LEARNING_MODEL_UPDATE_INTERVAL_HOURS = int(os.getenv('LEARNING_MODEL_UPDATE_INTERVAL_HOURS', '24'))
 
 # ============================================================================
-# НОВОЕ: WALLET DATABASE (База кошельков)
+# WALLET DATABASE
 # ============================================================================
 
-# Тип БД
-WALLET_DB_TYPE = os.getenv('WALLET_DB_TYPE', 'json')  # json или sqlite
+# Тип базы данных
+WALLET_DB_TYPE = os.getenv('WALLET_DB_TYPE', 'json')  # 'json' или 'sqlite'
+WALLET_DB_JSON_PATH = os.getenv('WALLET_DB_JSON_PATH', 'data/wallets.json')
+WALLET_DB_SQLITE_PATH = os.getenv('WALLET_DB_SQLITE_PATH', 'data/wallets.db')
 
-# Пути к БД
-WALLET_DB_JSON_PATH = os.path.join(
-    os.environ.get('RENDER_DISK_MOUNT_PATH', '.'), 
-    'data', 
-    'tracked_wallets.json'
-)
-WALLET_DB_SQLITE_PATH = os.path.join(
-    os.environ.get('RENDER_DISK_MOUNT_PATH', '.'), 
-    'data', 
-    'tracked_wallets.db'
-)
-
-# Скоринг кошельков
+# Система оценки кошельков
 WALLET_INITIAL_SCORE = int(os.getenv('WALLET_INITIAL_SCORE', '50'))  # начальный скор
-WALLET_MAX_SCORE = int(os.getenv('WALLET_MAX_SCORE', '100'))
 WALLET_MIN_SCORE = int(os.getenv('WALLET_MIN_SCORE', '0'))
+WALLET_MAX_SCORE = int(os.getenv('WALLET_MAX_SCORE', '100'))
 
-# Обновление скоров
-WALLET_SCORE_UPDATE_ON_SUCCESS = int(os.getenv('WALLET_SCORE_UPDATE_ON_SUCCESS', '+5').replace('+', ''))
-WALLET_SCORE_UPDATE_ON_FAILURE = -abs(int(os.getenv('WALLET_SCORE_UPDATE_ON_FAILURE', '-3').replace('-', '').replace('+', '')))
-WALLET_SCORE_DECAY_PER_DAY = float(os.getenv('WALLET_SCORE_DECAY_PER_DAY', '0.1'))  # -0.1/день неактивности
+# Обновление скора
+WALLET_SCORE_UPDATE_ON_SUCCESS = int(os.getenv('WALLET_SCORE_UPDATE_ON_SUCCESS', '+5'))
+WALLET_SCORE_UPDATE_ON_FAILURE = int(os.getenv('WALLET_SCORE_UPDATE_ON_FAILURE', '-3'))
+WALLET_SCORE_DECAY_PER_DAY = int(os.getenv('WALLET_SCORE_DECAY_PER_DAY', '1'))  # естественная деградация
 
 # Лимиты
 WALLET_MAX_TRACKED = int(os.getenv('WALLET_MAX_TRACKED', '500'))  # максимум кошельков
-WALLET_AUTO_PRUNE = int(os.getenv('WALLET_AUTO_PRUNE', '1')) == 1  # автоудаление при превышении лимита
+WALLET_AUTO_PRUNE = int(os.getenv('WALLET_AUTO_PRUNE', '1')) == 1  # автоудаление худших
 
 # ============================================================================
-# API КЛЮЧИ - BLOCKCHAIN
+# API КЛЮЧИ И ДОСТУПЫ
 # ============================================================================
+
+# Blockchain explorers
 ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY')
+BSCSCAN_API_KEY = os.getenv('BSCSCAN_API_KEY', ETHERSCAN_API_KEY)
 HELIUS_API_KEY = os.getenv('HELIUS_API_KEY')
 TRONSCAN_API_KEY = os.getenv('TRONSCAN_API_KEY')
+SOLSCAN_API_KEY = os.getenv('SOLSCAN_API_KEY')
+
+# Multi-chain API keys
+BASE_API_KEY = os.getenv('BASE_API_KEY', ETHERSCAN_API_KEY)
+ARBITRUM_API_KEY = os.getenv('ARBITRUM_API_KEY', ETHERSCAN_API_KEY)
+OPTIMISM_API_KEY = os.getenv('OPTIMISM_API_KEY', ETHERSCAN_API_KEY)
+AVALANCHE_API_KEY = os.getenv('AVALANCHE_API_KEY')
+POLYGON_API_KEY = os.getenv('POLYGON_API_KEY')
+
+# RPC endpoints
+SOLANA_RPC_URLS = os.getenv('SOLANA_RPC_URLS', 'https://api.mainnet-beta.solana.com').split(',')
 ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
+
+# Рыночные данные
 COINGECKO_API_KEY = os.getenv('COINGECKO_API_KEY')
 COINMARKETCAP_API_KEY = os.getenv('COINMARKETCAP_API_KEY')
 
-# ============================================================================
-# API КЛЮЧИ - НОВОСТИ И AI
-# ============================================================================
-CRYPTOPANIC_KEY = os.getenv('CRYPTOPANIC_KEY')
-NEWS_API_KEY = os.getenv('NEWS_API_KEY')
+# AI сервисы
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-# ============================================================================
-# ПУТИ К ДАННЫМ
-# ============================================================================
-DATA_DIR = os.path.join(os.environ.get('RENDER_DISK_MOUNT_PATH', '.'), 'data')
-os.makedirs(DATA_DIR, exist_ok=True)
+# Новости
+CRYPTOPANIC_KEY = os.getenv('CRYPTOPANIC_KEY')
+NEWS_API_KEY = os.getenv('NEWS_API_KEY')
 
-STATE_FILE = os.path.join(DATA_DIR, 'whales_state.json')
-WATCHLIST_FILE = os.path.join(DATA_DIR, 'watchlist.json')
-HISTORY_DIR = os.path.join(DATA_DIR, 'history')
-os.makedirs(HISTORY_DIR, exist_ok=True)
+# ============================================================================
+# ФАЙЛОВАЯ СИСТЕМА
+# ============================================================================
 
-# НОВОЕ: Пути для систем обучения
+# Базовые директории
+DATA_DIR = os.getenv('DATA_DIR', 'data')
+STATE_FILE = os.path.join(DATA_DIR, 'state.json')
+
+# Learning System директории
 LEARNING_DIR = os.path.join(DATA_DIR, 'learning')
+LEARNING_MODELS_DIR = os.path.join(LEARNING_DIR, 'models')
+LEARNING_HISTORY_DIR = os.path.join(LEARNING_DIR, 'history')
+
+# Создание директорий
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LEARNING_DIR, exist_ok=True)
-
-PERFORMANCE_LOG_FILE = os.path.join(LEARNING_DIR, 'performance_log.json')
-ADAPTIVE_STATE_FILE = os.path.join(LEARNING_DIR, 'adaptive_state.json')
-LEARNING_WEIGHTS_FILE = os.path.join(LEARNING_DIR, 'learning_weights.json')
-
-# База новостей
-DB_PATH = os.path.join(os.environ.get('RENDER_DISK_MOUNT_PATH', '.'), 'news_database.sqlite')
+os.makedirs(LEARNING_MODELS_DIR, exist_ok=True)
+os.makedirs(LEARNING_HISTORY_DIR, exist_ok=True)
 
 # ============================================================================
-# FALLBACK ЦЕНЫ (актуальные на 24 октября 2025)
-# ============================================================================
-FALLBACK_PRICES = {
-    "BTC": 110000,   # ~$110,846
-    "ETH": 3870,     # ~$3,876
-    "BNB": 1096,     # ~$1,096
-    "SOL": 189,      # ~$189
-    "USDT": 1.00,
-    "USDC": 1.00,
-    "DAI": 1.00,
-    "MATIC": 0.65,
-    "AVAX": 25,
-    "ARB": 0.75,
-    "OP": 1.65,
-    "LINK": 11,
-    "UNI": 6.5,
-    "AAVE": 145,
-    "TRX": 0.16,
-    "XRP": 2.40,
-    "DOGE": 0.19,
-    "WETH": 3870,
-    "WBTC": 110000,
-}
-
-# ============================================================================
-# HTTP SESSION SETTINGS (для bot/config.py совместимость)
-# ============================================================================
-SESSION_TIMEOUT_TOTAL = 30
-SESSION_TIMEOUT_CONNECT = 10
-COMMON_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-}
-
-# ============================================================================
-# ВАЛИДАЦИЯ И ДИАГНОСТИКА
+# ВАЛИДАЦИЯ КОНФИГУРАЦИИ
 # ============================================================================
 
 def validate_config():
-    """Проверяет конфигурацию с расширенной диагностикой"""
-    errors = []
+    """Проверяет корректность настроек и выводит предупреждения"""
+    
     warnings = []
     
-    # Проверка Discovery
-    if ASSETS == '*':
-        if not COINGECKO_API_KEY:
-            warnings.append("COINGECKO_API_KEY не установлен. Discovery может работать медленнее.")
-        warnings.append("Discovery Mode: следите за rate limits CoinGecko (10-30 req/min без ключа)")
-    
-    # Проверка blockchain API
+    # Проверка API ключей
     if not ETHERSCAN_API_KEY:
-        errors.append("ETHERSCAN_API_KEY обязателен для EVM мониторинга")
-    if not HELIUS_API_KEY:
-        errors.append("HELIUS_API_KEY обязателен для Solana мониторинга")
-    if not TRONSCAN_API_KEY:
-        errors.append("TRONSCAN_API_KEY обязателен для TRON мониторинга")
+        warnings.append("ETHERSCAN_API_KEY не установлен - мониторинг Ethereum ограничен")
     
-    # НОВОЕ: Проверка Trading System
+    if not HELIUS_API_KEY and not SOLSCAN_API_KEY:
+        warnings.append("HELIUS_API_KEY и SOLSCAN_API_KEY не установлены - мониторинг Solana ограничен")
+    
+    if not COINGECKO_API_KEY:
+        warnings.append("COINGECKO_API_KEY не установлен - ограничена информация о ценах")
+    
+    # Проверка настроек Trading System
     if TRADING_ENABLED:
-        if TRADING_MIN_CONFIDENCE < 50 or TRADING_MIN_CONFIDENCE > 100:
-            warnings.append(f"TRADING_MIN_CONFIDENCE={TRADING_MIN_CONFIDENCE} необычное значение. Рекомендуется 60-80")
-        if TRADING_MAX_SIGNALS_PER_DAY < 1:
-            warnings.append(f"TRADING_MAX_SIGNALS_PER_DAY={TRADING_MAX_SIGNALS_PER_DAY} слишком мало")
-        if TRADING_DRY_RUN:
-            warnings.append("Trading System работает в DRY RUN режиме (тестирование)")
+        if TRADING_MIN_CONFIDENCE > 90:
+            warnings.append(f"TRADING_MIN_CONFIDENCE очень высокий ({TRADING_MIN_CONFIDENCE}) - может быть мало сигналов")
+        
+        if TRADING_MAX_SIGNALS_PER_DAY < 3:
+            warnings.append(f"TRADING_MAX_SIGNALS_PER_DAY очень низкий ({TRADING_MAX_SIGNALS_PER_DAY})")
+        
+        if not TRADING_DRY_RUN:
+            warnings.append("⚠️ TRADING_DRY_RUN=false - система в БОЕВОМ режиме!")
     
-    # НОВОЕ: Проверка Smart Discovery
+    # Проверка Smart Discovery
     if SMART_DISCOVERY_ENABLED:
-        if not ETHERSCAN_API_KEY:
-            warnings.append("Smart Discovery требует ETHERSCAN_API_KEY для анализа кошельков")
-        if SMART_DISCOVERY_INTERVAL_HOURS < 1:
-            warnings.append(f"Smart Discovery интервал слишком короткий ({SMART_DISCOVERY_INTERVAL_HOURS}ч). Рекомендуется ≥6ч")
-        if SMART_DISCOVERY_MIN_TRADES < 3:
-            warnings.append(f"Smart Discovery: MIN_TRADES={SMART_DISCOVERY_MIN_TRADES} слишком мало. Рекомендуется ≥5")
+        if SMART_DISCOVERY_MIN_WALLET_ROI < 0.5:
+            warnings.append(f"SMART_DISCOVERY_MIN_WALLET_ROI низкий ({SMART_DISCOVERY_MIN_WALLET_ROI}) - может быть много ложных срабатываний")
+        
+        if SMART_DISCOVERY_MAX_NEW_WALLETS > 20:
+            warnings.append(f"SMART_DISCOVERY_MAX_NEW_WALLETS высокий ({SMART_DISCOVERY_MAX_NEW_WALLETS}) - база будет быстро расти")
     
-    # НОВОЕ: Проверка Validation
-    if VALIDATION_ENABLED:
-        if VALIDATION_INTERVAL_DAYS < 1:
-            warnings.append(f"Validation интервал слишком короткий ({VALIDATION_INTERVAL_DAYS} дней). Рекомендуется ≥7 дней")
-        if VALIDATION_MIN_SCORE_TO_KEEP < 0 or VALIDATION_MIN_SCORE_TO_KEEP > 100:
-            errors.append(f"VALIDATION_MIN_SCORE_TO_KEEP должен быть в диапазоне 0-100 (сейчас: {VALIDATION_MIN_SCORE_TO_KEEP})")
-    
-    # НОВОЕ: Проверка Performance Tracking
-    if PERFORMANCE_TRACKING_ENABLED:
-        if not COINGECKO_API_KEY:
-            warnings.append("Performance Tracking будет использовать fallback цены без COINGECKO_API_KEY")
-        if len(PERFORMANCE_CHECK_INTERVALS) == 0:
-            errors.append("PERFORMANCE_CHECK_INTERVALS не может быть пустым")
-    
-    # НОВОЕ: Проверка Adaptive Thresholds
+    # Проверка Adaptive Thresholds
     if ADAPTIVE_THRESHOLDS_ENABLED:
-        if ADAPTIVE_BASE_MIN_CONFIDENCE < 0 or ADAPTIVE_BASE_MIN_CONFIDENCE > 100:
-            errors.append(f"ADAPTIVE_BASE_MIN_CONFIDENCE должен быть 0-100 (сейчас: {ADAPTIVE_BASE_MIN_CONFIDENCE})")
-        if ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION < 10:
-            warnings.append(f"ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION={ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION} слишком мало. Рекомендуется ≥20")
+        if ADAPTIVE_BASE_MIN_CONFIDENCE < 20:
+            warnings.append(f"ADAPTIVE_BASE_MIN_CONFIDENCE очень низкий ({ADAPTIVE_BASE_MIN_CONFIDENCE}) - много шума")
+        
+        if ADAPTIVE_BASE_MIN_CONFIDENCE > 70:
+            warnings.append(f"ADAPTIVE_BASE_MIN_CONFIDENCE очень высокий ({ADAPTIVE_BASE_MIN_CONFIDENCE}) - мало сигналов")
     
-    # НОВОЕ: Проверка Learning System
+    # Проверка Learning System
     if LEARNING_SYSTEM_ENABLED:
-        total_weight = sum(LEARNING_SIGNAL_TYPE_WEIGHTS.values())
-        if abs(total_weight - 1.0) > 0.01:
-            warnings.append(f"Сумма весов типов сигналов = {total_weight:.2f}, должна быть ≈1.0")
-        if LEARNING_MIN_SAMPLES < 20:
-            warnings.append(f"LEARNING_MIN_SAMPLES={LEARNING_MIN_SAMPLES} слишком мало. Рекомендуется ≥50")
+        if LEARNING_RATE > 0.5:
+            warnings.append(f"LEARNING_RATE очень высокий ({LEARNING_RATE}) - система может быть нестабильной")
+        
+        if LEARNING_MIN_SAMPLES < 10:
+            warnings.append(f"LEARNING_MIN_SAMPLES слишком мал ({LEARNING_MIN_SAMPLES}) - ненадёжное обучение")
     
-    # Детальная проверка ADMIN_CHAT_ID
-    if ENABLE_ALERTS:
-        if ADMIN_CHAT_ID == CHAT_ID:
-            warnings.append(
-                f"ADMIN_CHAT_ID не установлен или равен CHAT_ID. "
-                f"Алерты будут отправляться в публичный канал ({CHAT_ID})"
-            )
-        else:
-            if ADMIN_CHAT_ID.lstrip('-').isdigit():
-                print(f"✅ ADMIN_CHAT_ID настроен: {ADMIN_CHAT_ID[:4]}...{ADMIN_CHAT_ID[-4:]}")
-            else:
-                warnings.append(
-                    f"ADMIN_CHAT_ID имеет необычный формат: {ADMIN_CHAT_ID}. "
-                    f"Для личных чатов используйте числовой ID"
-                )
+    # Проверка Wallet Database
+    if WALLET_MAX_TRACKED > 1000:
+        warnings.append(f"WALLET_MAX_TRACKED очень большой ({WALLET_MAX_TRACKED}) - может быть медленно")
     
-    # Вывод ошибок
-    if errors:
-        raise ValueError(f"Ошибки конфигурации:\n" + "\n".join(f"- {e}" for e in errors))
+    # Проверка Performance Tracking
+    if PERFORMANCE_TRACKING_ENABLED:
+        if PERFORMANCE_SUCCESS_THRESHOLD < 0.02:
+            warnings.append(f"PERFORMANCE_SUCCESS_THRESHOLD очень низкий ({PERFORMANCE_SUCCESS_THRESHOLD}) - почти всё будет 'успехом'")
     
-    # ========================================================================
-    # ОСНОВНАЯ ИНФОРМАЦИЯ
-    # ========================================================================
+    return warnings
+
+
+def print_config_summary():
+    """Выводит сводку по конфигурации (для отладки)"""
+    
+    warnings = validate_config()
+    
     print("=" * 80)
-    print("🧠 INTELLIGENT CRYPTO MONITOR v3.0 - Self-Learning System")
+    print("⚙️  CONFIGURATION SUMMARY")
     print("=" * 80)
-    print(f"Время запуска: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    
-    print(f"\n📊 РЕЖИМ РАБОТЫ")
-    if ASSETS == '*':
-        print(f"  • Discovery Mode (автопоиск топ-{DISCOVERY_TOP_N_PER_CHAIN} токенов)")
-        print(f"  • Обновление watchlist: каждые {DISCOVERY_REFRESH_HOURS}ч")
-    else:
-        print(f"  • Allowlist Mode ({len(ASSETS_LIST)} активов)")
-        print(f"  • Активы: {', '.join(ASSETS_LIST[:10])}")
-        if len(ASSETS_LIST) > 10:
-            print(f"    ... и ещё {len(ASSETS_LIST) - 10}")
-    
-    print(f"\n💰 БАЗОВЫЕ ПОРОГИ")
-    print(f"  • Минимальный порог: ${MIN_USD_FLOOR:,.0f}")
-    print(f"  • Базовый порог: ${MIN_USD:,.0f}")
-    print(f"  • Коэффициент объёма: {MIN_USD_K:.1%}")
-    print(f"  • Лимит публикаций: {POSTS_PER_HOUR_CAP}/час")
     
     # ========================================================================
-    # НОВЫЕ СИСТЕМЫ
+    # НОВЫЕ ИНТЕЛЛЕКТУАЛЬНЫЕ СИСТЕМЫ
     # ========================================================================
-    print(f"\n🧠 СИСТЕМЫ САМООБУЧЕНИЯ")
+    print(f"\n🧠 ИНТЕЛЛЕКТУАЛЬНЫЕ СИСТЕМЫ:")
     
     # Trading System
     print(f"\n  📈 Trading System: {'✅ Включен' if TRADING_ENABLED else '❌ Отключен'}")
     if TRADING_ENABLED:
-        print(f"     • Мин. confidence: {TRADING_MIN_CONFIDENCE}/100")
-        print(f"     • Макс. сигналов/день: {TRADING_MAX_SIGNALS_PER_DAY}")
-        print(f"     • Cooldown: {TRADING_SIGNAL_COOLDOWN_MINUTES} мин")
-        print(f"     • Макс. размер позиции: ${TRADING_MAX_POSITION_SIZE_USD:,.0f}")
-        print(f"     • Макс. открытых позиций: {TRADING_MAX_OPEN_POSITIONS}")
-        print(f"     • Stop Loss: {TRADING_DEFAULT_STOP_LOSS_PERCENT}%")
-        print(f"     • Take Profit: {TRADING_DEFAULT_TAKE_PROFIT_PERCENT}%")
-        print(f"     • Dry Run: {'да' if TRADING_DRY_RUN else 'нет'}")
+        print(f"     • Режим: {'🧪 DRY RUN (безопасный)' if TRADING_DRY_RUN else '💰 LIVE (боевой)'}")
+        print(f"     • Min confidence: {TRADING_MIN_CONFIDENCE}/100")
+        print(f"     • Max signals/day: {TRADING_MAX_SIGNALS_PER_DAY}")
+        print(f"     • Signal cooldown: {TRADING_SIGNAL_COOLDOWN_MINUTES} минут")
+        print(f"     • Signal interval: каждые {TRADING_SIGNAL_INTERVAL_HOURS} час(а)")
+        print(f"     • Max position size: ${TRADING_MAX_POSITION_SIZE_USD:,.0f}")
+        print(f"     • Max open positions: {TRADING_MAX_OPEN_POSITIONS}")
+        print(f"     • Stop-Loss: {TRADING_DEFAULT_STOP_LOSS_PERCENT}%")
+        print(f"     • Take-Profit: {TRADING_DEFAULT_TAKE_PROFIT_PERCENT}%")
+        print(f"     • Фильтры:")
+        print(f"       - Technical score: ≥{TRADING_MIN_TECHNICAL_SCORE}/100")
+        print(f"       - Fundamental score: ≥{TRADING_MIN_FUNDAMENTAL_SCORE}/100")
+        print(f"       - ML confidence: ≥{TRADING_MIN_ML_CONFIDENCE}%")
     
-    # Smart Money Discovery
-    print(f"\n  🔍 Smart Money Discovery: {'✅ Включен' if SMART_DISCOVERY_ENABLED else '❌ Отключен'}")
+    # Smart Discovery
+    print(f"\n  🔍 Smart Discovery: {'✅ Включен' if SMART_DISCOVERY_ENABLED else '❌ Отключен'}")
     if SMART_DISCOVERY_ENABLED:
         print(f"     • Интервал: каждые {SMART_DISCOVERY_INTERVAL_HOURS}ч")
-        print(f"     • Мин. рост токена: x{SMART_DISCOVERY_MIN_PRICE_CHANGE}")
-        print(f"     • Мин. ROI кошелька: {SMART_DISCOVERY_MIN_WALLET_ROI * 100:.0f}%")
-        print(f"     • Мин. win rate: {SMART_DISCOVERY_MIN_WIN_RATE * 100:.0f}%")
-        print(f"     • Мин. сделок: {SMART_DISCOVERY_MIN_TRADES}")
-        print(f"     • Анализ истории: {SMART_DISCOVERY_LOOKBACK_DAYS} дней")
-        print(f"     • Макс. новых за раз: {SMART_DISCOVERY_MAX_NEW_WALLETS}")
+        print(f"     • Min price change: {SMART_DISCOVERY_MIN_PRICE_CHANGE}x")
+        print(f"     • Max токенов для анализа: {SMART_DISCOVERY_MAX_TOKENS_TO_ANALYZE}")
+        print(f"     • Критерии кошельков:")
+        print(f"       - Min ROI: {SMART_DISCOVERY_MIN_WALLET_ROI:.0%}")
+        print(f"       - Min win rate: {SMART_DISCOVERY_MIN_WIN_RATE:.0%}")
+        print(f"       - Min trades: {SMART_DISCOVERY_MIN_TRADES}")
+        print(f"     • Lookback: {SMART_DISCOVERY_LOOKBACK_DAYS} дней")
+        print(f"     • Max новых кошельков: {SMART_DISCOVERY_MAX_NEW_WALLETS} за раз")
+        print(f"     • Источники: {', '.join(SMART_DISCOVERY_SOURCES)}")
     
-    # Validation Engine
+    # Validation
     print(f"\n  🧹 Validation Engine: {'✅ Включен' if VALIDATION_ENABLED else '❌ Отключен'}")
     if VALIDATION_ENABLED:
-        print(f"     • Интервал: каждые {VALIDATION_INTERVAL_DAYS} дней")
-        print(f"     • Макс. неактивность: {VALIDATION_MAX_INACTIVE_DAYS} дней")
-        print(f"     • Мин. скор: {VALIDATION_MIN_SCORE_TO_KEEP}/100")
-        print(f"     • Мин. ROI: {VALIDATION_MIN_ROI_TO_KEEP * 100:.0f}%")
-        print(f"     • Уведомления: {'да' if VALIDATION_NOTIFY_ON_REMOVAL else 'нет'}")
+        print(f"     • Интервал: каждые {VALIDATION_INTERVAL_DAYS}д")
+        print(f"     • Max неактивность: {VALIDATION_MAX_INACTIVE_DAYS} дней")
+        print(f"     • Min score для сохранения: {VALIDATION_MIN_SCORE_TO_KEEP}/100")
+        print(f"     • Min ROI для сохранения: {VALIDATION_MIN_ROI_TO_KEEP:.0%}")
+        print(f"     • Проверки:")
+        print(f"       - Last trade: {'да' if VALIDATION_CHECK_LAST_TRADE else 'нет'}")
+        print(f"       - Performance: {'да' if VALIDATION_CHECK_PERFORMANCE else 'нет'}")
+        print(f"     • Уведомления: {'да' if VALIDATION_NOTIFY_ON_REMOVAL else 'нет'} (порог: {VALIDATION_NOTIFY_THRESHOLD})")
     
     # Performance Tracking
     print(f"\n  📊 Performance Tracking: {'✅ Включен' if PERFORMANCE_TRACKING_ENABLED else '❌ Отключен'}")
     if PERFORMANCE_TRACKING_ENABLED:
-        print(f"     • Проверка через: {', '.join(str(x)+'ч' for x in PERFORMANCE_CHECK_INTERVALS)}")
-        print(f"     • Порог успеха (bullish): {PERFORMANCE_SUCCESS_THRESHOLD_BULLISH * 100:+.0f}%")
-        print(f"     • Порог успеха (bearish): {PERFORMANCE_SUCCESS_THRESHOLD_BEARISH * 100:+.0f}%")
-        print(f"     • Размер истории: {PERFORMANCE_HISTORY_SIZE} сигналов")
-        print(f"     • Обновление скоров: {'да' if PERFORMANCE_UPDATE_WALLET_SCORES else 'нет'}")
+        intervals_str = ', '.join([f"{i//60}ч" if i >= 60 else f"{i}м" for i in PERFORMANCE_CHECK_INTERVALS])
+        print(f"     • Интервалы проверки: {intervals_str}")
+        print(f"     • История: {PERFORMANCE_HISTORY_SIZE} сигналов")
+        print(f"     • Lookback: {PERFORMANCE_LOOKBACK_DAYS} дней")
+        print(f"     • Success threshold: {PERFORMANCE_SUCCESS_THRESHOLD:+.1%}")
+        print(f"     • Min confidence для трекинга: {PERFORMANCE_MIN_CONFIDENCE_FOR_TRACKING}/100")
+        if PERFORMANCE_NOTIFY_ON_MILESTONES:
+            print(f"     • Milestones: {', '.join(map(str, PERFORMANCE_MILESTONE_SIGNALS))} сигналов")
     
     # Adaptive Thresholds
-    print(f"\n  ⚙️  Adaptive Thresholds: {'✅ Включен' if ADAPTIVE_THRESHOLDS_ENABLED else '❌ Отключен'}")
+    print(f"\n  ⚙️ Adaptive Thresholds: {'✅ Включен' if ADAPTIVE_THRESHOLDS_ENABLED else '❌ Отключен'}")
     if ADAPTIVE_THRESHOLDS_ENABLED:
         print(f"     • Базовый confidence: {ADAPTIVE_BASE_MIN_CONFIDENCE}/100")
         print(f"     • Базовый size_rel: {ADAPTIVE_BASE_MIN_SIZE_REL:.2%}")
@@ -615,6 +557,14 @@ def validate_config():
         status = "✅" if key else "❌"
         print(f"  • {name}: {status}")
     
+    # Bot Commands
+    print(f"\n🤖 BOT COMMANDS")
+    if BOT_TOKEN:
+        print(f"  • Status: ✅ Enabled")
+        print(f"  • Bot Token: {'✅ Configured' if BOT_TOKEN == TELEGRAM_BOT_TOKEN else '✅ Separate token'}")
+    else:
+        print(f"  • Status: ❌ Disabled (BOT_TOKEN not set)")
+    
     print("=" * 80)
     
     # Предупреждения
@@ -638,6 +588,8 @@ def validate_config():
         enabled_systems.append("Adaptive Thresholds")
     if LEARNING_SYSTEM_ENABLED:
         enabled_systems.append("Learning System")
+    if BOT_TOKEN:
+        enabled_systems.append("Bot Commands")
     
     if enabled_systems:
         print(f"✅ Активные системы: {', '.join(enabled_systems)}")
@@ -706,6 +658,9 @@ def get_all_settings() -> Dict:
             "enabled": LEARNING_SYSTEM_ENABLED,
             "learning_rate": LEARNING_RATE,
             "signal_type_weights": LEARNING_SIGNAL_TYPE_WEIGHTS,
+        },
+        "bot_commands": {
+            "enabled": bool(BOT_TOKEN),
         }
     }
 
