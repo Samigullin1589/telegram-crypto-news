@@ -293,6 +293,7 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Получает события для конкретного chain
+        ИСПРАВЛЕНО: правильный routing для EVM/Solana/Tron
         """
         
         # Проверяем circuit breaker
@@ -305,7 +306,7 @@ class BlockchainMonitor:
             # Rate limiting
             await self._wait_for_rate_limit(chain)
             
-            # Выбираем метод в зависимости от chain
+            # ИСПРАВЛЕНО: Правильный routing по типу chain
             if chain in ["ethereum", "bsc", "base", "arbitrum", "polygon"]:
                 events = await self._fetch_evm_events(chain, start_time, assets)
             elif chain == "solana":
