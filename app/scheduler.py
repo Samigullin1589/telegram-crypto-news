@@ -1,5 +1,5 @@
 """
-INTEGRATED SCHEDULER v4.0 - Complete Trading & Whale Monitoring System
+INTEGRATED SCHEDULER v4.2 - Complete Trading & Whale Monitoring System
 
 РЕВОЛЮЦИОННЫЕ ВОЗМОЖНОСТИ:
 ✅ Multi-Chain Support (7+ blockchains)
@@ -11,15 +11,11 @@ INTEGRATED SCHEDULER v4.0 - Complete Trading & Whale Monitoring System
 ✅ Learning System - самообучение на ошибках
 ✅ Cross-Chain Wallet Tracking - мониторинг на всех chains
 
-НОВОЕ В v4.0:
-🔥 Full Trading System Integration
-🔥 Technical Analysis (50+ indicators)
-🔥 Fundamental Analysis (tokenomics, metrics)
-🔥 Hot Wallet Accumulation/Distribution Detection
-🔥 ML Price Predictions (1h, 4h, 24h, 7d)
-🔥 Automated Position Management
-🔥 Risk Management (Stop-Loss, Take-Profit)
-🔥 Performance Analytics & Reporting
+НОВОЕ В v4.2:
+🔥 Solana Fallback RPC Rotation - автоматическое переключение между RPC endpoints
+🔥 Intelligent Backoff Strategy - умные паузы при перегрузке API
+🔥 Enhanced Error Recovery - улучшенное восстановление после ошибок
+🔥 Trading System Integration - полная интеграция торговой системы
 """
 
 import asyncio
@@ -32,6 +28,7 @@ from collections import deque, defaultdict
 from pathlib import Path
 import statistics
 import traceback
+import time
 
 from app import settings
 
@@ -111,17 +108,15 @@ class AdaptiveThresholds:
     """
     
     def __init__(self):
-        self.market_regime = "sideways"  # bull / bear / sideways
+        self.market_regime = "sideways"
         self.performance_history = deque(maxlen=100)
         
-        # Базовые пороги
         self.base_thresholds = {
             "min_confidence": settings.ADAPTIVE_BASE_MIN_CONFIDENCE,
             "min_size_rel": settings.ADAPTIVE_BASE_MIN_SIZE_REL,
             "min_volume_24h": settings.ADAPTIVE_BASE_MIN_VOLUME_24H
         }
         
-        # Модификаторы для разных режимов
         self.regime_modifiers = {
             "bull": {
                 "min_confidence": settings.ADAPTIVE_BULL_CONFIDENCE_MODIFIER,
@@ -145,7 +140,6 @@ class AdaptiveThresholds:
               f"size_rel≥{self.base_thresholds['min_size_rel']:.2%}")
     
     def detect_market_regime(self, btc_change_7d: float) -> str:
-        """Определяет режим рынка на основе изменения BTC"""
         if btc_change_7d > settings.ADAPTIVE_BULL_THRESHOLD:
             return "bull"
         elif btc_change_7d < settings.ADAPTIVE_BEAR_THRESHOLD:
@@ -154,7 +148,6 @@ class AdaptiveThresholds:
             return "sideways"
     
     def update_regime(self, btc_change_7d: float):
-        """Обновляет режим рынка"""
         old_regime = self.market_regime
         self.market_regime = self.detect_market_regime(btc_change_7d)
         
@@ -162,8 +155,6 @@ class AdaptiveThresholds:
             print(f"📊 [REGIME] Режим рынка изменён: {old_regime} → {self.market_regime}")
     
     def get_current_thresholds(self) -> Dict:
-        """Возвращает текущие пороги с учётом режима и производительности"""
-        
         modifiers = self.regime_modifiers[self.market_regime]
         
         thresholds = {
@@ -172,7 +163,6 @@ class AdaptiveThresholds:
             "min_volume_24h": int(self.base_thresholds["min_volume_24h"] * modifiers["min_volume_24h"])
         }
         
-        # Адаптация на основе производительности
         if len(self.performance_history) >= settings.ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION:
             recent_accuracy = self._calculate_recent_accuracy()
             
@@ -191,11 +181,9 @@ class AdaptiveThresholds:
         return thresholds
     
     def add_performance_result(self, signal_data: Dict):
-        """Добавляет результат сигнала для обучения"""
         self.performance_history.append(signal_data)
     
     def _calculate_recent_accuracy(self) -> float:
-        """Считает точность последних N сигналов"""
         min_signals = settings.ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION
         
         if len(self.performance_history) < min_signals:
@@ -207,7 +195,6 @@ class AdaptiveThresholds:
         return successful / len(recent)
     
     def get_stats(self) -> Dict:
-        """Статистика адаптивной системы"""
         if not self.performance_history:
             return {
                 "regime": self.market_regime,
@@ -238,7 +225,6 @@ class WalletDatabase:
         self._load()
     
     def _load(self):
-        """Загружает кошельки из файла"""
         try:
             if self.db_path.exists():
                 with open(self.db_path, 'r') as f:
@@ -253,7 +239,6 @@ class WalletDatabase:
             self.wallets = []
     
     def _save(self):
-        """Сохраняет кошельки в файл"""
         try:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             
@@ -263,7 +248,6 @@ class WalletDatabase:
             print(f"⚠️ [WALLET_DB] Ошибка сохранения: {e}")
     
     def add_wallet(self, wallet_stats) -> bool:
-        """Добавляет новый кошелёк"""
         existing = self.get_wallet(wallet_stats.address, wallet_stats.chain)
         if existing:
             return False
@@ -293,18 +277,15 @@ class WalletDatabase:
         return True
     
     def get_wallet(self, address: str, chain: str) -> Optional[Dict]:
-        """Получает кошелёк по адресу"""
         for wallet in self.wallets:
             if wallet["address"].lower() == address.lower() and wallet["chain"] == chain:
                 return wallet
         return None
     
     def get_active_wallets(self) -> List[Dict]:
-        """Возвращает активные кошельки"""
         return [w for w in self.wallets if w.get("is_active", True)]
     
     def deactivate_wallet(self, address: str, chain: str, reason: str):
-        """Деактивирует кошелёк"""
         wallet = self.get_wallet(address, chain)
         if wallet:
             wallet["is_active"] = False
@@ -314,7 +295,6 @@ class WalletDatabase:
             print(f"❌ [WALLET_DB] Деактивирован: {address[:10]}... ({reason})")
     
     def update_wallet_score(self, address: str, chain: str, new_score: int):
-        """Обновляет скор кошелька"""
         wallet = self.get_wallet(address, chain)
         if wallet:
             old_score = wallet.get("score", settings.WALLET_INITIAL_SCORE)
@@ -326,7 +306,6 @@ class WalletDatabase:
                 print(f"📊 [WALLET_DB] Скор обновлён: {address[:10]}... {old_score} → {new_score}")
     
     def _prune_worst_wallets(self, count: int):
-        """Удаляет худшие кошельки"""
         active = self.get_active_wallets()
         if len(active) <= count:
             return
@@ -348,7 +327,7 @@ class IntegratedScheduler:
     
     def __init__(self):
         print("\n" + "="*80)
-        print("🚀 INTEGRATED SCHEDULER v4.0 - INITIALIZATION")
+        print("🚀 INTEGRATED SCHEDULER v4.2 - INITIALIZATION")
         print("="*80 + "\n")
         
         # ====================================================================
@@ -384,6 +363,22 @@ class IntegratedScheduler:
             print("   ✓ Wallet Database")
         else:
             self.wallet_db = None
+        
+        # НОВОЕ v4.2: Solana fallback RPC management
+        self.solana_consecutive_failures = 0
+        self.solana_backoff_until = 0
+        self.solana_max_consecutive_failures = 3
+        self.solana_backoff_seconds = 120
+        
+        self.solana_rpc_endpoints = [
+            f"https://mainnet.helius-rpc.com/?api-key={settings.HELIUS_API_KEY}",
+            "https://api.mainnet-beta.solana.com",
+            "https://rpc.ankr.com/solana",
+            "https://solana-api.projectserum.com"
+        ]
+        self.current_solana_rpc_index = 0
+        
+        print("   ✓ Solana Fallback RPC (4 endpoints)")
         
         # ====================================================================
         # TRADING SYSTEM COMPONENTS (НОВОЕ)
@@ -482,14 +477,12 @@ class IntegratedScheduler:
         # STATE & QUEUES
         # ====================================================================
         
-        # Очереди и кэши
         self.publication_queue: List[Dict] = []
         self.seen_keys: Set[str] = set()
         self.recent_publications = deque(maxlen=settings.POSTS_PER_HOUR_CAP)
         
         # Статистика
         self.stats = {
-            # Whale monitoring
             "events_collected": 0,
             "events_qualified": 0,
             "events_published": 0,
@@ -498,15 +491,11 @@ class IntegratedScheduler:
             "wallets_discovered": 0,
             "wallets_removed": 0,
             "errors": 0,
-            
-            # Trading system
             "trading_signals_generated": 0,
             "trading_signals_sent": 0,
             "positions_opened": 0,
             "positions_closed": 0,
             "trading_pnl_total": 0.0,
-            
-            # General
             "last_cycle_time": None,
             "last_discovery_run": None,
             "last_validation_run": None,
@@ -514,10 +503,11 @@ class IntegratedScheduler:
             "last_trading_signal": None,
             "start_time": datetime.utcnow(),
             "analytics_calls": 0,
-            "chains_events": defaultdict(int)
+            "chains_events": defaultdict(int),
+            "solana_rpc_switches": 0,
+            "solana_backoffs": 0
         }
         
-        # Очередь для проверки результатов
         if settings.PERFORMANCE_TRACKING_ENABLED:
             self.pending_verification = deque(maxlen=settings.PERFORMANCE_HISTORY_SIZE)
         else:
@@ -536,63 +526,43 @@ class IntegratedScheduler:
         
         self._print_banner()
         
-        # Отправляем уведомление о запуске
         if self.alert_manager and settings.SEND_STARTUP_NOTIFICATION:
             try:
                 await self.alert_manager.send_startup_notification()
             except Exception as e:
                 print(f"⚠️ Не удалось отправить startup notification: {e}")
         
-        # ====================================================================
-        # СОЗДАЕМ ВСЕ ЦИКЛЫ
-        # ====================================================================
-        
         tasks = []
         
-        # Основные циклы (всегда активны)
         tasks.extend([
             asyncio.create_task(self._whale_monitor_loop(), name="whale_monitor"),
             asyncio.create_task(self._stats_reporter_loop(), name="stats"),
             asyncio.create_task(self._health_check_loop(), name="health"),
         ])
         
-        # Discovery цикл
         if settings.ASSETS == '*':
             tasks.append(asyncio.create_task(self._discovery_loop(), name="discovery"))
         
-        # Adaptive thresholds
         if settings.ADAPTIVE_THRESHOLDS_ENABLED:
             tasks.append(asyncio.create_task(self._market_regime_updater_loop(), name="regime_updater"))
         
-        # Performance tracking
         if settings.PERFORMANCE_TRACKING_ENABLED:
             tasks.append(asyncio.create_task(self._performance_tracker_loop(), name="performance"))
         
-        # Validation
         if settings.VALIDATION_ENABLED and self.wallet_db:
             tasks.append(asyncio.create_task(self._validation_loop(), name="validation"))
         
-        # Smart discovery
         if settings.SMART_DISCOVERY_ENABLED and self.smart_discovery:
             tasks.append(asyncio.create_task(self._smart_discovery_loop(), name="smart_discovery"))
         
-        # Mining system
         if self.mining_system and MINING_AVAILABLE:
             tasks.append(asyncio.create_task(self._mining_loop(), name="mining"))
-        
-        # ====================================================================
-        # TRADING SYSTEM LOOPS (НОВОЕ)
-        # ====================================================================
         
         if self.trading_enabled:
             tasks.extend([
                 asyncio.create_task(self._trading_signal_loop(), name="trading_signals"),
                 asyncio.create_task(self._position_management_loop(), name="position_management"),
             ])
-        
-        # ====================================================================
-        # ЗАПУСКАЕМ ВСЕ ЦИКЛЫ
-        # ====================================================================
         
         try:
             print(f"\n🚀 [SCHEDULER] Запущено {len(tasks)} циклов:")
@@ -616,23 +586,25 @@ class IntegratedScheduler:
         """
         Выполнить один цикл whale monitoring
         
-        Этот метод вызывается из main.py в бесконечном цикле.
-        Выполняет одну итерацию мониторинга без sleep и без бесконечного цикла.
-        
-        Returns:
-            Dict с результатами цикла
+        Этот метод вызывается из main.py в бесконечном цикле
         """
         try:
-            # Обновляем время последнего цикла
             self.stats["last_cycle_time"] = datetime.utcnow()
             
-            # Получаем события за последний период
             start_time = datetime.utcnow() - timedelta(seconds=settings.POLL_SECONDS)
             
             events = []
             async with BlockchainMonitor() as monitor:
+                # НОВОЕ v4.2: Устанавливаем текущий Solana RPC
+                if "solana" in settings.ENABLED_CHAINS:
+                    monitor.apis["solana"]["url"] = self.solana_rpc_endpoints[self.current_solana_rpc_index]
+                
                 events = await monitor.fetch_events(start_time)
                 self.stats["events_collected"] += len(events)
+                
+                # НОВОЕ v4.2: Проверяем Solana статус
+                solana_stats = monitor.get_stats()
+                await self._handle_solana_status(solana_stats)
                 
                 if not events:
                     print("👍 [WHALE] Новых перемещений не найдено")
@@ -640,7 +612,6 @@ class IntegratedScheduler:
                     print(f"🔄 [WHALE] Найдено {len(events)} событий")
                     await self._process_whale_events(events)
             
-            # Публикуем из очереди
             await self._publish_from_queue()
             
             return {
@@ -653,6 +624,60 @@ class IntegratedScheduler:
             self.stats["errors"] += 1
             print(f"❌ [WHALE] Ошибка в run_cycle: {e}")
             raise
+    
+    # ========================================================================
+    # НОВОЕ v4.2: SOLANA FALLBACK MANAGEMENT
+    # ========================================================================
+    
+    async def _handle_solana_status(self, monitor_stats: Dict):
+        """
+        НОВОЕ v4.2: Обработка статуса Solana и управление fallback RPC
+        """
+        
+        if "solana" not in settings.ENABLED_CHAINS:
+            return
+        
+        solana_errors = monitor_stats.get("errors", {}).get("solana", 0)
+        solana_retries = monitor_stats.get("retries_429", {}).get("solana", 0)
+        
+        current_time = time.time()
+        
+        if solana_errors > 0 or solana_retries >= 3:
+            self.solana_consecutive_failures += 1
+            print(f"⚠️  [SOLANA] Неудача #{self.solana_consecutive_failures} (errors={solana_errors}, retries={solana_retries})")
+            
+            if self.solana_consecutive_failures >= self.solana_max_consecutive_failures:
+                self.solana_backoff_until = current_time + self.solana_backoff_seconds
+                self.stats["solana_backoffs"] += 1
+                print(f"🔄 [SOLANA] Backoff на {self.solana_backoff_seconds}s")
+                
+                # Переключаем на следующий RPC
+                old_index = self.current_solana_rpc_index
+                self.current_solana_rpc_index = (self.current_solana_rpc_index + 1) % len(self.solana_rpc_endpoints)
+                self.stats["solana_rpc_switches"] += 1
+                
+                next_rpc = self.solana_rpc_endpoints[self.current_solana_rpc_index]
+                print(f"🔄 [SOLANA] RPC switch: endpoint {old_index} → {self.current_solana_rpc_index}")
+                print(f"   New RPC: {next_rpc[:50]}...")
+                
+                self.solana_consecutive_failures = 0
+        else:
+            # Успех - сбрасываем счетчик
+            if self.solana_consecutive_failures > 0:
+                print(f"✅ [SOLANA] Восстановление после {self.solana_consecutive_failures} неудач")
+            self.solana_consecutive_failures = 0
+    
+    def _should_skip_solana(self) -> bool:
+        """Проверяет нужно ли пропустить Solana из-за backoff"""
+        current_time = time.time()
+        
+        if current_time < self.solana_backoff_until:
+            remaining = int(self.solana_backoff_until - current_time)
+            if remaining % 30 == 0:  # Логируем каждые 30 секунд
+                print(f"⏸️  [SOLANA] В backoff режиме, осталось {remaining}s")
+            return True
+        
+        return False
     
     # ========================================================================
     # WHALE MONITORING LOOPS
@@ -669,9 +694,23 @@ class IntegratedScheduler:
                 print(f"\n📊 [WHALE] Цикл: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
                 self.stats["last_cycle_time"] = datetime.utcnow()
                 
+                # НОВОЕ v4.2: Определяем chains с учетом Solana backoff
+                chains_to_scan = settings.ENABLED_CHAINS.copy()
+                
+                if "solana" in chains_to_scan and self._should_skip_solana():
+                    chains_to_scan.remove("solana")
+                
                 async with BlockchainMonitor() as monitor:
-                    events = await monitor.fetch_events(start_time)
+                    # НОВОЕ v4.2: Устанавливаем текущий Solana RPC
+                    if "solana" in chains_to_scan:
+                        monitor.apis["solana"]["url"] = self.solana_rpc_endpoints[self.current_solana_rpc_index]
+                    
+                    events = await monitor.fetch_events(start_time, chains=chains_to_scan)
                     self.stats["events_collected"] += len(events)
+                    
+                    # НОВОЕ v4.2: Обработка Solana статуса
+                    solana_stats = monitor.get_stats()
+                    await self._handle_solana_status(solana_stats)
                     
                     if not events:
                         print("👍 [WHALE] Новых перемещений не найдено")
@@ -710,7 +749,6 @@ class IntegratedScheduler:
         
         print(f"🔄 [PIPELINE] Обработка {len(events)} событий")
         
-        # Получаем текущие пороги
         if self.adaptive_thresholds:
             thresholds = self.adaptive_thresholds.get_current_thresholds()
             print(f"⚙️ [THRESHOLDS] Confidence≥{thresholds['min_confidence']}, "
@@ -739,38 +777,31 @@ class IntegratedScheduler:
             
             for event in events:
                 try:
-                    # Дедупликация
                     dedup_key = event.get_dedup_key()
                     if dedup_key in self.seen_keys:
                         filter_stats["dedup"] += 1
                         continue
                     
-                    # Проверка разрешённости актива
                     if not self._is_asset_allowed(event):
                         filter_stats["asset_not_allowed"] += 1
                         continue
                     
-                    # Фильтр внутренних/bridge
                     if event.is_internal or event.is_bridge or event.is_reorg:
                         filter_stats["internal_bridge"] += 1
                         continue
                     
-                    # Обогащение данными
                     await self.price_provider.enrich_event_with_market_data(event, session)
                     
-                    # Базовая проверка размера
                     if event.amount_usd < event.min_usd_threshold:
                         filter_stats["below_threshold"] += 1
                         continue
                     
-                    # Проверка confidence
                     verdict, confidence = self.scorer.calculate_verdict_and_confidence(event)
                     
                     if confidence < thresholds["min_confidence"]:
                         filter_stats["confidence_too_low"] += 1
                         continue
                     
-                    # Проверка размера относительно объёма
                     size_rel = event.amount_usd / event.market.volume_24h_usd if event.market.volume_24h_usd else 0
                     
                     if size_rel < thresholds["min_size_rel"]:
@@ -780,10 +811,6 @@ class IntegratedScheduler:
                     if event.market.volume_24h_usd < thresholds["min_volume_24h"]:
                         filter_stats["below_threshold"] += 1
                         continue
-                    
-                    # ================================================================
-                    # ADVANCED ANALYTICS INTEGRATION
-                    # ================================================================
                     
                     if self.analytics_enabled:
                         try:
@@ -836,10 +863,6 @@ class IntegratedScheduler:
                         except Exception as e:
                             print(f"⚠️ [ANALYTICS] Ошибка анализа: {e}")
                     
-                    # ================================================================
-                    # CROSS-CHAIN WALLET TRACKING
-                    # ================================================================
-                    
                     if self.chains_enabled and hasattr(event, 'from_address'):
                         try:
                             cross_chain_analysis = await self.unified_api.analyze_wallet_cross_chain(
@@ -856,7 +879,6 @@ class IntegratedScheduler:
                         except Exception as e:
                             print(f"⚠️ [CROSS-CHAIN] Ошибка: {e}")
                     
-                    # Прошло все фильтры
                     filter_stats["passed"] += 1
                     qualified_events.append(event)
                     self.seen_keys.add(dedup_key)
@@ -881,10 +903,8 @@ class IntegratedScheduler:
             if not qualified_events:
                 return
             
-            # Определение фаз
             qualified_events = self.scorer.detect_phase(qualified_events)
             
-            # Добавление в очередь публикации
             for event in qualified_events:
                 try:
                     verdict, confidence = self.scorer.calculate_verdict_and_confidence(event)
@@ -892,12 +912,10 @@ class IntegratedScheduler:
                     if not self.scorer.should_publish(event, verdict, confidence):
                         continue
                     
-                    # История
                     history_hint = await self.history_manager.find_similar_event(event, session)
                     if history_hint:
                         event.history_hint = history_hint
                     
-                    # Приоритет
                     if hasattr(event, 'final_score'):
                         priority = event.final_score
                     else:
@@ -922,11 +940,9 @@ class IntegratedScheduler:
         
         now = datetime.utcnow()
         
-        # Очищаем старые публикации
         while self.recent_publications and (now - self.recent_publications[0]).seconds > 3600:
             self.recent_publications.popleft()
         
-        # Проверяем лимит
         if len(self.recent_publications) >= settings.POSTS_PER_HOUR_CAP:
             print(f"⏸️ [RATE] Лимит {settings.POSTS_PER_HOUR_CAP}/час достигнут")
             return
@@ -975,16 +991,11 @@ class IntegratedScheduler:
                 self.stats["errors"] += 1
     
     # ========================================================================
-    # TRADING SYSTEM LOOPS (НОВОЕ)
+    # TRADING SYSTEM LOOPS
     # ========================================================================
     
     async def _trading_signal_loop(self):
-        """
-        Цикл генерации торговых сигналов
-        
-        Проверяет активы каждый час и генерирует сигналы
-        на основе полного анализа (технический + фундаментальный + ML)
-        """
+        """Цикл генерации торговых сигналов"""
         
         if not self.trading_enabled:
             print("⏭️ [TRADING] Отключен")
@@ -992,17 +1003,14 @@ class IntegratedScheduler:
         
         print("📊 [TRADING] Запущен цикл генерации сигналов")
         
-        # Список активов для мониторинга
         monitored_assets = getattr(settings, 'TRADING_MONITORED_ASSETS', [
             'BTC', 'ETH', 'SOL', 'BNB', 'XRP',
             'ADA', 'AVAX', 'DOT', 'MATIC', 'LINK',
             'UNI', 'AAVE', 'ARB', 'OP'
         ])
         
-        # Интервал проверки (по умолчанию 1 час)
         check_interval = getattr(settings, 'TRADING_SIGNAL_INTERVAL_HOURS', 1) * 3600
         
-        # Первый запуск через 5 минут после старта
         await asyncio.sleep(300)
         
         while not self._shutdown_flag:
@@ -1019,14 +1027,12 @@ class IntegratedScheduler:
                         try:
                             print(f"\n🔍 [TRADING] Анализ {asset}...")
                             
-                            # Получаем исторические данные
                             price_data = await self._fetch_ohlcv(asset, session)
                             
                             if price_data is None or len(price_data) < 50:
                                 print(f"   ⚠️ Недостаточно данных для {asset}")
                                 continue
                             
-                            # Генерируем сигнал
                             signal = await self.signal_generator.generate_signal(
                                 asset=asset,
                                 price_data=price_data,
@@ -1040,7 +1046,6 @@ class IntegratedScheduler:
                             signals_generated += 1
                             self.stats["trading_signals_generated"] += 1
                             
-                            # Фильтруем: отправляем только BUY/SELL сигналы
                             if signal.signal in ['STRONG_BUY', 'BUY', 'STRONG_SELL', 'SELL']:
                                 await self._send_trading_signal(signal)
                                 signals_sent += 1
@@ -1049,7 +1054,6 @@ class IntegratedScheduler:
                             else:
                                 print(f"   ⏸️ {asset}: {signal.signal} (не отправляем)")
                             
-                            # Пауза между активами
                             await asyncio.sleep(10)
                             
                         except Exception as e:
@@ -1063,7 +1067,6 @@ class IntegratedScheduler:
                 print(f"   Сигналов отправлено: {signals_sent}")
                 print(f"{'='*80}\n")
                 
-                # Ждём следующего цикла
                 print(f"⏰ [TRADING] Следующая проверка через {check_interval//3600}ч")
                 await asyncio.sleep(check_interval)
                 
@@ -1073,27 +1076,19 @@ class IntegratedScheduler:
                 await asyncio.sleep(600)
     
     async def _position_management_loop(self):
-        """
-        Цикл управления позициями
-        
-        Обновляет текущие цены и проверяет stop-loss/take-profit
-        каждую минуту для всех открытых позиций
-        """
+        """Цикл управления позициями"""
         
         if not self.trading_enabled:
             return
         
         print("💼 [POSITIONS] Запущен цикл управления позициями")
         
-        # Интервал обновления (по умолчанию 1 минута)
         update_interval = getattr(settings, 'POSITION_UPDATE_INTERVAL_SECONDS', 60)
         
-        # Первый запуск через 1 минуту
         await asyncio.sleep(60)
         
         while not self._shutdown_flag:
             try:
-                # Получаем открытые позиции
                 open_positions = self.signal_generator.positions.get_open_positions()
                 
                 if not open_positions:
@@ -1102,7 +1097,6 @@ class IntegratedScheduler:
                 
                 print(f"\n💼 [POSITIONS] Обновление {len(open_positions)} позиций...")
                 
-                # Получаем текущие цены
                 async with aiohttp.ClientSession() as session:
                     prices = {}
                     
@@ -1112,21 +1106,18 @@ class IntegratedScheduler:
                             if price:
                                 prices[position.asset] = price
                                 
-                                # Лог текущего P&L
                                 old_price = position.current_price
                                 if old_price:
                                     change_pct = ((price - old_price) / old_price) * 100
-                                    if abs(change_pct) > 1:  # Логируем только значительные изменения
+                                    if abs(change_pct) > 1:
                                         print(f"   {position.asset}: ${old_price:,.2f} → ${price:,.2f} ({change_pct:+.2f}%)")
                         
                         except Exception as e:
                             print(f"⚠️ [POSITIONS] Ошибка получения цены {position.asset}: {e}")
                     
-                    # Обновляем позиции (автоматически закроет по SL/TP)
                     if prices:
                         await self.signal_generator.positions.update_prices(prices)
                 
-                # Проверяем закрытые позиции
                 closed_count = self.stats["positions_closed"]
                 new_closed = await self._count_closed_positions()
                 
@@ -1143,11 +1134,7 @@ class IntegratedScheduler:
                 await asyncio.sleep(60)
     
     async def _fetch_ohlcv(self, asset: str, session: aiohttp.ClientSession) -> Optional[pd.DataFrame]:
-        """
-        Получение OHLCV данных для актива
-        
-        Использует Binance API для получения исторических свечей
-        """
+        """Получение OHLCV данных для актива"""
         
         try:
             symbol = f"{asset}USDT"
@@ -1211,7 +1198,6 @@ class IntegratedScheduler:
         try:
             message = self.signal_generator.format_signal_message(signal)
             
-            # Используем прямой Bot (как whale alerts)
             import telegram
             bot = telegram.Bot(token=settings.TELEGRAM_BOT_TOKEN)
             
@@ -1275,7 +1261,6 @@ class IntegratedScheduler:
                 print(f"⛏️ [MINING] Запуск mining cycle")
                 print(f"{'='*80}")
                 
-                # Discovery раз в 6 часов
                 if not self.stats.get("last_mining_discovery") or \
                    (datetime.utcnow() - self.stats["last_mining_discovery"]).total_seconds() > 21600:
                     
@@ -1287,7 +1272,6 @@ class IntegratedScheduler:
                     self.stats["wallets_discovered"] += result["added"]
                     self.stats["last_mining_discovery"] = datetime.utcnow()
                 
-                # Validation раз в день
                 if not self.stats.get("last_mining_validation") or \
                    (datetime.utcnow() - self.stats["last_mining_validation"]).total_seconds() > 86400:
                     
@@ -1407,7 +1391,6 @@ class IntegratedScheduler:
                                 else:
                                     self.stats["events_failed"] += 1
                                 
-                                # Обновляем скор кошелька
                                 if self.wallet_db and hasattr(event, 'from_address'):
                                     adjustment = settings.WALLET_SCORE_UPDATE_ON_SUCCESS if success else settings.WALLET_SCORE_UPDATE_ON_FAILURE
                                     wallet = self.wallet_db.get_wallet(event.from_address, event.chain)
@@ -1444,10 +1427,12 @@ class IntegratedScheduler:
     def _evaluate_signal_success(self, verdict: str, price_change: float) -> bool:
         """Оценка успешности сигнала"""
         
+        threshold = getattr(settings, 'PERFORMANCE_SUCCESS_THRESHOLD', 0.05)
+        
         if verdict == "bearish":
-            return price_change < settings.PERFORMANCE_SUCCESS_THRESHOLD_BEARISH
+            return price_change < -threshold
         elif verdict == "bullish":
-            return price_change > settings.PERFORMANCE_SUCCESS_THRESHOLD_BULLISH
+            return price_change > threshold
         else:
             return True
     
@@ -1611,7 +1596,6 @@ class IntegratedScheduler:
                     if self.chains_enabled:
                         extended_stats["chains_events"] = dict(self.stats.get("chains_events", {}))
                     
-                    # Trading stats
                     if self.trading_enabled:
                         try:
                             positions_summary = self.signal_generator.positions.get_summary()
@@ -1625,9 +1609,16 @@ class IntegratedScheduler:
                         except:
                             pass
                     
+                    # НОВОЕ v4.2: Solana stats
+                    extended_stats["solana"] = {
+                        "rpc_switches": self.stats.get("solana_rpc_switches", 0),
+                        "backoffs": self.stats.get("solana_backoffs", 0),
+                        "current_rpc_index": self.current_solana_rpc_index,
+                        "consecutive_failures": self.solana_consecutive_failures
+                    }
+                    
                     await self.alert_manager.send_daily_stats({"integrated": extended_stats})
                 
-                # Сброс счётчиков
                 self.stats["events_collected"] = 0
                 self.stats["events_qualified"] = 0
                 self.stats["events_published"] = 0
@@ -1718,7 +1709,7 @@ class IntegratedScheduler:
     def _print_banner(self):
         """Вывод баннера при запуске"""
         print("\n" + "="*80)
-        print("🐋 INTEGRATED SCHEDULER v4.0")
+        print("🐋 INTEGRATED SCHEDULER v4.2")
         print("="*80)
         print(f"Режим: {'DISCOVERY' if settings.ASSETS == '*' else 'ALLOWLIST'}")
         print(f"Канал: {settings.CHAT_ID}")
@@ -1730,6 +1721,11 @@ class IntegratedScheduler:
         print(f"  Performance Tracking: {'✅' if settings.PERFORMANCE_TRACKING_ENABLED else '❌'}")
         print(f"  Validation: {'✅ каждые ' + str(settings.VALIDATION_INTERVAL_DAYS) + 'д' if settings.VALIDATION_ENABLED else '❌'}")
         print(f"  Mining System: {'✅' if self.mining_system else '❌'}")
+        
+        print(f"\n🌊 SOLANA (v4.2):")
+        print(f"  Fallback RPC: ✅ {len(self.solana_rpc_endpoints)} endpoints")
+        print(f"  Current RPC: {self.solana_rpc_endpoints[self.current_solana_rpc_index][:50]}...")
+        print(f"  Intelligent Backoff: ✅")
         
         print(f"\n📈 TRADING SYSTEM:")
         if self.trading_enabled:
@@ -1773,7 +1769,6 @@ class IntegratedScheduler:
         self._shutdown_flag = True
         self._save_state()
         
-        # Финальная статистика
         print("\n" + "="*80)
         print("📊 ФИНАЛЬНАЯ СТАТИСТИКА")
         print("="*80)
@@ -1788,6 +1783,11 @@ class IntegratedScheduler:
             accuracy = (self.stats['events_successful'] / total) * 100
             print(f"  Успешных: {self.stats['events_successful']}/{total} ({accuracy:.1f}%)")
         
+        print(f"\n🌊 SOLANA:")
+        print(f"  RPC Switches: {self.stats.get('solana_rpc_switches', 0)}")
+        print(f"  Backoffs: {self.stats.get('solana_backoffs', 0)}")
+        print(f"  Final RPC Index: {self.current_solana_rpc_index}")
+        
         if self.trading_enabled:
             print(f"\n📈 TRADING SYSTEM:")
             print(f"  Сигналов сгенерировано: {self.stats.get('trading_signals_generated', 0)}")
@@ -1800,7 +1800,6 @@ class IntegratedScheduler:
                 print(f"  Открытых позиций: {positions_summary['total_open']}")
                 print(f"  Unrealized P&L: ${positions_summary['total_unrealized_pnl_usd']:,.2f}")
                 
-                # Performance metrics
                 metrics = await self.signal_generator.performance.calculate_metrics(period_days=30)
                 if metrics.total_trades > 0:
                     print(f"\n  📊 Производительность (30д):")
@@ -1841,5 +1840,4 @@ class IntegratedScheduler:
         print("="*80 + "\n")
 
 
-# Глобальный экземпляр
 scheduler = IntegratedScheduler()
