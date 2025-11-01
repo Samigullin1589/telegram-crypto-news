@@ -1,8 +1,12 @@
-# app/settings.py (РЕВОЛЮЦИОННАЯ ВЕРСИЯ v3.0 - Self-Learning System)
+# app/settings.py (РЕВОЛЮЦИОННАЯ ВЕРСИЯ v4.0 - Production Ready)
 """
 INTELLIGENT CRYPTO MONITOR - Configuration
 
-НОВЫЕ ВОЗМОЖНОСТИ v3.0:
+НОВЫЕ ВОЗМОЖНОСТИ v4.0:
+✅ Production-ready настройки для Render.com
+✅ Таймауты для HTTP/RPC запросов
+✅ Контроль памяти и ресурсов
+✅ Улучшенная обработка ошибок
 ✅ Smart Money Discovery - настройки автопоиска трейдеров
 ✅ Validation Engine - параметры очистки базы
 ✅ Performance Tracking - отслеживание результатов
@@ -21,6 +25,34 @@ from typing import List, Optional, Dict
 from datetime import datetime
 
 load_dotenv()
+
+# ============================================================================
+# PRODUCTION НАСТРОЙКИ (НОВОЕ v4.0) - КРИТИЧНО ДЛЯ RENDER.COM
+# ============================================================================
+
+# HTTP Server
+PORT = int(os.getenv('PORT', '8000'))
+
+# HTTP Timeouts (критично для Render)
+HTTP_TIMEOUT = int(os.getenv('HTTP_TIMEOUT', '30'))  # секунды
+RPC_TIMEOUT = int(os.getenv('RPC_TIMEOUT', '15'))  # секунды для RPC запросов
+WEBHOOK_TIMEOUT = int(os.getenv('WEBHOOK_TIMEOUT', '10'))  # секунды для webhook
+
+# Memory Control (критично для Render Free Tier - 512MB)
+MAX_MEMORY_MB = int(os.getenv('MAX_MEMORY_MB', '450'))  # оставляем 62MB запаса
+GC_INTERVAL_SECONDS = int(os.getenv('GC_INTERVAL_SECONDS', '300'))  # 5 минут
+
+# Webhook URL (для Telegram webhook mode)
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')  # будет автоопределён если пусто
+RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL', '')
+
+# Connection Pools
+HTTP_MAX_CONNECTIONS = int(os.getenv('HTTP_MAX_CONNECTIONS', '50'))
+HTTP_MAX_KEEPALIVE = int(os.getenv('HTTP_MAX_KEEPALIVE', '10'))
+
+# System Status
+WHALE_ENABLED = os.getenv('WHALE_ENABLED', 'true').lower() == 'true'
+NEWS_ENABLED = os.getenv('NEWS_ENABLED', 'false').lower() == 'true'
 
 # ============================================================================
 # ОБЩИЕ НАСТРОЙКИ
@@ -51,15 +83,15 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', TELEGRAM_BOT_TOKEN)
 ASSETS = os.getenv('ASSETS', '*')
 ASSETS_LIST = [] if ASSETS == '*' else [a.strip() for a in ASSETS.split(',') if a.strip()]
 
-# Базовые пороги
-MIN_USD = float(os.getenv('MIN_USD', '500000'))
+# Базовые пороги (оптимизировано для production)
+MIN_USD = float(os.getenv('MIN_USD', '100000'))  # снижено с 500k
 MIN_USD_FLOOR = float(os.getenv('MIN_USD_FLOOR', '50000'))
 MIN_USD_K = float(os.getenv('MIN_USD_K', '0.02'))
 MIN_USD_PCTL = float(os.getenv('MIN_USD_PCTL', '75'))
 
-# Временные параметры
-POLL_SECONDS = int(os.getenv('POLL_SECONDS', '180'))
-START_FROM_MINUTES_AGO = int(os.getenv('START_FROM_MINUTES_AGO', '90'))
+# Временные параметры (оптимизировано для production)
+POLL_SECONDS = int(os.getenv('POLL_SECONDS', '7'))  # быстрый опрос
+START_FROM_MINUTES_AGO = int(os.getenv('START_FROM_MINUTES_AGO', '15'))  # короткая история
 
 # Discovery параметры
 DISCOVERY_TOP_N_PER_CHAIN = int(os.getenv('DISCOVERY_TOP_N_PER_CHAIN', '200'))
@@ -70,17 +102,17 @@ MIN_TOKEN_AGE_DAYS = int(os.getenv('MIN_TOKEN_AGE_DAYS', '7'))
 # Лимиты публикаций
 POSTS_PER_HOUR_CAP = int(os.getenv('POSTS_PER_HOUR_CAP', '6'))
 
-# Визуализация
-ENABLE_IMAGES = int(os.getenv('ENABLE_IMAGES', '1')) == 1
+# Визуализация (оптимизировано для экономии памяти)
+ENABLE_IMAGES = int(os.getenv('ENABLE_IMAGES', '0')) == 1  # отключено для production
 CHART_BACKEND = os.getenv('CHART_BACKEND', 'sparkline')
 CHART_THEME = os.getenv('CHART_THEME', 'dark')
 CHART_WIDTH = int(os.getenv('CHART_WIDTH', '800'))
 CHART_HEIGHT = int(os.getenv('CHART_HEIGHT', '600'))
 EXCHANGE_PREFERENCE = [e.strip() for e in os.getenv('EXCHANGE_PREFERENCE', 'binance,okx,bybit,coinbase').split(',')]
 
-# Логирование
+# Логирование (оптимизировано для production)
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-DEBUG_FILTERS = int(os.getenv('DEBUG_FILTERS', '1')) == 1
+DEBUG_FILTERS = int(os.getenv('DEBUG_FILTERS', '0')) == 1  # отключено для production
 
 # Настройки алертов
 ENABLE_ALERTS = int(os.getenv('ENABLE_ALERTS', '1')) == 1
@@ -93,10 +125,10 @@ RATE_LIMIT_ENABLED = int(os.getenv('RATE_LIMIT_ENABLED', '1')) == 1
 RATE_LIMIT_CALLS = int(os.getenv('RATE_LIMIT_CALLS', '5'))
 RATE_LIMIT_PERIOD = int(os.getenv('RATE_LIMIT_PERIOD', '60'))
 
-# Retry настройки
+# Retry настройки (с таймаутами)
 RETRY_MAX_ATTEMPTS = int(os.getenv('RETRY_MAX_ATTEMPTS', '3'))
 RETRY_BACKOFF_FACTOR = int(os.getenv('RETRY_BACKOFF_FACTOR', '2'))
-RETRY_TIMEOUT = int(os.getenv('RETRY_TIMEOUT', '30'))
+RETRY_TIMEOUT = int(os.getenv('RETRY_TIMEOUT', '15'))  # снижено с 30
 
 # Health Check
 HEALTH_CHECK_ENABLED = int(os.getenv('HEALTH_CHECK_ENABLED', '1')) == 1
@@ -115,7 +147,7 @@ WATCHLIST_MAX_SIZE = int(os.getenv('WATCHLIST_MAX_SIZE', '100'))
 # ============================================================================
 # NEWS PROCESSOR - НАСТРОЙКИ (ИСПРАВЛЕНИЕ ОШИБКИ)
 # ============================================================================
-NEWS_PROCESSOR_ENABLED = int(os.getenv('NEWS_PROCESSOR_ENABLED', '0')) == 1
+NEWS_PROCESSOR_ENABLED = NEWS_ENABLED
 NEWS_CHECK_INTERVAL_MINUTES = int(os.getenv('NEWS_CHECK_INTERVAL_MINUTES', '15'))
 NEWS_MAX_AGE_HOURS = int(os.getenv('NEWS_MAX_AGE_HOURS', '24'))
 NEWS_MIN_IMPACT_SCORE = int(os.getenv('NEWS_MIN_IMPACT_SCORE', '7'))
@@ -133,7 +165,7 @@ GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
 # ============================================================================
 
 # Главный переключатель Trading System
-TRADING_ENABLED = os.getenv('TRADING_ENABLED', 'false').lower() == 'true'
+TRADING_ENABLED = os.getenv('TRADING_ENABLED', 'true').lower() == 'true'  # включено по умолчанию
 
 # Настройки торговых сигналов
 TRADING_MIN_CONFIDENCE = int(os.getenv('TRADING_MIN_CONFIDENCE', '70'))
@@ -193,8 +225,10 @@ VALIDATION_ENABLED = int(os.getenv('VALIDATION_ENABLED', '1')) == 1
 VALIDATION_INTERVAL_DAYS = int(os.getenv('VALIDATION_INTERVAL_DAYS', '7'))
 
 # Критерии удаления
-VALIDATION_MAX_INACTIVE_DAYS = int(os.getenv('VALIDATION_MAX_INACTIVE_DAYS', '60'))  # 60 дней без активности
+VALIDATION_MAX_INACTIVE_DAYS = int(os.getenv('VALIDATION_MAX_INACTIVE_DAYS', '30'))  # снижено с 60
 VALIDATION_MIN_SCORE_TO_KEEP = int(os.getenv('VALIDATION_MIN_SCORE_TO_KEEP', '30'))  # минимальный скор
+VALIDATION_MIN_TRADES_TO_KEEP = int(os.getenv('VALIDATION_MIN_TRADES_TO_KEEP', '3'))  # минимум сделок
+VALIDATION_MIN_WIN_RATE_TO_KEEP = float(os.getenv('VALIDATION_MIN_WIN_RATE_TO_KEEP', '0.40'))  # минимальный winrate
 VALIDATION_MIN_ROI_TO_KEEP = float(os.getenv('VALIDATION_MIN_ROI_TO_KEEP', '-0.20'))  # -20% ROI минимум
 
 # Дополнительные проверки
@@ -212,8 +246,8 @@ VALIDATION_NOTIFY_THRESHOLD = int(os.getenv('VALIDATION_NOTIFY_THRESHOLD', '5'))
 # Главный переключатель
 PERFORMANCE_TRACKING_ENABLED = int(os.getenv('PERFORMANCE_TRACKING_ENABLED', '1')) == 1
 
-# Интервалы проверки (в минутах)
-PERFORMANCE_CHECK_INTERVALS = [int(x) for x in os.getenv('PERFORMANCE_CHECK_INTERVALS', '60,240,1440').split(',')]  # 1ч, 4ч, 24ч
+# Интервалы проверки (в минутах) - конвертируем в часы
+PERFORMANCE_CHECK_INTERVALS = [int(x) for x in os.getenv('PERFORMANCE_CHECK_INTERVALS', '1,4,24,72,168').split(',')]  # 1ч, 4ч, 24ч, 72ч, 168ч
 
 # История
 PERFORMANCE_HISTORY_SIZE = int(os.getenv('PERFORMANCE_HISTORY_SIZE', '1000'))  # макс сигналов в истории
@@ -227,6 +261,9 @@ PERFORMANCE_MIN_CONFIDENCE_FOR_TRACKING = int(os.getenv('PERFORMANCE_MIN_CONFIDE
 PERFORMANCE_NOTIFY_ON_MILESTONES = int(os.getenv('PERFORMANCE_NOTIFY_ON_MILESTONES', '1')) == 1
 PERFORMANCE_MILESTONE_SIGNALS = [int(x) for x in os.getenv('PERFORMANCE_MILESTONE_SIGNALS', '10,50,100,500').split(',')]
 
+# Автоматическая обратная связь в систему
+PERFORMANCE_ENABLE_AUTO_FEEDBACK = int(os.getenv('PERFORMANCE_ENABLE_AUTO_FEEDBACK', '1')) == 1
+
 # ============================================================================
 # НОВОЕ: ADAPTIVE THRESHOLDS (Динамические пороги)
 # ============================================================================
@@ -235,9 +272,9 @@ PERFORMANCE_MILESTONE_SIGNALS = [int(x) for x in os.getenv('PERFORMANCE_MILESTON
 ADAPTIVE_THRESHOLDS_ENABLED = int(os.getenv('ADAPTIVE_THRESHOLDS_ENABLED', '1')) == 1
 
 # Базовые значения (отправная точка)
-ADAPTIVE_BASE_MIN_CONFIDENCE = int(os.getenv('ADAPTIVE_BASE_MIN_CONFIDENCE', '30'))
-ADAPTIVE_BASE_MIN_SIZE_REL = float(os.getenv('ADAPTIVE_BASE_MIN_SIZE_REL', '0.10'))  # 10%
-ADAPTIVE_BASE_MIN_VOLUME_24H = int(os.getenv('ADAPTIVE_BASE_MIN_VOLUME_24H', '1000000'))  # $1M
+ADAPTIVE_BASE_MIN_CONFIDENCE = int(os.getenv('ADAPTIVE_BASE_MIN_CONFIDENCE', '70'))  # повышено с 30
+ADAPTIVE_BASE_MIN_SIZE_REL = float(os.getenv('ADAPTIVE_BASE_MIN_SIZE_REL', '0.01'))  # снижено с 0.10
+ADAPTIVE_BASE_MIN_VOLUME_24H = float(os.getenv('ADAPTIVE_BASE_MIN_VOLUME_24H', '1000000'))  # $1M
 
 # Market Regime Detection
 ADAPTIVE_BULL_THRESHOLD = float(os.getenv('ADAPTIVE_BULL_THRESHOLD', '10.0'))  # BTC +10% за неделю
@@ -300,14 +337,15 @@ WALLET_DB_JSON_PATH = os.getenv('WALLET_DB_JSON_PATH', 'data/wallets.json')
 WALLET_DB_SQLITE_PATH = os.getenv('WALLET_DB_SQLITE_PATH', 'data/wallets.db')
 
 # Система оценки кошельков
-WALLET_INITIAL_SCORE = int(os.getenv('WALLET_INITIAL_SCORE', '50'))  # начальный скор
+WALLET_BASE_SCORE = int(os.getenv('WALLET_BASE_SCORE', '50'))  # начальный скор (переименовано из WALLET_INITIAL_SCORE)
+WALLET_INITIAL_SCORE = WALLET_BASE_SCORE  # алиас для совместимости
 WALLET_MIN_SCORE = int(os.getenv('WALLET_MIN_SCORE', '0'))
 WALLET_MAX_SCORE = int(os.getenv('WALLET_MAX_SCORE', '100'))
 
 # Обновление скора
 WALLET_SCORE_UPDATE_ON_SUCCESS = int(os.getenv('WALLET_SCORE_UPDATE_ON_SUCCESS', '+5'))
 WALLET_SCORE_UPDATE_ON_FAILURE = int(os.getenv('WALLET_SCORE_UPDATE_ON_FAILURE', '-3'))
-WALLET_SCORE_DECAY_PER_DAY = int(os.getenv('WALLET_SCORE_DECAY_PER_DAY', '1'))  # естественная деградация
+WALLET_SCORE_DECAY_PER_DAY = float(os.getenv('WALLET_SCORE_DECAY_PER_DAY', '1.0'))  # естественная деградация
 
 # Лимиты
 WALLET_MAX_TRACKED = int(os.getenv('WALLET_MAX_TRACKED', '500'))  # максимум кошельков
@@ -318,34 +356,67 @@ WALLET_AUTO_PRUNE = int(os.getenv('WALLET_AUTO_PRUNE', '1')) == 1  # автоу�
 # ============================================================================
 
 # Blockchain explorers
-ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY')
+ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
 BSCSCAN_API_KEY = os.getenv('BSCSCAN_API_KEY', ETHERSCAN_API_KEY)
-HELIUS_API_KEY = os.getenv('HELIUS_API_KEY')
-TRONSCAN_API_KEY = os.getenv('TRONSCAN_API_KEY')
-SOLSCAN_API_KEY = os.getenv('SOLSCAN_API_KEY')
+HELIUS_API_KEY = os.getenv('HELIUS_API_KEY', '')
+TRONSCAN_API_KEY = os.getenv('TRONSCAN_API_KEY', '')
+SOLSCAN_API_KEY = os.getenv('SOLSCAN_API_KEY', '')
 
 # Multi-chain API keys
 BASE_API_KEY = os.getenv('BASE_API_KEY', ETHERSCAN_API_KEY)
+BASESCAN_API_KEY = BASE_API_KEY  # алиас
 ARBITRUM_API_KEY = os.getenv('ARBITRUM_API_KEY', ETHERSCAN_API_KEY)
+ARBISCAN_API_KEY = ARBITRUM_API_KEY  # алиас
 OPTIMISM_API_KEY = os.getenv('OPTIMISM_API_KEY', ETHERSCAN_API_KEY)
-AVALANCHE_API_KEY = os.getenv('AVALANCHE_API_KEY')
-POLYGON_API_KEY = os.getenv('POLYGON_API_KEY')
+AVALANCHE_API_KEY = os.getenv('AVALANCHE_API_KEY', '')
+POLYGON_API_KEY = os.getenv('POLYGON_API_KEY', '')
+POLYGONSCAN_API_KEY = POLYGON_API_KEY  # алиас
 
 # RPC endpoints
-SOLANA_RPC_URLS = os.getenv('SOLANA_RPC_URLS', 'https://api.mainnet-beta.solana.com').split(',')
-ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
+ETH_RPC_URL = os.getenv('ETH_RPC_URL', 'https://eth.llamarpc.com')
+ETH_RPC_BACKUP = os.getenv('ETH_RPC_BACKUP', 'https://rpc.ankr.com/eth')
+
+BSC_RPC_URL = os.getenv('BSC_RPC_URL', 'https://bsc-dataseed.binance.org')
+BSC_RPC_BACKUP = os.getenv('BSC_RPC_BACKUP', 'https://rpc.ankr.com/bsc')
+
+SOLANA_RPC_URL = os.getenv('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com')
+SOLANA_RPC_URLS = os.getenv('SOLANA_RPC_URLS', SOLANA_RPC_URL).split(',')
+SOLANA_RPC_BACKUP = os.getenv('SOLANA_RPC_BACKUP', 'https://rpc.ankr.com/solana')
+
+TRON_RPC_URL = os.getenv('TRON_RPC_URL', 'https://api.trongrid.io')
+
+BASE_RPC_URL = os.getenv('BASE_RPC_URL', 'https://mainnet.base.org')
+
+ARBITRUM_RPC_URL = os.getenv('ARBITRUM_RPC_URL', 'https://arb1.arbitrum.io/rpc')
+
+POLYGON_RPC_URL = os.getenv('POLYGON_RPC_URL', 'https://polygon-rpc.com')
+
+ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY', '')
 
 # Рыночные данные
-COINGECKO_API_KEY = os.getenv('COINGECKO_API_KEY')
-COINMARKETCAP_API_KEY = os.getenv('COINMARKETCAP_API_KEY')
+COINGECKO_API_KEY = os.getenv('COINGECKO_API_KEY', '')
+COINMARKETCAP_API_KEY = os.getenv('COINMARKETCAP_API_KEY', '')
 
 # AI сервисы
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 
 # Новости
-CRYPTOPANIC_KEY = os.getenv('CRYPTOPANIC_KEY')
-NEWS_API_KEY = os.getenv('NEWS_API_KEY')
+CRYPTOPANIC_KEY = os.getenv('CRYPTOPANIC_KEY', '')
+NEWS_API_KEY = os.getenv('NEWS_API_KEY', '')
+
+# ============================================================================
+# CHAINS CONFIGURATION
+# ============================================================================
+
+CHAINS_ENABLED = os.getenv('CHAINS_ENABLED', 'true').lower() == 'true'
+ENABLED_CHAINS = [c.strip() for c in os.getenv('ENABLED_CHAINS', 'ethereum,bsc,solana,tron,base,arbitrum,polygon').split(',') if c.strip()]
+
+# ============================================================================
+# ANALYTICS
+# ============================================================================
+
+ANALYTICS_ENABLED = os.getenv('ANALYTICS_ENABLED', 'true').lower() == 'true'
 
 # ============================================================================
 # ФАЙЛОВАЯ СИСТЕМА
@@ -386,6 +457,16 @@ def validate_config():
     """Проверяет корректность настроек и выводит предупреждения"""
     
     warnings = []
+    
+    # Проверка критичных параметров для production
+    if HTTP_TIMEOUT < 10:
+        warnings.append(f"HTTP_TIMEOUT ({HTTP_TIMEOUT}s) очень низкий, рекомендуется >= 10s")
+    
+    if RPC_TIMEOUT < 5:
+        warnings.append(f"RPC_TIMEOUT ({RPC_TIMEOUT}s) очень низкий, рекомендуется >= 5s")
+    
+    if MAX_MEMORY_MB > 480:
+        warnings.append(f"MAX_MEMORY_MB ({MAX_MEMORY_MB}MB) близко к лимиту Render Free (512MB)")
     
     # Проверка API ключей
     if not ETHERSCAN_API_KEY:
@@ -455,8 +536,8 @@ def validate_config():
     if MIN_USD < 10000:
         warnings.append(f"MIN_USD очень низкий ({MIN_USD}) - будет много шума")
     
-    # Проверка интервала опроса
-    if POLL_SECONDS < 60:
+    # Проверка интервала опроса (с поправкой на новые значения)
+    if POLL_SECONDS < 5:
         warnings.append(f"POLL_SECONDS очень низкий ({POLL_SECONDS}) - может привести к rate limiting")
     
     return warnings
@@ -467,13 +548,27 @@ def print_config():
     warnings = validate_config()
     
     print("=" * 80)
-    print("🚀 INTEGRATED CRYPTO MONITOR v3.0 - CONFIGURATION")
+    print("⚙️  КОНФИГУРАЦИЯ СИСТЕМЫ v4.0")
     print("=" * 80)
+    
+    # ========================================================================
+    # PRODUCTION SETTINGS (НОВОЕ v4.0)
+    # ========================================================================
+    print(f"\n🚀 PRODUCTION\n")
+    print(f"  • HTTP Port: {PORT}")
+    print(f"  • HTTP Timeout: {HTTP_TIMEOUT}s")
+    print(f"  • RPC Timeout: {RPC_TIMEOUT}s")
+    print(f"  • Webhook Timeout: {WEBHOOK_TIMEOUT}s")
+    print(f"  • Max Memory: {MAX_MEMORY_MB}MB")
+    print(f"  • GC Interval: {GC_INTERVAL_SECONDS}s")
+    print(f"  • Max Connections: {HTTP_MAX_CONNECTIONS}")
+    print(f"  • Whale Enabled: {'✅' if WHALE_ENABLED else '❌'}")
+    print(f"  • News Enabled: {'✅' if NEWS_ENABLED else '❌'}")
     
     # ========================================================================
     # НОВЫЕ ФУНКЦИИ v3.0
     # ========================================================================
-    print(f"\n✨ SMART FEATURES v3.0\n")
+    print(f"\n✨ SMART FEATURES v3.0+\n")
     
     # Trading System
     print(f"  📈 Trading System:")
@@ -510,7 +605,8 @@ def print_config():
         print(f"     • Интервал: каждые {VALIDATION_INTERVAL_DAYS} дней")
         print(f"     • Макс. неактивность: {VALIDATION_MAX_INACTIVE_DAYS} дней")
         print(f"     • Минимальный скор: {VALIDATION_MIN_SCORE_TO_KEEP}/100")
-        print(f"     • Минимальный ROI: {VALIDATION_MIN_ROI_TO_KEEP*100:.0f}%")
+        print(f"     • Минимум сделок: {VALIDATION_MIN_TRADES_TO_KEEP}")
+        print(f"     • Минимальный win rate: {VALIDATION_MIN_WIN_RATE_TO_KEEP*100:.0f}%")
         print(f"     • Уведомления: {'да' if VALIDATION_NOTIFY_ON_REMOVAL else 'нет'}")
     else:
         print(f"     • Status: ❌ Отключен")
@@ -519,12 +615,13 @@ def print_config():
     print(f"\n  📊 Performance Tracking:")
     if PERFORMANCE_TRACKING_ENABLED:
         print(f"     • Status: ✅ Включен")
-        intervals_str = ", ".join([f"{i//60}ч" if i >= 60 else f"{i}м" for i in PERFORMANCE_CHECK_INTERVALS])
+        intervals_str = ", ".join([f"{i}ч" for i in PERFORMANCE_CHECK_INTERVALS])
         print(f"     • Интервалы проверки: {intervals_str}")
         print(f"     • Размер истории: {PERFORMANCE_HISTORY_SIZE} сигналов")
         print(f"     • Период анализа: {PERFORMANCE_LOOKBACK_DAYS} дней")
         print(f"     • Порог успеха: {PERFORMANCE_SUCCESS_THRESHOLD*100:.0f}%")
         print(f"     • Уведомления: {'да' if PERFORMANCE_NOTIFY_ON_MILESTONES else 'нет'}")
+        print(f"     • Авто-обратная связь: {'да' if PERFORMANCE_ENABLE_AUTO_FEEDBACK else 'нет'}")
     else:
         print(f"     • Status: ❌ Отключен")
     
@@ -553,7 +650,7 @@ def print_config():
         print(f"     • Окно обучения: {LEARNING_WINDOW_DAYS} дней")
         print(f"     • Начальные веса:")
         for signal_type, weight in LEARNING_SIGNAL_TYPE_WEIGHTS.items():
-            print(f"       - {signal_type}: {weight:.1%}")
+            print(f"       - {signal_type}: {weight:.1f}")
     else:
         print(f"     • Status: ❌ Отключен")
     
@@ -587,7 +684,7 @@ def print_config():
     # Wallet Database
     print(f"\n  💾 Wallet Database:")
     print(f"     • Тип: {WALLET_DB_TYPE.upper()}")
-    print(f"     • Начальный скор: {WALLET_INITIAL_SCORE}/100")
+    print(f"     • Начальный скор: {WALLET_BASE_SCORE}/100")
     print(f"     • Успех/провал: {WALLET_SCORE_UPDATE_ON_SUCCESS:+d}/{WALLET_SCORE_UPDATE_ON_FAILURE:+d}")
     print(f"     • Деградация: -{WALLET_SCORE_DECAY_PER_DAY}/день")
     print(f"     • Макс. кошельков: {WALLET_MAX_TRACKED}")
@@ -618,6 +715,7 @@ def print_config():
     if RATE_LIMIT_ENABLED:
         print(f"  • Лимит: {RATE_LIMIT_CALLS} запросов / {RATE_LIMIT_PERIOD}с")
     print(f"  • Retry: до {RETRY_MAX_ATTEMPTS} попыток с backoff x{RETRY_BACKOFF_FACTOR}")
+    print(f"  • Timeout: {RETRY_TIMEOUT}с")
     print(f"  • Health Check: {'включен' if HEALTH_CHECK_ENABLED else 'выключен'}")
     
     print(f"\n📈 ДОПОЛНИТЕЛЬНО")
@@ -702,14 +800,24 @@ def get_environment_info():
         "disk_path": os.environ.get('RENDER_DISK_MOUNT_PATH', 'N/A'),
         "data_dir": DATA_DIR,
         "learning_dir": LEARNING_DIR,
+        "port": PORT,
+        "max_memory_mb": MAX_MEMORY_MB,
     }
 
 
 def get_all_settings() -> Dict:
     """Возвращает все настройки в виде словаря (для экспорта/бэкапа)"""
     return {
-        "version": "3.0",
+        "version": "4.0",
         "timestamp": datetime.utcnow().isoformat(),
+        "production": {
+            "port": PORT,
+            "http_timeout": HTTP_TIMEOUT,
+            "rpc_timeout": RPC_TIMEOUT,
+            "max_memory_mb": MAX_MEMORY_MB,
+            "whale_enabled": WHALE_ENABLED,
+            "news_enabled": NEWS_ENABLED,
+        },
         "general": {
             "assets": ASSETS,
             "poll_seconds": POLL_SECONDS,

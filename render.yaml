@@ -1,10 +1,14 @@
 services:
   - type: web
     name: crypto-compass
-    env: docker
+    runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     autoDeploy: true
+    
+    healthCheckPath: /health
+    
+    plan: starter
     
     envVars:
       - key: TELEGRAM_TOKEN
@@ -21,6 +25,15 @@ services:
       
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
+      
+      - key: HTTP_TIMEOUT
+        value: "30"
+      
+      - key: RPC_TIMEOUT
+        value: "15"
+      
+      - key: MAX_MEMORY_MB
+        value: "450"
       
       - key: FETCH_INTERVAL
         value: "900"

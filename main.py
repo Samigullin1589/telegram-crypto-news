@@ -22,6 +22,8 @@ import asyncio
 import signal
 import sys
 import os
+import gc
+import psutil
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
@@ -33,6 +35,61 @@ if sys.version_info < (3, 8):
     sys.exit(1)
 
 from aiohttp import web
+import aiohttp
+
+
+# ============================================================================
+# RESOURCE MONITOR
+# ============================================================================
+
+class ResourceMonitor:
+    """Мониторинг системных ресурсов"""
+    
+    def __init__(self, max_memory_mb: int = 450):
+        self.max_memory_mb = max_memory_mb
+        self.process = psutil.Process()
+        self.last_gc = datetime.now(timezone.utc)
+        self.gc_interval = 300  # 5 minutes
+    
+    def check_memory(self) -> bool:
+        """Проверка использования памяти"""
+        try:
+            memory_mb = self.process.memory_info().rss / 1024 / 1024
+            
+            if memory_mb > self.max_memory_mb * 0.9:
+                print(f"⚠️ [MEMORY] High usage: {memory_mb:.1f}MB / {self.max_memory_mb}MB")
+                
+                # Force GC
+                now = datetime.now(timezone.utc)
+                if (now - self.last_gc).seconds > 60:
+                    print("   🧹 Running garbage collection...")
+                    gc.collect()
+                    self.last_gc = now
+                    new_memory = self.process.memory_info().rss / 1024 / 1024
+                    print(f"   ✅ Memory after GC: {new_memory:.1f}MB")
+                
+                return memory_mb <= self.max_memory_mb
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ [MEMORY] Error checking: {e}")
+            return True
+    
+    def get_stats(self) -> Dict:
+        """Получить статистику ресурсов"""
+        try:
+            mem_info = self.process.memory_info()
+            cpu_percent = self.process.cpu_percent(interval=1)
+            
+            return {
+                'memory_mb': mem_info.rss / 1024 / 1024,
+                'memory_percent': self.process.memory_percent(),
+                'cpu_percent': cpu_percent,
+                'num_threads': self.process.num_threads(),
+            }
+        except:
+            return {}
 
 
 # ============================================================================
@@ -48,22 +105,35 @@ async def telegram_webhook_handler(request):
     """
     try:
         # Получаем bot application из app state
-        bot_app = request.app['bot_application']
+        bot_app = request.app.get('bot_application')
         
         if not bot_app or not bot_app.running:
             return web.Response(text="Bot not ready", status=503)
         
-        # Получаем JSON с обновлением
-        data = await request.json()
+        # Получаем JSON с обновлением (с таймаутом)
+        try:
+            data = await asyncio.wait_for(
+                request.json(),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            return web.Response(text="Timeout", status=408)
         
         # Обрабатываем обновление
         from telegram import Update
         update = Update.de_json(data, bot_app.bot)
         
-        # Передаём в bot application
-        await bot_app.process_update(update)
+        # Передаём в bot application (с таймаутом)
+        await asyncio.wait_for(
+            bot_app.process_update(update),
+            timeout=10.0
+        )
         
         return web.Response(text="OK", status=200)
+    
+    except asyncio.TimeoutError:
+        print(f"⚠️ [WEBHOOK] Timeout processing update")
+        return web.Response(text="Timeout", status=408)
     
     except Exception as e:
         print(f"❌ [WEBHOOK] Error: {e}")
@@ -73,14 +143,24 @@ async def telegram_webhook_handler(request):
 
 async def health_check_handler(request):
     """Health check endpoint для Render.com и других хостингов"""
-    return web.Response(
-        text="OK - Crypto Compass Running",
-        status=200,
-        headers={'Content-Type': 'text/plain'}
-    )
+    try:
+        # Получаем resource monitor
+        resource_monitor = request.app.get('resource_monitor')
+        
+        stats = {}
+        if resource_monitor:
+            stats = resource_monitor.get_stats()
+        
+        return web.json_response({
+            'status': 'healthy',
+            'timestamp': datetime.utcnow().isoformat(),
+            'resources': stats
+        })
+    except:
+        return web.Response(text="OK", status=200)
 
 
-async def start_health_server(bot_application=None):
+async def start_health_server(bot_application=None, resource_monitor=None):
     """
     Запуск HTTP сервера для health checks и webhook
     
@@ -92,8 +172,9 @@ async def start_health_server(bot_application=None):
     """
     app = web.Application()
     
-    # Сохраняем bot application в app state
+    # Сохраняем в app state
     app['bot_application'] = bot_application
+    app['resource_monitor'] = resource_monitor
     
     # Health check endpoints
     app.router.add_get('/', health_check_handler)
@@ -352,12 +433,16 @@ class IntegratedCryptoMonitor:
             from app.bot import application as bot_application
             self.bot_application = bot_application
             print("✅ Bot Commands Handler loaded")
-            self._patch_bot_handlers()
+            patched = self._patch_bot_handlers()
+            print(f"   ⚠️ Не удалось пропатчить bot handlers: {0 if patched else 1}")
         except Exception as e:
             print(f"⚠️ Bot Commands Handler not loaded: {e}")
             self.bot_application = None
         
         self.health_monitor = SystemHealthMonitor()
+        self.resource_monitor = ResourceMonitor(
+            max_memory_mb=int(os.getenv('MAX_MEMORY_MB', '450'))
+        )
         
         self.shutdown_event = asyncio.Event()
         self._tasks: List[asyncio.Task] = []
@@ -377,10 +462,10 @@ class IntegratedCryptoMonitor:
         
         print("\n✅ Integrated Crypto Monitor инициализирован")
     
-    def _patch_bot_handlers(self):
+    def _patch_bot_handlers(self) -> bool:
         """Патчим обработчики команд для мониторинга"""
         if not self.bot_application:
-            return
+            return False
         
         try:
             original_handlers = list(self.bot_application.handlers[0])
@@ -401,9 +486,10 @@ class IntegratedCryptoMonitor:
                     
                     handler.callback = wrapped_callback
             
-            print("   ✓ Bot handlers патчнуты для мониторинга")
+            return True
         except Exception as e:
             print(f"   ⚠️ Не удалось пропатчить bot handlers: {e}")
+            return False
     
     async def run(self):
         """Главный цикл выполнения"""
@@ -412,7 +498,10 @@ class IntegratedCryptoMonitor:
         
         self._setup_signal_handlers()
         
-        self._health_server_runner = await start_health_server(self.bot_application)
+        self._health_server_runner = await start_health_server(
+            self.bot_application,
+            self.resource_monitor
+        )
         
         try:
             self._tasks = []
@@ -517,9 +606,19 @@ class IntegratedCryptoMonitor:
         while not self.shutdown_event.is_set():
             try:
                 self.health_monitor.update_news_heartbeat()
-                await self.news_processor.run()
+                
+                # Run with timeout
+                await asyncio.wait_for(
+                    self.news_processor.run(),
+                    timeout=300.0
+                )
+                
                 consecutive_errors = 0
                 await asyncio.sleep(1)
+            
+            except asyncio.TimeoutError:
+                print(f"⚠️ [NEWS] Timeout (300s)")
+                consecutive_errors += 1
             
             except asyncio.CancelledError:
                 print("📰 [NEWS] Получен сигнал остановки")
@@ -553,9 +652,25 @@ class IntegratedCryptoMonitor:
         while not self.shutdown_event.is_set():
             try:
                 self.health_monitor.update_whale_heartbeat()
-                await self.whale_scheduler.run_cycle()
+                
+                # Run with timeout
+                await asyncio.wait_for(
+                    self.whale_scheduler.run_cycle(),
+                    timeout=120.0
+                )
+                
                 consecutive_errors = 0
+                
+                # Check memory
+                if not self.resource_monitor.check_memory():
+                    print("⚠️ [WHALE] Memory pressure detected, slowing down...")
+                    await asyncio.sleep(30)
+                
                 await asyncio.sleep(1)
+            
+            except asyncio.TimeoutError:
+                print(f"⚠️ [WHALE] Timeout (120s)")
+                consecutive_errors += 1
             
             except asyncio.CancelledError:
                 print("🐋 [WHALE] Получен сигнал остановки")
@@ -595,31 +710,42 @@ class IntegratedCryptoMonitor:
             print("🤖 [BOT] Инициализация command handler (WEBHOOK MODE)...")
             
             # Инициализируем application
-            await self.bot_application.initialize()
-            await self.bot_application.start()
+            await asyncio.wait_for(
+                self.bot_application.initialize(),
+                timeout=30.0
+            )
+            await asyncio.wait_for(
+                self.bot_application.start(),
+                timeout=30.0
+            )
             
-            # Получаем webhook URL из env
+            # Получаем webhook URL
             webhook_url = os.environ.get('WEBHOOK_URL', '')
             
             if not webhook_url:
-                # Если WEBHOOK_URL не задан, пробуем определить по RENDER_EXTERNAL_URL
                 render_url = os.environ.get('RENDER_EXTERNAL_URL', '')
                 if render_url:
                     webhook_url = f"{render_url}/webhook/telegram"
                 else:
-                    print("⚠️ [BOT] WEBHOOK_URL не установлен, используется заглушка")
-                    webhook_url = "https://example.com/webhook/telegram"
+                    # Fallback для Render
+                    webhook_url = "https://crypto-compass.onrender.com/webhook/telegram"
             
             print(f"🤖 [BOT] Устанавливаем webhook: {webhook_url}")
             
-            # Удаляем старый webhook если был
-            await self.bot_application.bot.delete_webhook(drop_pending_updates=True)
+            # Удаляем старый webhook
+            await asyncio.wait_for(
+                self.bot_application.bot.delete_webhook(drop_pending_updates=True),
+                timeout=10.0
+            )
             
             # Устанавливаем новый webhook
-            await self.bot_application.bot.set_webhook(
-                url=webhook_url,
-                allowed_updates=None,
-                drop_pending_updates=True
+            await asyncio.wait_for(
+                self.bot_application.bot.set_webhook(
+                    url=webhook_url,
+                    allowed_updates=None,
+                    drop_pending_updates=True
+                ),
+                timeout=10.0
             )
             
             self.health_monitor.update_bot_heartbeat()
@@ -628,12 +754,15 @@ class IntegratedCryptoMonitor:
             print(f"   Webhook URL: {webhook_url}")
             print("   Доступные команды: /start, /help, /status, /positions, /performance")
             
-            # Держим task alive пока не придёт shutdown signal
+            # Держим task alive
             while not self.shutdown_event.is_set():
                 self.health_monitor.update_bot_heartbeat()
                 await asyncio.sleep(60)
             
             print("🤖 [BOT] Получен сигнал остановки")
+        
+        except asyncio.TimeoutError:
+            print("❌ [BOT] Timeout при инициализации")
         
         except asyncio.CancelledError:
             print("🤖 [BOT] Получен сигнал отмены")
@@ -650,16 +779,27 @@ class IntegratedCryptoMonitor:
             print("🤖 [BOT] Останавливаем command handler...")
             try:
                 # Удаляем webhook
-                await self.bot_application.bot.delete_webhook()
+                await asyncio.wait_for(
+                    self.bot_application.bot.delete_webhook(),
+                    timeout=10.0
+                )
                 print("   ✓ Webhook удалён")
                 
                 if self.bot_application.running:
-                    await self.bot_application.stop()
+                    await asyncio.wait_for(
+                        self.bot_application.stop(),
+                        timeout=10.0
+                    )
                     print("   ✓ Application остановлен")
                 
-                await self.bot_application.shutdown()
+                await asyncio.wait_for(
+                    self.bot_application.shutdown(),
+                    timeout=10.0
+                )
                 print("   ✓ Shutdown завершён")
             
+            except asyncio.TimeoutError:
+                print("   ⚠️ Timeout при shutdown")
             except Exception as e:
                 print(f"   ⚠️ Ошибка при shutdown: {e}")
             
@@ -681,6 +821,9 @@ class IntegratedCryptoMonitor:
                         print(f"   {issue}")
                     print("="*80 + "\n")
                 
+                # Check resources
+                self.resource_monitor.check_memory()
+                
                 await asyncio.sleep(self.health_monitor.check_interval)
             
             except asyncio.CancelledError:
@@ -698,6 +841,11 @@ class IntegratedCryptoMonitor:
         
         while not self.shutdown_event.is_set():
             try:
+                # Periodic GC
+                if (datetime.now(timezone.utc) - self.resource_monitor.last_gc).seconds > self.resource_monitor.gc_interval:
+                    gc.collect()
+                    self.resource_monitor.last_gc = datetime.now(timezone.utc)
+                
                 await asyncio.sleep(60)
             
             except asyncio.CancelledError:
@@ -742,8 +890,13 @@ class IntegratedCryptoMonitor:
         print("⏳ [1/4] Останавливаем HTTP health server...")
         try:
             if self._health_server_runner:
-                await self._health_server_runner.cleanup()
+                await asyncio.wait_for(
+                    self._health_server_runner.cleanup(),
+                    timeout=10.0
+                )
                 print("   ✓ Health server остановлен")
+        except asyncio.TimeoutError:
+            print("   ⚠️ Timeout остановки health server")
         except Exception as e:
             print(f"   ⚠️ Ошибка остановки health server: {e}")
         
@@ -754,7 +907,10 @@ class IntegratedCryptoMonitor:
                     task.cancel()
             
             try:
-                await asyncio.wait(self._tasks, timeout=10)
+                await asyncio.wait_for(
+                    asyncio.wait(self._tasks),
+                    timeout=15.0
+                )
                 print("   ✓ Все задачи завершены")
             except asyncio.TimeoutError:
                 print("   ⚠️ Timeout при ожидании задач")
@@ -763,15 +919,25 @@ class IntegratedCryptoMonitor:
         
         if self.news_processor and hasattr(self.news_processor, 'cleanup'):
             try:
-                await self.news_processor.cleanup()
+                await asyncio.wait_for(
+                    self.news_processor.cleanup(),
+                    timeout=10.0
+                )
                 print("   ✓ News Processor остановлен")
+            except asyncio.TimeoutError:
+                print("   ⚠️ Timeout остановки News Processor")
             except Exception as e:
                 print(f"   ⚠️ Ошибка остановки News Processor: {e}")
         
         if self.whale_scheduler and hasattr(self.whale_scheduler, 'cleanup'):
             try:
-                await self.whale_scheduler.cleanup()
+                await asyncio.wait_for(
+                    self.whale_scheduler.cleanup(),
+                    timeout=10.0
+                )
                 print("   ✓ Whale Scheduler остановлен")
+            except asyncio.TimeoutError:
+                print("   ⚠️ Timeout остановки Whale Scheduler")
             except Exception as e:
                 print(f"   ⚠️ Ошибка остановки Whale Scheduler: {e}")
         
@@ -792,6 +958,9 @@ class IntegratedCryptoMonitor:
                 print("   ✅ Состояние Whale Monitor сохранено")
         except Exception as e:
             print(f"   ⚠️ Ошибка сохранения состояния: {e}")
+        
+        # Final GC
+        gc.collect()
         
         self._print_final_statistics()
         
@@ -901,6 +1070,14 @@ class IntegratedCryptoMonitor:
         if health_stats['total_cycles'] > 0:
             error_rate = (health_stats['total_errors'] / health_stats['total_cycles']) * 100
             print(f"   Error Rate: {error_rate:.2f}%")
+        
+        # Resource stats
+        resource_stats = self.resource_monitor.get_stats()
+        if resource_stats:
+            print(f"\n💾 RESOURCES:")
+            print(f"   Memory: {resource_stats.get('memory_mb', 0):.1f}MB ({resource_stats.get('memory_percent', 0):.1f}%)")
+            print(f"   CPU: {resource_stats.get('cpu_percent', 0):.1f}%")
+            print(f"   Threads: {resource_stats.get('num_threads', 0)}")
         
         if self.news_processor and hasattr(self.news_processor, 'metrics'):
             news_metrics = self.news_processor.metrics
