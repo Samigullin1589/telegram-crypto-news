@@ -1215,8 +1215,16 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # HANDLER REGISTRATION
 # ============================================================================
 
+_handlers_registered = False
+
 def register_handlers():
     """Регистрация всех обработчиков команд"""
+    
+    global _handlers_registered
+    
+    if _handlers_registered:
+        print("⚠️ [BOT] Handlers already registered, skipping")
+        return
     
     # General commands
     application.add_handler(CommandHandler("start", cmd_start))
@@ -1259,6 +1267,8 @@ def register_handlers():
     # Error handler
     application.add_error_handler(error_handler)
     
+    _handlers_registered = True
+    
     print("✅ [BOT] All handlers registered")
     print("   • General: 3 commands")
     print("   • Whale Monitoring: 4 commands")
@@ -1267,10 +1277,6 @@ def register_handlers():
     print("   • Analytics: 2 commands")
     print("   • Control: 3 commands")
     print("   • Admin: 1 command")
-
-
-# Автоматическая регистрация при импорте
-register_handlers()
 
 
 # ============================================================================
@@ -1283,6 +1289,9 @@ async def main():
     print("\n" + "="*80)
     print("🤖 TELEGRAM BOT - STANDALONE MODE")
     print("="*80 + "\n")
+    
+    # Регистрируем handlers
+    register_handlers()
     
     # Инициализируем и запускаем
     await application.initialize()
