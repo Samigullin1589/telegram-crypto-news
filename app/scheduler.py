@@ -612,6 +612,48 @@ class IntegratedScheduler:
         finally:
             await self.shutdown()
     
+    async def run_cycle(self):
+        """
+        Выполнить один цикл whale monitoring
+        
+        Этот метод вызывается из main.py в бесконечном цикле.
+        Выполняет одну итерацию мониторинга без sleep и без бесконечного цикла.
+        
+        Returns:
+            Dict с результатами цикла
+        """
+        try:
+            # Обновляем время последнего цикла
+            self.stats["last_cycle_time"] = datetime.utcnow()
+            
+            # Получаем события за последний период
+            start_time = datetime.utcnow() - timedelta(seconds=settings.POLL_SECONDS)
+            
+            events = []
+            async with BlockchainMonitor() as monitor:
+                events = await monitor.fetch_events(start_time)
+                self.stats["events_collected"] += len(events)
+                
+                if not events:
+                    print("👍 [WHALE] Новых перемещений не найдено")
+                else:
+                    print(f"🔄 [WHALE] Найдено {len(events)} событий")
+                    await self._process_whale_events(events)
+            
+            # Публикуем из очереди
+            await self._publish_from_queue()
+            
+            return {
+                'success': True,
+                'events_collected': len(events),
+                'timestamp': datetime.utcnow().isoformat()
+            }
+        
+        except Exception as e:
+            self.stats["errors"] += 1
+            print(f"❌ [WHALE] Ошибка в run_cycle: {e}")
+            raise
+    
     # ========================================================================
     # WHALE MONITORING LOOPS
     # ========================================================================
