@@ -17,6 +17,8 @@ INTELLIGENT CRYPTO MONITOR - Configuration
 ✅ Bot Commands - интерактивные команды (/stats, /positions, /help)
 ✅ News Processor - мониторинг новостей
 ✅ Whale Monitor - отслеживание китов
+✅ Solana Rate Limiting - защита от 429 errors
+✅ Tron Token Prices - поддержка всех популярных токенов
 """
 
 import os
@@ -83,9 +85,9 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', TELEGRAM_BOT_TOKEN)
 ASSETS = os.getenv('ASSETS', '*')
 ASSETS_LIST = [] if ASSETS == '*' else [a.strip() for a in ASSETS.split(',') if a.strip()]
 
-# Базовые пороги (оптимизировано для production)
-MIN_USD = float(os.getenv('MIN_USD', '100000'))  # снижено с 500k
-MIN_USD_FLOOR = float(os.getenv('MIN_USD_FLOOR', '50000'))
+# ИСПРАВЛЕНО v4.1: Снижены базовые пороги для лучшего детектирования Tron/Solana
+MIN_USD = float(os.getenv('MIN_USD', '50000'))  # снижено со 100k
+MIN_USD_FLOOR = float(os.getenv('MIN_USD_FLOOR', '10000'))  # ИСПРАВЛЕНО: снижено с 50k до 10k
 MIN_USD_K = float(os.getenv('MIN_USD_K', '0.02'))
 MIN_USD_PCTL = float(os.getenv('MIN_USD_PCTL', '75'))
 
@@ -125,15 +127,98 @@ RATE_LIMIT_ENABLED = int(os.getenv('RATE_LIMIT_ENABLED', '1')) == 1
 RATE_LIMIT_CALLS = int(os.getenv('RATE_LIMIT_CALLS', '5'))
 RATE_LIMIT_PERIOD = int(os.getenv('RATE_LIMIT_PERIOD', '60'))
 
-# Retry настройки (с таймаутами)
+# НОВОЕ v4.1: Retry настройки для 429 errors (Solana)
 RETRY_MAX_ATTEMPTS = int(os.getenv('RETRY_MAX_ATTEMPTS', '3'))
-RETRY_BACKOFF_FACTOR = int(os.getenv('RETRY_BACKOFF_FACTOR', '2'))
-RETRY_TIMEOUT = int(os.getenv('RETRY_TIMEOUT', '15'))  # снижено с 30
+RETRY_BACKOFF_FACTOR = float(os.getenv('RETRY_BACKOFF_FACTOR', '2.0'))  # exponential backoff
+RETRY_INITIAL_DELAY = float(os.getenv('RETRY_INITIAL_DELAY', '1.0'))  # начальная задержка 1 сек
+RETRY_TIMEOUT = int(os.getenv('RETRY_TIMEOUT', '15'))  # таймаут на retry
+
+# НОВОЕ v4.1: Solana Rate Limiting (для бесплатного Helius API)
+SOLANA_RATE_LIMIT_REQUESTS = int(os.getenv('SOLANA_RATE_LIMIT_REQUESTS', '50'))  # 50 req/min
+SOLANA_RATE_LIMIT_WINDOW = int(os.getenv('SOLANA_RATE_LIMIT_WINDOW', '60'))  # 60 секунд
+SOLANA_RETRY_ON_429 = int(os.getenv('SOLANA_RETRY_ON_429', '1')) == 1  # retry при 429
 
 # Health Check
 HEALTH_CHECK_ENABLED = int(os.getenv('HEALTH_CHECK_ENABLED', '1')) == 1
 HEALTH_CHECK_INTERVAL = int(os.getenv('HEALTH_CHECK_INTERVAL', '300'))
 HEALTH_CHECK_MAX_SILENCE = int(os.getenv('HEALTH_CHECK_MAX_SILENCE', '600'))
+
+# ============================================================================
+# НОВОЕ v4.1: FALLBACK PRICES - РАСШИРЕННАЯ ПОДДЕРЖКА TRON ТОКЕНОВ
+# ============================================================================
+
+FALLBACK_PRICES: Dict[str, float] = {
+    # Major cryptocurrencies
+    "BTC": 68000.0,
+    "ETH": 2500.0,
+    "BNB": 580.0,
+    "SOL": 170.0,
+    "XRP": 0.52,
+    "ADA": 0.35,
+    "DOGE": 0.15,
+    "MATIC": 0.72,
+    "DOT": 4.20,
+    "AVAX": 28.0,
+    
+    # Layer 2 & Scaling
+    "OP": 1.80,
+    "ARB": 0.85,
+    
+    # DeFi tokens
+    "UNI": 7.50,
+    "LINK": 13.0,
+    "AAVE": 150.0,
+    "MKR": 1500.0,
+    "CRV": 0.45,
+    "SUSHI": 0.90,
+    "COMP": 45.0,
+    "SNX": 2.20,
+    
+    # НОВОЕ v4.1: Tron Ecosystem - ПОЛНАЯ ПОДДЕРЖКА
+    "TRX": 0.16,  # Tron native token
+    
+    # Tron Stablecoins (самые популярные)
+    "USDT": 1.0,  # Tether (огромный объем на Tron)
+    "USDC": 1.0,  # USD Coin
+    "TUSD": 1.0,  # TrueUSD
+    "USDD": 1.0,  # Decentralized USD (Tron's own stablecoin)
+    "USDJ": 1.0,  # JUST Stablecoin
+    
+    # Tron DeFi Tokens
+    "JST": 0.025,  # JUST (Tron DeFi protocol)
+    "SUN": 0.0045,  # SUN (Tron DeFi & DEX)
+    "WIN": 0.00008,  # WINkLink (Tron oracle)
+    "BTTC": 0.0000009,  # BitTorrent Chain (merged with BTT)
+    "BTT": 0.0000009,  # BitTorrent (Tron ecosystem)
+    
+    # Tron NFT & Gaming
+    "NFT": 0.00025,  # APENFT (Tron NFT marketplace)
+    "WINK": 0.00008,  # WINk (Tron gaming)
+    
+    # Wrapped tokens on Tron
+    "WTRX": 0.16,  # Wrapped TRX
+    "WBTC": 68000.0,  # Wrapped Bitcoin (on Tron)
+    "WETH": 2500.0,  # Wrapped Ethereum (on Tron)
+    
+    # Meme coins (на разных chains)
+    "SHIB": 0.000024,
+    "PEPE": 0.0000012,
+    "BONK": 0.000025,
+    "FLOKI": 0.00015,
+    
+    # Stablecoins (дополнительные)
+    "DAI": 1.0,
+    "BUSD": 1.0,
+    "FRAX": 1.0,
+    "LUSD": 1.0,
+    
+    # Популярные altcoins
+    "FTM": 0.45,
+    "NEAR": 5.50,
+    "ATOM": 9.80,
+    "APT": 8.50,
+    "SUI": 2.10,
+}
 
 # ============================================================================
 # WHALE MONITOR - WATCHLIST (ИСПРАВЛЕНИЕ ОШИБКИ)
@@ -478,6 +563,10 @@ def validate_config():
     if not COINGECKO_API_KEY:
         warnings.append("COINGECKO_API_KEY не установлен - ограничена информация о ценах")
     
+    # НОВОЕ v4.1: Проверка Solana rate limiting
+    if SOLANA_RATE_LIMIT_REQUESTS > 100:
+        warnings.append(f"SOLANA_RATE_LIMIT_REQUESTS ({SOLANA_RATE_LIMIT_REQUESTS}) может вызвать 429 errors на бесплатном API")
+    
     # Проверка настроек Trading System
     if TRADING_ENABLED:
         if TRADING_MIN_CONFIDENCE > 90:
@@ -532,9 +621,12 @@ def validate_config():
         if WATCHLIST_MAX_SIZE > 500:
             warnings.append(f"WATCHLIST_MAX_SIZE очень большой ({WATCHLIST_MAX_SIZE})")
     
-    # Проверка валюты
-    if MIN_USD < 10000:
-        warnings.append(f"MIN_USD очень низкий ({MIN_USD}) - будет много шума")
+    # НОВОЕ v4.1: Проверка MIN_USD_FLOOR
+    if MIN_USD_FLOOR < 5000:
+        warnings.append(f"MIN_USD_FLOOR очень низкий ({MIN_USD_FLOOR}) - может быть много шума")
+    
+    if MIN_USD_FLOOR > 100000:
+        warnings.append(f"MIN_USD_FLOOR очень высокий ({MIN_USD_FLOOR}) - может пропустить важные сигналы")
     
     # Проверка интервала опроса (с поправкой на новые значения)
     if POLL_SECONDS < 5:
@@ -548,7 +640,7 @@ def print_config():
     warnings = validate_config()
     
     print("=" * 80)
-    print("⚙️  КОНФИГУРАЦИЯ СИСТЕМЫ v4.0")
+    print("⚙️  КОНФИГУРАЦИЯ СИСТЕМЫ v4.1")
     print("=" * 80)
     
     # ========================================================================
@@ -564,6 +656,34 @@ def print_config():
     print(f"  • Max Connections: {HTTP_MAX_CONNECTIONS}")
     print(f"  • Whale Enabled: {'✅' if WHALE_ENABLED else '❌'}")
     print(f"  • News Enabled: {'✅' if NEWS_ENABLED else '❌'}")
+    
+    # ========================================================================
+    # НОВОЕ v4.1: RATE LIMITING & RETRY
+    # ========================================================================
+    print(f"\n🛡️  RATE LIMITING & RETRY v4.1\n")
+    print(f"  • Retry Max Attempts: {RETRY_MAX_ATTEMPTS}")
+    print(f"  • Retry Backoff Factor: {RETRY_BACKOFF_FACTOR}x")
+    print(f"  • Retry Initial Delay: {RETRY_INITIAL_DELAY}s")
+    print(f"  • Solana Rate Limit: {SOLANA_RATE_LIMIT_REQUESTS} req/{SOLANA_RATE_LIMIT_WINDOW}s")
+    print(f"  • Solana Retry on 429: {'✅' if SOLANA_RETRY_ON_429 else '❌'}")
+    
+    # ========================================================================
+    # НОВОЕ v4.1: WHALE THRESHOLDS
+    # ========================================================================
+    print(f"\n🐋 WHALE THRESHOLDS v4.1\n")
+    print(f"  • MIN_USD: ${MIN_USD:,.0f}")
+    print(f"  • MIN_USD_FLOOR: ${MIN_USD_FLOOR:,.0f} ⭐ (снижено для Tron/Solana)")
+    print(f"  • MIN_USD_K: {MIN_USD_K}")
+    print(f"  • MIN_USD_PCTL: {MIN_USD_PCTL}%")
+    
+    # ========================================================================
+    # НОВОЕ v4.1: FALLBACK PRICES
+    # ========================================================================
+    print(f"\n💰 FALLBACK PRICES v4.1\n")
+    print(f"  • Total tokens: {len(FALLBACK_PRICES)}")
+    print(f"  • Major coins: BTC=${FALLBACK_PRICES['BTC']:,.0f}, ETH=${FALLBACK_PRICES['ETH']:,.0f}, SOL=${FALLBACK_PRICES['SOL']:,.0f}")
+    print(f"  • Tron ecosystem: TRX=${FALLBACK_PRICES['TRX']}, USDT=${FALLBACK_PRICES['USDT']}, JST=${FALLBACK_PRICES['JST']}")
+    print(f"  • Stablecoins: {sum(1 for k, v in FALLBACK_PRICES.items() if v == 1.0)} tokens")
     
     # ========================================================================
     # НОВЫЕ ФУНКЦИИ v3.0
@@ -782,7 +902,7 @@ def print_config():
     
     if enabled_systems:
         print(f"✅ Активные системы: {', '.join(enabled_systems)}")
-        print(f"🎯 Система работает в ИНТЕЛЛЕКТУАЛЬНОМ режиме")
+        print(f"🎯 Система работает в ИНТЕЛЛЕКТУАЛЬНОМ режиме v4.1")
     else:
         print(f"⚠️  Все интеллектуальные системы отключены")
         print(f"🎯 Система работает в БАЗОВОМ режиме")
@@ -808,7 +928,7 @@ def get_environment_info():
 def get_all_settings() -> Dict:
     """Возвращает все настройки в виде словаря (для экспорта/бэкапа)"""
     return {
-        "version": "4.0",
+        "version": "4.1",
         "timestamp": datetime.utcnow().isoformat(),
         "production": {
             "port": PORT,
@@ -817,6 +937,24 @@ def get_all_settings() -> Dict:
             "max_memory_mb": MAX_MEMORY_MB,
             "whale_enabled": WHALE_ENABLED,
             "news_enabled": NEWS_ENABLED,
+        },
+        "rate_limiting": {
+            "retry_max_attempts": RETRY_MAX_ATTEMPTS,
+            "retry_backoff_factor": RETRY_BACKOFF_FACTOR,
+            "retry_initial_delay": RETRY_INITIAL_DELAY,
+            "solana_rate_limit_requests": SOLANA_RATE_LIMIT_REQUESTS,
+            "solana_rate_limit_window": SOLANA_RATE_LIMIT_WINDOW,
+            "solana_retry_on_429": SOLANA_RETRY_ON_429,
+        },
+        "whale_thresholds": {
+            "min_usd": MIN_USD,
+            "min_usd_floor": MIN_USD_FLOOR,
+            "min_usd_k": MIN_USD_K,
+            "min_usd_pctl": MIN_USD_PCTL,
+        },
+        "fallback_prices": {
+            "total_tokens": len(FALLBACK_PRICES),
+            "tron_tokens": sum(1 for k in FALLBACK_PRICES.keys() if k in ["TRX", "USDT", "USDC", "TUSD", "USDD", "JST", "SUN", "WIN", "BTT", "NFT"]),
         },
         "general": {
             "assets": ASSETS,
