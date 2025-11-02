@@ -1,3 +1,5 @@
+# app/scheduler.py
+
 """
 INTEGRATED SCHEDULER v4.2 - Complete Trading & Whale Monitoring System
 
@@ -11,7 +13,8 @@ INTEGRATED SCHEDULER v4.2 - Complete Trading & Whale Monitoring System
 ✅ Learning System - самообучение на ошибках
 ✅ Cross-Chain Wallet Tracking - мониторинг на всех chains
 
-НОВОЕ В v4.2:
+НОВОЕ В v4.2 (02.11.2025):
+🔥 Integrated ChainRateLimiter - единая система rate limiting
 🔥 Solana Fallback RPC Rotation - автоматическое переключение между RPC endpoints
 🔥 Intelligent Backoff Strategy - умные паузы при перегрузке API
 🔥 Enhanced Error Recovery - улучшенное восстановление после ошибок
@@ -323,12 +326,19 @@ class WalletDatabase:
 class IntegratedScheduler:
     """
     Главный координатор с полной интеграцией whale monitoring и trading system
+    
+    НОВОЕ v4.2: Интегрирован с ChainRateLimiter из main.py
     """
     
     def __init__(self):
         print("\n" + "="*80)
         print("🚀 INTEGRATED SCHEDULER v4.2 - INITIALIZATION")
         print("="*80 + "\n")
+        
+        # ====================================================================
+        # RATE LIMITER (будет установлен из main.py)
+        # ====================================================================
+        self.rate_limiter = None
         
         # ====================================================================
         # WHALE MONITORING COMPONENTS
@@ -365,11 +375,6 @@ class IntegratedScheduler:
             self.wallet_db = None
         
         # НОВОЕ v4.2: Solana fallback RPC management
-        self.solana_consecutive_failures = 0
-        self.solana_backoff_until = 0
-        self.solana_max_consecutive_failures = 3
-        self.solana_backoff_seconds = 120
-        
         self.solana_rpc_endpoints = [
             f"https://mainnet.helius-rpc.com/?api-key={settings.HELIUS_API_KEY}",
             "https://api.mainnet-beta.solana.com",
@@ -505,7 +510,8 @@ class IntegratedScheduler:
             "analytics_calls": 0,
             "chains_events": defaultdict(int),
             "solana_rpc_switches": 0,
-            "solana_backoffs": 0
+            "last_mining_discovery": None,
+            "last_mining_validation": None
         }
         
         if settings.PERFORMANCE_TRACKING_ENABLED:
@@ -520,6 +526,16 @@ class IntegratedScheduler:
         print("\n" + "="*80)
         print("✅ INITIALIZATION COMPLETE")
         print("="*80 + "\n")
+    
+    def set_rate_limiter(self, rate_limiter):
+        """
+        НОВОЕ v4.2: Установка rate limiter из main.py
+        
+        Этот метод вызывается из IntegratedCryptoMonitor в main.py
+        для интеграции единой системы rate limiting
+        """
+        self.rate_limiter = rate_limiter
+        print("✅ [SCHEDULER] ChainRateLimiter подключен")
     
     async def run(self):
         """Главный цикл с полной интеграцией всех систем"""
@@ -587,24 +603,31 @@ class IntegratedScheduler:
         Выполнить один цикл whale monitoring
         
         Этот метод вызывается из main.py в бесконечном цикле
+        НОВОЕ v4.2: Полная интеграция с ChainRateLimiter
         """
         try:
             self.stats["last_cycle_time"] = datetime.utcnow()
             
             start_time = datetime.utcnow() - timedelta(seconds=settings.POLL_SECONDS)
             
+            # НОВОЕ v4.2: Проверяем доступные chains через rate_limiter
+            chains_to_scan = self._get_available_chains()
+            
             events = []
             async with BlockchainMonitor() as monitor:
                 # НОВОЕ v4.2: Устанавливаем текущий Solana RPC
-                if "solana" in settings.ENABLED_CHAINS:
+                if "solana" in chains_to_scan:
                     monitor.apis["solana"]["url"] = self.solana_rpc_endpoints[self.current_solana_rpc_index]
                 
-                events = await monitor.fetch_events(start_time)
+                # НОВОЕ v4.2: Передаем rate_limiter в monitor
+                if self.rate_limiter:
+                    monitor.rate_limiter = self.rate_limiter
+                
+                events = await monitor.fetch_events(start_time, chains=chains_to_scan)
                 self.stats["events_collected"] += len(events)
                 
-                # НОВОЕ v4.2: Проверяем Solana статус
-                solana_stats = monitor.get_stats()
-                await self._handle_solana_status(solana_stats)
+                # НОВОЕ v4.2: Обрабатываем статистику мониторинга
+                await self._handle_monitor_stats(monitor)
                 
                 if not events:
                     print("👍 [WHALE] Новых перемещений не найдено")
@@ -626,58 +649,72 @@ class IntegratedScheduler:
             raise
     
     # ========================================================================
-    # НОВОЕ v4.2: SOLANA FALLBACK MANAGEMENT
+    # НОВОЕ v4.2: CHAIN AVAILABILITY & MONITORING
     # ========================================================================
     
-    async def _handle_solana_status(self, monitor_stats: Dict):
+    def _get_available_chains(self) -> List[str]:
         """
-        НОВОЕ v4.2: Обработка статуса Solana и управление fallback RPC
+        НОВОЕ v4.2: Получить список доступных chains с учетом rate limiting
         """
+        if not self.rate_limiter:
+            return settings.ENABLED_CHAINS.copy()
         
-        if "solana" not in settings.ENABLED_CHAINS:
+        available_chains = []
+        
+        for chain in settings.ENABLED_CHAINS:
+            if self.rate_limiter.is_chain_enabled(chain):
+                available_chains.append(chain)
+            else:
+                # Chain временно отключен из-за 429 ошибок
+                pass
+        
+        if len(available_chains) < len(settings.ENABLED_CHAINS):
+            disabled = set(settings.ENABLED_CHAINS) - set(available_chains)
+            print(f"⏸️ [CHAINS] Временно отключены: {', '.join(disabled)}")
+        
+        return available_chains
+    
+    async def _handle_monitor_stats(self, monitor):
+        """
+        НОВОЕ v4.2: Обработка статистики мониторинга и управление Solana RPC
+        """
+        if not self.rate_limiter:
             return
         
-        solana_errors = monitor_stats.get("errors", {}).get("solana", 0)
-        solana_retries = monitor_stats.get("retries_429", {}).get("solana", 0)
-        
-        current_time = time.time()
-        
-        if solana_errors > 0 or solana_retries >= 3:
-            self.solana_consecutive_failures += 1
-            print(f"⚠️  [SOLANA] Неудача #{self.solana_consecutive_failures} (errors={solana_errors}, retries={solana_retries})")
-            
-            if self.solana_consecutive_failures >= self.solana_max_consecutive_failures:
-                self.solana_backoff_until = current_time + self.solana_backoff_seconds
-                self.stats["solana_backoffs"] += 1
-                print(f"🔄 [SOLANA] Backoff на {self.solana_backoff_seconds}s")
-                
-                # Переключаем на следующий RPC
-                old_index = self.current_solana_rpc_index
-                self.current_solana_rpc_index = (self.current_solana_rpc_index + 1) % len(self.solana_rpc_endpoints)
-                self.stats["solana_rpc_switches"] += 1
-                
-                next_rpc = self.solana_rpc_endpoints[self.current_solana_rpc_index]
-                print(f"🔄 [SOLANA] RPC switch: endpoint {old_index} → {self.current_solana_rpc_index}")
-                print(f"   New RPC: {next_rpc[:50]}...")
-                
-                self.solana_consecutive_failures = 0
+        # Получаем статистику из monitor (если она доступна)
+        if hasattr(monitor, 'get_stats'):
+            monitor_stats = monitor.get_stats()
         else:
-            # Успех - сбрасываем счетчик
-            if self.solana_consecutive_failures > 0:
-                print(f"✅ [SOLANA] Восстановление после {self.solana_consecutive_failures} неудач")
-            self.solana_consecutive_failures = 0
+            monitor_stats = {}
+        
+        # Обновляем статистику chains
+        for chain in settings.ENABLED_CHAINS:
+            if chain in monitor_stats.get("chains", {}):
+                chain_stats = monitor_stats["chains"][chain]
+                
+                # Проверяем успешность
+                if chain_stats.get("success", False):
+                    self.rate_limiter.record_success(chain)
+                elif chain_stats.get("http_429", False):
+                    self.rate_limiter.record_429_error(chain)
+                    
+                    # Для Solana: переключаем RPC endpoint
+                    if chain == "solana":
+                        await self._switch_solana_rpc()
+                elif chain_stats.get("error", False):
+                    self.rate_limiter.record_other_error(chain)
     
-    def _should_skip_solana(self) -> bool:
-        """Проверяет нужно ли пропустить Solana из-за backoff"""
-        current_time = time.time()
+    async def _switch_solana_rpc(self):
+        """
+        НОВОЕ v4.2: Переключение Solana RPC endpoint при ошибках
+        """
+        old_index = self.current_solana_rpc_index
+        self.current_solana_rpc_index = (self.current_solana_rpc_index + 1) % len(self.solana_rpc_endpoints)
+        self.stats["solana_rpc_switches"] += 1
         
-        if current_time < self.solana_backoff_until:
-            remaining = int(self.solana_backoff_until - current_time)
-            if remaining % 30 == 0:  # Логируем каждые 30 секунд
-                print(f"⏸️  [SOLANA] В backoff режиме, осталось {remaining}s")
-            return True
-        
-        return False
+        next_rpc = self.solana_rpc_endpoints[self.current_solana_rpc_index]
+        print(f"🔄 [SOLANA] RPC switch: endpoint {old_index} → {self.current_solana_rpc_index}")
+        print(f"   New RPC: {next_rpc[:60]}...")
     
     # ========================================================================
     # WHALE MONITORING LOOPS
@@ -694,23 +731,28 @@ class IntegratedScheduler:
                 print(f"\n📊 [WHALE] Цикл: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
                 self.stats["last_cycle_time"] = datetime.utcnow()
                 
-                # НОВОЕ v4.2: Определяем chains с учетом Solana backoff
-                chains_to_scan = settings.ENABLED_CHAINS.copy()
+                # НОВОЕ v4.2: Получаем доступные chains
+                chains_to_scan = self._get_available_chains()
                 
-                if "solana" in chains_to_scan and self._should_skip_solana():
-                    chains_to_scan.remove("solana")
+                if not chains_to_scan:
+                    print("⏸️ [WHALE] Все chains временно недоступны, ожидание...")
+                    await asyncio.sleep(60)
+                    continue
                 
                 async with BlockchainMonitor() as monitor:
-                    # НОВОЕ v4.2: Устанавливаем текущий Solana RPC
+                    # НОВОЕ v4.2: Устанавливаем Solana RPC
                     if "solana" in chains_to_scan:
                         monitor.apis["solana"]["url"] = self.solana_rpc_endpoints[self.current_solana_rpc_index]
+                    
+                    # НОВОЕ v4.2: Передаем rate_limiter
+                    if self.rate_limiter:
+                        monitor.rate_limiter = self.rate_limiter
                     
                     events = await monitor.fetch_events(start_time, chains=chains_to_scan)
                     self.stats["events_collected"] += len(events)
                     
-                    # НОВОЕ v4.2: Обработка Solana статуса
-                    solana_stats = monitor.get_stats()
-                    await self._handle_solana_status(solana_stats)
+                    # НОВОЕ v4.2: Обрабатываем статистику
+                    await self._handle_monitor_stats(monitor)
                     
                     if not events:
                         print("👍 [WHALE] Новых перемещений не найдено")
@@ -1612,10 +1654,12 @@ class IntegratedScheduler:
                     # НОВОЕ v4.2: Solana stats
                     extended_stats["solana"] = {
                         "rpc_switches": self.stats.get("solana_rpc_switches", 0),
-                        "backoffs": self.stats.get("solana_backoffs", 0),
-                        "current_rpc_index": self.current_solana_rpc_index,
-                        "consecutive_failures": self.solana_consecutive_failures
+                        "current_rpc_index": self.current_solana_rpc_index
                     }
+                    
+                    # НОВОЕ v4.2: Rate Limiter stats
+                    if self.rate_limiter:
+                        extended_stats["rate_limiter"] = self.rate_limiter.get_stats()
                     
                     await self.alert_manager.send_daily_stats({"integrated": extended_stats})
                 
@@ -1725,7 +1769,11 @@ class IntegratedScheduler:
         print(f"\n🌊 SOLANA (v4.2):")
         print(f"  Fallback RPC: ✅ {len(self.solana_rpc_endpoints)} endpoints")
         print(f"  Current RPC: {self.solana_rpc_endpoints[self.current_solana_rpc_index][:50]}...")
-        print(f"  Intelligent Backoff: ✅")
+        if self.rate_limiter:
+            print(f"  ChainRateLimiter: ✅ Integrated")
+            print(f"  Solana Delay: {self.rate_limiter.chain_delays.get('solana', 0)}s")
+        else:
+            print(f"  ChainRateLimiter: ⚠️ Not Connected")
         
         print(f"\n📈 TRADING SYSTEM:")
         if self.trading_enabled:
@@ -1785,8 +1833,15 @@ class IntegratedScheduler:
         
         print(f"\n🌊 SOLANA:")
         print(f"  RPC Switches: {self.stats.get('solana_rpc_switches', 0)}")
-        print(f"  Backoffs: {self.stats.get('solana_backoffs', 0)}")
         print(f"  Final RPC Index: {self.current_solana_rpc_index}")
+        
+        if self.rate_limiter:
+            print(f"\n🔒 RATE LIMITER:")
+            rate_stats = self.rate_limiter.get_stats()
+            for chain, stats in rate_stats['chains'].items():
+                if stats['total_requests'] > 0:
+                    success_rate = (stats['successful_requests'] / stats['total_requests']) * 100
+                    print(f"  {chain}: {stats['total_requests']} req ({success_rate:.1f}% success), {stats['total_429_errors']} 429s")
         
         if self.trading_enabled:
             print(f"\n📈 TRADING SYSTEM:")
@@ -1838,6 +1893,10 @@ class IntegratedScheduler:
         print("\n" + "="*80)
         print("✅ SHUTDOWN COMPLETE")
         print("="*80 + "\n")
+    
+    async def cleanup(self):
+        """Cleanup method для совместимости с main.py"""
+        await self.shutdown()
 
 
 scheduler = IntegratedScheduler()
