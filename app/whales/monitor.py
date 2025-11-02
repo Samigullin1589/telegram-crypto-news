@@ -1,6 +1,6 @@
 # app/whales/monitor.py
 """
-BLOCKCHAIN MONITOR v3.1
+BLOCKCHAIN MONITOR v4.2
 
 Универсальный мониторинг крупных транзакций на всех блокчейнах:
 - Multi-chain support (Ethereum, BSC, Solana, Tron, Base, Arbitrum, Polygon)
@@ -10,7 +10,8 @@ BLOCKCHAIN MONITOR v3.1
 - Automatic retry с exponential backoff
 - Circuit breaker для защиты от перегрузки
 - Rate limiting и caching
-- НОВОЕ v3.1: Solana rate limiter и retry для 429 errors
+- НОВОЕ v4.2: Полная интеграция с ChainRateLimiter из main.py
+- НОВОЕ v4.2: Унифицированное управление rate limiting для всех chains
 """
 
 import aiohttp
@@ -54,7 +55,7 @@ class CircuitBreaker:
         
         if self.failures >= self.failure_threshold:
             self.state = "OPEN"
-            print(f"⚠️  [CIRCUIT] Circuit breaker OPEN ({self.failures} failures)")
+            print(f"⚠️ [CIRCUIT] Circuit breaker OPEN ({self.failures} failures)")
     
     def can_execute(self) -> bool:
         """Проверяет можно ли выполнять запросы"""
@@ -102,50 +103,18 @@ class TransactionCache:
             del self.cache[tx_hash]
 
 
-class SolanaRateLimiter:
-    """
-    НОВОЕ v3.1: Rate limiter специально для Solana API
-    Предотвращает 429 errors путем ограничения запросов
-    """
-    
-    def __init__(self, max_requests: int = 50, window_seconds: int = 60):
-        self.max_requests = max_requests
-        self.window_seconds = window_seconds
-        self.requests = deque()
-    
-    async def acquire(self):
-        """Ожидает пока не появится слот для запроса"""
-        now = time.time()
-        
-        # Удаляем старые запросы за пределами окна
-        while self.requests and self.requests[0] < now - self.window_seconds:
-            self.requests.popleft()
-        
-        # Если достигли лимита, ждем
-        if len(self.requests) >= self.max_requests:
-            oldest_request = self.requests[0]
-            wait_time = (oldest_request + self.window_seconds) - now
-            
-            if wait_time > 0:
-                print(f"⏳ [SOLANA] Rate limit reached, waiting {wait_time:.1f}s")
-                await asyncio.sleep(wait_time + 0.1)
-                
-                # Очищаем после ожидания
-                now = time.time()
-                while self.requests and self.requests[0] < now - self.window_seconds:
-                    self.requests.popleft()
-        
-        # Записываем новый запрос
-        self.requests.append(now)
-
-
 class BlockchainMonitor:
     """
     Универсальный монитор всех блокчейнов
+    
+    НОВОЕ v4.2: Полная интеграция с ChainRateLimiter
     """
     
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
+        
+        # НОВОЕ v4.2: Интеграция с ChainRateLimiter из main.py
+        self.rate_limiter = None
         
         # API endpoints и ключи
         self.apis = {
@@ -199,16 +168,6 @@ class BlockchainMonitor:
             for chain in self.apis.keys()
         }
         
-        # Rate limiting
-        self.last_request_time = defaultdict(float)
-        self.min_request_interval = 0.2
-        
-        # НОВОЕ v3.1: Специальный rate limiter для Solana
-        self.solana_rate_limiter = SolanaRateLimiter(
-            max_requests=settings.SOLANA_RATE_LIMIT_REQUESTS,
-            window_seconds=settings.SOLANA_RATE_LIMIT_WINDOW
-        )
-        
         # Transaction cache
         self.tx_cache = TransactionCache(ttl_seconds=3600)
         
@@ -228,7 +187,8 @@ class BlockchainMonitor:
             "errors": defaultdict(int),
             "circuit_breaker_trips": defaultdict(int),
             "dex_detected": defaultdict(int),
-            "retries_429": defaultdict(int)
+            "retries_429": defaultdict(int),
+            "chains": {}  # НОВОЕ v4.2: детальная статистика по chains
         }
     
     # ========================================================================
@@ -243,7 +203,7 @@ class BlockchainMonitor:
             timeout=timeout,
             connector=connector,
             headers={
-                "User-Agent": "CryptoCompass/3.1",
+                "User-Agent": "CryptoCompass/4.2",
                 "Accept": "application/json"
             }
         )
@@ -255,10 +215,10 @@ class BlockchainMonitor:
             await self.session.close()
     
     # ========================================================================
-    # НОВОЕ v3.1: RETRY С EXPONENTIAL BACKOFF
+    # НОВОЕ v4.2: ИНТЕГРАЦИЯ С CHAINRATELIMITER
     # ========================================================================
     
-    async def _retry_request(
+    async def _execute_with_rate_limit(
         self,
         chain: str,
         request_func,
@@ -266,10 +226,10 @@ class BlockchainMonitor:
         **kwargs
     ):
         """
-        НОВОЕ v3.1: Retry wrapper с exponential backoff для 429 errors
+        НОВОЕ v4.2: Выполняет запрос с интеграцией ChainRateLimiter
         
         Args:
-            chain: Название chain (для статистики)
+            chain: Название chain
             request_func: Async функция для запроса
             *args, **kwargs: Аргументы для request_func
         
@@ -277,19 +237,56 @@ class BlockchainMonitor:
             Результат request_func или None при неудаче
         """
         
-        max_attempts = settings.RETRY_MAX_ATTEMPTS
-        backoff_factor = settings.RETRY_BACKOFF_FACTOR
-        initial_delay = settings.RETRY_INITIAL_DELAY
+        # Инициализируем статистику для chain
+        if chain not in self.stats["chains"]:
+            self.stats["chains"][chain] = {
+                "success": False,
+                "http_429": False,
+                "error": False,
+                "attempts": 0
+            }
+        
+        chain_stats = self.stats["chains"][chain]
+        chain_stats["attempts"] += 1
+        
+        # НОВОЕ v4.2: Используем ChainRateLimiter если он доступен
+        if self.rate_limiter:
+            # Проверяем доступность chain
+            if not self.rate_limiter.is_chain_enabled(chain):
+                print(f"⏸️ [MONITOR] {chain} временно отключен rate limiter")
+                chain_stats["error"] = True
+                return None
+            
+            # Ждем если нужно
+            await self.rate_limiter.wait_if_needed(chain)
+        
+        max_attempts = getattr(settings, 'RETRY_MAX_ATTEMPTS', 3)
+        backoff_factor = getattr(settings, 'RETRY_BACKOFF_FACTOR', 2)
+        initial_delay = getattr(settings, 'RETRY_INITIAL_DELAY', 1.0)
         
         for attempt in range(max_attempts):
             try:
                 result = await request_func(*args, **kwargs)
+                
+                # Успех - записываем в rate_limiter
+                if self.rate_limiter:
+                    self.rate_limiter.record_success(chain)
+                
+                chain_stats["success"] = True
+                chain_stats["http_429"] = False
+                chain_stats["error"] = False
+                
                 return result
             
             except aiohttp.ClientResponseError as e:
-                if e.status == 429:  # Rate limit exceeded
+                if e.status == 429:
+                    chain_stats["http_429"] = True
+                    
+                    # Записываем 429 в rate_limiter
+                    if self.rate_limiter:
+                        self.rate_limiter.record_429_error(chain)
+                    
                     if attempt < max_attempts - 1:
-                        # Exponential backoff
                         delay = initial_delay * (backoff_factor ** attempt)
                         
                         self.stats["retries_429"][chain] += 1
@@ -298,14 +295,35 @@ class BlockchainMonitor:
                         await asyncio.sleep(delay)
                     else:
                         print(f"❌ [RETRY] {chain} HTTP 429, max retries exceeded")
-                        raise
+                        chain_stats["error"] = True
+                        return None
                 else:
-                    # Для других ошибок не retry
-                    raise
+                    # Другие HTTP ошибки
+                    print(f"❌ [MONITOR] {chain} HTTP {e.status}: {e}")
+                    
+                    if self.rate_limiter:
+                        self.rate_limiter.record_other_error(chain)
+                    
+                    chain_stats["error"] = True
+                    return None
+            
+            except asyncio.TimeoutError:
+                print(f"⏱️ [MONITOR] {chain} timeout")
+                
+                if self.rate_limiter:
+                    self.rate_limiter.record_other_error(chain)
+                
+                chain_stats["error"] = True
+                return None
             
             except Exception as e:
-                # Для других исключений не retry
-                raise
+                print(f"❌ [MONITOR] {chain} unexpected error: {e}")
+                
+                if self.rate_limiter:
+                    self.rate_limiter.record_other_error(chain)
+                
+                chain_stats["error"] = True
+                return None
         
         return None
     
@@ -337,14 +355,27 @@ class BlockchainMonitor:
         # Определяем chains для мониторинга
         chains_to_monitor = chains or list(self.apis.keys())
         
-        # ИСПРАВЛЕНО v3.1: Фильтруем chains с доступными API ключами (кроме Solana/Tron - работают с публичными RPC)
+        # Фильтруем chains с доступными API ключами (кроме Solana/Tron)
         chains_to_monitor = [
             chain for chain in chains_to_monitor
             if self.apis[chain]["key"] or chain in ["solana", "tron"]
         ]
         
+        # НОВОЕ v4.2: Фильтруем chains через rate_limiter
+        if self.rate_limiter:
+            available_chains = [
+                chain for chain in chains_to_monitor
+                if self.rate_limiter.is_chain_enabled(chain)
+            ]
+            
+            if len(available_chains) < len(chains_to_monitor):
+                disabled = set(chains_to_monitor) - set(available_chains)
+                print(f"⏸️ [MONITOR] Rate limiter отключил: {', '.join(disabled)}")
+            
+            chains_to_monitor = available_chains
+        
         if not chains_to_monitor:
-            print("⚠️  [MONITOR] Нет доступных API ключей")
+            print("⚠️ [MONITOR] Нет доступных chains")
             return []
         
         print(f"🔍 [MONITOR] Сканирую {len(chains_to_monitor)} chains: {', '.join(chains_to_monitor)}")
@@ -393,20 +424,16 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Получает события для конкретного chain
-        ИСПРАВЛЕНО: правильный routing для EVM/Solana/Tron
         """
         
         # Проверяем circuit breaker
         if not self.circuit_breakers[chain].can_execute():
-            print(f"⚠️  [MONITOR] {chain} circuit breaker OPEN, пропускаю")
+            print(f"⚠️ [MONITOR] {chain} circuit breaker OPEN, пропускаю")
             self.stats["circuit_breaker_trips"][chain] += 1
             return []
         
         try:
-            # Rate limiting
-            await self._wait_for_rate_limit(chain)
-            
-            # ИСПРАВЛЕНО: Правильный routing по типу chain
+            # Routing по типу chain
             if chain in ["ethereum", "bsc", "base", "arbitrum", "polygon"]:
                 events = await self._fetch_evm_events(chain, start_time, assets)
             elif chain == "solana":
@@ -414,7 +441,7 @@ class BlockchainMonitor:
             elif chain == "tron":
                 events = await self._fetch_tron_events(start_time, assets)
             else:
-                print(f"⚠️  [MONITOR] Неизвестный chain: {chain}")
+                print(f"⚠️ [MONITOR] Неизвестный chain: {chain}")
                 return []
             
             # Успех - обновляем circuit breaker
@@ -479,12 +506,12 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Получает крупные нативные транзакции (ETH, BNB, etc)
+        НОВОЕ v4.2: Интеграция с ChainRateLimiter
         """
         
         events = []
         
         try:
-            # Используем прямой JSON-RPC endpoint
             # Публичные RPC endpoints для каждого chain
             rpc_endpoints = {
                 "ethereum": "https://eth.llamarpc.com",
@@ -494,50 +521,46 @@ class BlockchainMonitor:
                 "polygon": "https://polygon-rpc.com"
             }
             
-            # Используем публичный RPC вместо Etherscan API
             rpc_url = rpc_endpoints.get(chain, api_url)
             
             # JSON-RPC запрос для получения последнего блока
-            rpc_payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_blockNumber",
-                "params": [],
-                "id": 1
-            }
-            
-            # DEBUG: Логируем запрос
-            print(f"🔍 [DEBUG] {chain} - Запрос к RPC:")
-            print(f"   RPC URL: {rpc_url}")
-            
-            headers = {"Content-Type": "application/json"}
-            
-            async with self.session.post(rpc_url, json=rpc_payload, headers=headers) as response:
-                if response.status != 200:
-                    print(f"❌ [MONITOR] HTTP {response.status} для {chain}")
-                    return []
+            async def _get_latest_block():
+                rpc_payload = {
+                    "jsonrpc": "2.0",
+                    "method": "eth_blockNumber",
+                    "params": [],
+                    "id": 1
+                }
                 
-                data = await response.json()
+                print(f"🔍 [DEBUG] {chain} - Запрос к RPC:")
+                print(f"   RPC URL: {rpc_url}")
                 
-                # Проверяем на ошибки RPC
-                if "error" in data:
-                    error_msg = data.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    print(f"❌ [MONITOR] RPC error для {chain}: {error_msg}")
-                    return []
+                headers = {"Content-Type": "application/json"}
                 
-                # Парсим hex результат
-                result = data.get("result", "0x0")
-                if isinstance(result, str) and result.startswith("0x"):
-                    latest_block = int(result, 16)
-                    # DEBUG: Логируем успешный ответ
-                    print(f"✅ [DEBUG] {chain} - Успешный ответ:")
-                    print(f"   Latest block: {latest_block} ({result})")
-                else:
-                    print(f"❌ [MONITOR] Неверный формат блока для {chain}: {result}")
-                    print(f"   Full response: {data}")
-                    return []
-
+                async with self.session.post(rpc_url, json=rpc_payload, headers=headers) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    
+                    if "error" in data:
+                        error_msg = data.get("error", {})
+                        if isinstance(error_msg, dict):
+                            error_msg = error_msg.get("message", str(error_msg))
+                        raise Exception(f"RPC error: {error_msg}")
+                    
+                    result = data.get("result", "0x0")
+                    if isinstance(result, str) and result.startswith("0x"):
+                        latest_block = int(result, 16)
+                        print(f"✅ [DEBUG] {chain} - Успешный ответ:")
+                        print(f"   Latest block: {latest_block} ({result})")
+                        return latest_block
+                    else:
+                        raise Exception(f"Неверный формат блока: {result}")
+            
+            # НОВОЕ v4.2: Используем rate limiter
+            latest_block = await self._execute_with_rate_limit(chain, _get_latest_block)
+            
+            if latest_block is None:
+                return []
             
             # Определяем сколько блоков сканировать
             time_window_minutes = (datetime.utcnow() - start_time).total_seconds() / 60
@@ -553,18 +576,17 @@ class BlockchainMonitor:
             
             block_time = block_times.get(chain, 12)
             blocks_to_scan = int((time_window_minutes * 60) / block_time)
-            blocks_to_scan = min(blocks_to_scan, 100)  # Ограничиваем для производительности
+            blocks_to_scan = min(blocks_to_scan, 100)
             
             start_block = max(latest_block - blocks_to_scan, 0)
             
             # Batch запрос блоков
             for block_num in range(start_block, latest_block, 10):
-                # Получаем блоки batch запросом
                 batch_size = min(10, latest_block - block_num)
                 
                 block_tasks = [
                     self._get_evm_block_with_txs(
-                        api_url, api_key, block_num + i
+                        chain, api_url, api_key, block_num + i
                     )
                     for i in range(batch_size)
                 ]
@@ -579,7 +601,6 @@ class BlockchainMonitor:
                     transactions = block_data.get("transactions", [])
                     
                     for tx in transactions:
-                        # Проверяем кэш
                         tx_hash = tx.get("hash", "")
                         if self.tx_cache.contains(tx_hash):
                             self.stats["cache_hits"] += 1
@@ -588,7 +609,6 @@ class BlockchainMonitor:
                         event = await self._parse_evm_native_transaction(tx, chain)
                         
                         if event:
-                            # Применяем фильтры
                             if self._should_filter_event(event):
                                 self.stats["events_filtered"][chain] += 1
                                 continue
@@ -606,12 +626,14 @@ class BlockchainMonitor:
     
     async def _get_evm_block_with_txs(
         self,
+        chain: str,
         api_url: str,
         api_key: str,
         block_num: int
     ) -> Optional[Dict]:
         """
         Получает блок с транзакциями через прямой JSON-RPC
+        НОВОЕ v4.2: Интеграция с ChainRateLimiter
         """
         
         try:
@@ -624,34 +646,33 @@ class BlockchainMonitor:
                 "https://api.polygonscan.com/api": "https://polygon-rpc.com"
             }
             
-            # Используем публичный RPC вместо Etherscan API
             rpc_url = rpc_endpoints.get(api_url, api_url)
             
-            # JSON-RPC запрос для получения блока
-            rpc_payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_getBlockByNumber",
-                "params": [hex(block_num), True],  # True = включить транзакции
-                "id": 1
-            }
+            async def _get_block():
+                rpc_payload = {
+                    "jsonrpc": "2.0",
+                    "method": "eth_getBlockByNumber",
+                    "params": [hex(block_num), True],
+                    "id": 1
+                }
+                
+                headers = {"Content-Type": "application/json"}
+                
+                async with self.session.post(rpc_url, json=rpc_payload, headers=headers, timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    
+                    if "error" in data:
+                        return None
+                    
+                    return data.get("result")
             
-            headers = {"Content-Type": "application/json"}
-            
-            async with self.session.post(rpc_url, json=rpc_payload, headers=headers, timeout=10) as response:
-                if response.status != 200:
-                    return None
-                
-                data = await response.json()
-                
-                # Проверяем на ошибки RPC
-                if "error" in data:
-                    return None
-                
-                return data.get("result")
+            # НОВОЕ v4.2: Используем rate limiter
+            return await self._execute_with_rate_limit(chain, _get_block)
         
         except Exception:
             return None
-
+    
     async def _parse_evm_native_transaction(
         self,
         tx: Dict,
@@ -770,7 +791,7 @@ class BlockchainMonitor:
         assets: Optional[List[str]] = None
     ) -> List[WhaleEvent]:
         """
-        ИСПРАВЛЕНО v3.1: Получает события для Solana с rate limiting и retry
+        НОВОЕ v4.2: Получает события для Solana с полной интеграцией ChainRateLimiter
         """
         
         api_url = self.apis["solana"]["url"]
@@ -780,30 +801,26 @@ class BlockchainMonitor:
             print(f"🔍 [DEBUG] solana - Запрос к RPC:")
             print(f"   RPC URL: {api_url}")
             
-            # НОВОЕ v3.1: Используем rate limiter перед запросом
-            await self.solana_rate_limiter.acquire()
-            
-            # НОВОЕ v3.1: Используем retry wrapper
-            async def _make_request():
+            # НОВОЕ v4.2: Запрос через rate limiter
+            async def _get_signatures():
                 payload = {
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "getSignaturesForAddress",
                     "params": [
-                        "11111111111111111111111111111111",  # System Program
+                        "11111111111111111111111111111111",
                         {"limit": 100}
                     ]
                 }
                 
                 async with self.session.post(api_url, json=payload) as response:
-                    response.raise_for_status()  # Raises ClientResponseError для 429
+                    response.raise_for_status()
                     return await response.json()
             
-            # Выполняем запрос с retry
-            data = await self._retry_request("solana", _make_request)
+            data = await self._execute_with_rate_limit("solana", _get_signatures)
             
             if not data:
-                print(f"❌ [MONITOR] Solana: не удалось получить сигнатуры после всех попыток")
+                print(f"❌ [MONITOR] Solana: не удалось получить сигнатуры")
                 return []
             
             signatures = data.get("result", [])
@@ -812,7 +829,7 @@ class BlockchainMonitor:
             # Получаем детали транзакций (batch)
             tx_tasks = [
                 self._get_solana_transaction(api_url, sig["signature"])
-                for sig in signatures[:20]  # Ограничиваем
+                for sig in signatures[:20]
             ]
             
             transactions = await asyncio.gather(*tx_tasks, return_exceptions=True)
@@ -832,12 +849,6 @@ class BlockchainMonitor:
             
             print(f"✅ [DEBUG] solana - Найдено {len(events)} событий")
         
-        except aiohttp.ClientResponseError as e:
-            if e.status == 429:
-                print(f"❌ [MONITOR] Solana HTTP 429 (после всех retry)")
-            else:
-                print(f"❌ [MONITOR] Ошибка Solana HTTP {e.status}: {e}")
-        
         except Exception as e:
             print(f"❌ [MONITOR] Ошибка Solana: {e}")
         
@@ -849,15 +860,11 @@ class BlockchainMonitor:
         signature: str
     ) -> Optional[Dict]:
         """
-        ИСПРАВЛЕНО v3.1: Получает детали Solana транзакции с rate limiting
+        НОВОЕ v4.2: Получает детали Solana транзакции с rate limiting
         """
         
         try:
-            # НОВОЕ v3.1: Rate limiting
-            await self.solana_rate_limiter.acquire()
-            
-            # НОВОЕ v3.1: Retry wrapper
-            async def _make_request():
+            async def _get_tx():
                 payload = {
                     "jsonrpc": "2.0",
                     "id": 1,
@@ -876,7 +883,7 @@ class BlockchainMonitor:
                     data = await response.json()
                     return data.get("result")
             
-            return await self._retry_request("solana", _make_request)
+            return await self._execute_with_rate_limit("solana", _get_tx)
         
         except Exception:
             return None
@@ -996,6 +1003,7 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Получает события для Tron
+        НОВОЕ v4.2: Интеграция с ChainRateLimiter
         """
         
         api_url = self.apis["tron"]["url"]
@@ -1006,29 +1014,33 @@ class BlockchainMonitor:
             print(f"🔍 [DEBUG] tron - Запрос к API:")
             print(f"   API URL: {api_url}")
             
-            params = {
-                "limit": 50,
-                "start": 0,
-                "sort": "-timestamp",
-                "count": "true"
-            }
-            
-            headers = {}
-            if api_key:
-                headers["TRON-PRO-API-KEY"] = api_key
-            
-            async with self.session.get(
-                f"{api_url}/transfer",
-                params=params,
-                headers=headers
-            ) as response:
-                if response.status != 200:
-                    print(f"❌ [MONITOR] Tron HTTP {response.status}")
-                    return []
+            async def _get_transfers():
+                params = {
+                    "limit": 50,
+                    "start": 0,
+                    "sort": "-timestamp",
+                    "count": "true"
+                }
                 
-                data = await response.json()
-                transfers = data.get("data", [])
-                print(f"✅ [DEBUG] tron - Получено {len(transfers)} трансферов")
+                headers = {}
+                if api_key:
+                    headers["TRON-PRO-API-KEY"] = api_key
+                
+                async with self.session.get(
+                    f"{api_url}/transfer",
+                    params=params,
+                    headers=headers
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    return data.get("data", [])
+            
+            transfers = await self._execute_with_rate_limit("tron", _get_transfers)
+            
+            if not transfers:
+                return []
+            
+            print(f"✅ [DEBUG] tron - Получено {len(transfers)} трансферов")
             
             # Парсим трансферы
             for transfer in transfers:
@@ -1262,27 +1274,14 @@ class BlockchainMonitor:
         return bridges
     
     # ========================================================================
-    # RATE LIMITING
-    # ========================================================================
-    
-    async def _wait_for_rate_limit(self, chain: str):
-        """Rate limiting для запросов"""
-        
-        last_time = self.last_request_time.get(chain, 0)
-        elapsed = time.time() - last_time
-        
-        if elapsed < self.min_request_interval:
-            wait_time = self.min_request_interval - elapsed
-            await asyncio.sleep(wait_time)
-        
-        self.last_request_time[chain] = time.time()
-    
-    # ========================================================================
     # STATS
     # ========================================================================
     
     def get_stats(self) -> Dict:
-        """Возвращает статистику мониторинга"""
+        """
+        Возвращает статистику мониторинга
+        НОВОЕ v4.2: Включает детальную статистику по chains
+        """
         
         return {
             "requests_made": dict(self.stats["requests_made"]),
@@ -1296,7 +1295,8 @@ class BlockchainMonitor:
             "circuit_breaker_states": {
                 chain: breaker.state
                 for chain, breaker in self.circuit_breakers.items()
-            }
+            },
+            "chains": dict(self.stats["chains"])  # НОВОЕ v4.2
         }
     
     def print_stats(self):
@@ -1305,7 +1305,7 @@ class BlockchainMonitor:
         stats = self.get_stats()
         
         print("\n" + "=" * 80)
-        print("📊 BLOCKCHAIN MONITOR STATISTICS v3.1")
+        print("📊 BLOCKCHAIN MONITOR STATISTICS v4.2")
         print("=" * 80)
         
         print(f"\n📡 Requests Made:")
@@ -1337,5 +1337,17 @@ class BlockchainMonitor:
         for chain, state in stats["circuit_breaker_states"].items():
             emoji = "✅" if state == "CLOSED" else "⚠️" if state == "HALF_OPEN" else "🔴"
             print(f"   {chain:12s}: {emoji} {state}")
+        
+        # НОВОЕ v4.2: Детальная статистика chains
+        if stats["chains"]:
+            print(f"\n🔗 Chain Status (v4.2):")
+            for chain, chain_stats in stats["chains"].items():
+                status = "✅" if chain_stats.get("success", False) else "❌"
+                http_429 = "🔴 429" if chain_stats.get("http_429", False) else ""
+                error = "⚠️ ERROR" if chain_stats.get("error", False) else ""
+                attempts = chain_stats.get("attempts", 0)
+                
+                status_str = f"{status} {http_429} {error}".strip()
+                print(f"   {chain:12s}: {status_str} ({attempts} attempts)")
         
         print("\n" + "=" * 80 + "\n")
