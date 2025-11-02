@@ -1,7 +1,7 @@
 # main.py
 
 """
-INTEGRATED CRYPTO MONITOR v4.2 - Complete Edition with Enhanced Rate Limiting
+INTEGRATED CRYPTO MONITOR v4.3 - Complete Edition with Enhanced Rate Limiting
 Unified system: News Bot + Whale Monitor + Trading System + Telegram Commands
 
 РЕВОЛЮЦИОННЫЕ ВОЗМОЖНОСТИ:
@@ -20,6 +20,7 @@ Unified system: News Bot + Whale Monitor + Trading System + Telegram Commands
 ✅ User Commands (/start, /positions, /signal, etc.)
 ✅ HTTP Health Check Server (для Render.com)
 ✅ ИСПРАВЛЕНО: Solana Rate Limiting (02.11.2025)
+✅ ИСПРАВЛЕНО: NewsProcessor integration (02.11.2025)
 """
 
 import asyncio
@@ -297,7 +298,7 @@ async def health_handler(request):
     health_status = {
         'status': 'healthy',
         'timestamp': datetime.now(timezone.utc).isoformat(),
-        'service': 'crypto-compass-v4.2'
+        'service': 'crypto-compass-v4.3'
     }
     
     if resource_monitor:
@@ -568,7 +569,7 @@ class IntegratedCryptoMonitor:
     
     def __init__(self):
         print("\n" + "="*80)
-        print("🚀 INITIALIZING INTEGRATED CRYPTO MONITOR v4.2")
+        print("🚀 INITIALIZING INTEGRATED CRYPTO MONITOR v4.3")
         print("="*80 + "\n")
         
         try:
@@ -628,7 +629,7 @@ class IntegratedCryptoMonitor:
             "restarts": 0
         }
         
-        print("\n✅ Integrated Crypto Monitor v4.2 инициализирован")
+        print("\n✅ Integrated Crypto Monitor v4.3 инициализирован")
     
     def _patch_bot_handlers(self) -> bool:
         """
@@ -802,7 +803,11 @@ class IntegratedCryptoMonitor:
             await self.cleanup()
     
     async def _run_news_system(self):
-        """Запуск новостной системы"""
+        """
+        Запуск новостной системы
+        
+        ИСПРАВЛЕНО v4.3: Правильная интеграция с NewsProcessor
+        """
         print("📰 [NEWS] Запуск News Bot...")
         
         max_consecutive_errors = 5
@@ -814,10 +819,27 @@ class IntegratedCryptoMonitor:
             try:
                 self.health_monitor.update_news_heartbeat()
                 
-                await asyncio.wait_for(
-                    self.news_processor.process_cycle(),
-                    timeout=180.0
-                )
+                # ИСПРАВЛЕНО: Правильный вызов метода NewsProcessor
+                if hasattr(self.news_processor, 'run_cycle'):
+                    await asyncio.wait_for(
+                        self.news_processor.run_cycle(),
+                        timeout=180.0
+                    )
+                elif hasattr(self.news_processor, 'process_news'):
+                    await asyncio.wait_for(
+                        self.news_processor.process_news(),
+                        timeout=180.0
+                    )
+                elif hasattr(self.news_processor, 'run'):
+                    await asyncio.wait_for(
+                        self.news_processor.run(),
+                        timeout=180.0
+                    )
+                else:
+                    print("⚠️ [NEWS] NewsProcessor не имеет известных методов выполнения")
+                    print("   Доступные методы:", [m for m in dir(self.news_processor) if not m.startswith('_')])
+                    await asyncio.sleep(300)
+                    continue
                 
                 consecutive_errors = 0
                 
@@ -1174,7 +1196,7 @@ class IntegratedCryptoMonitor:
     def _print_startup_banner(self):
         """Вывод startup banner"""
         print("\n" + "="*80)
-        print("🚀 INTEGRATED CRYPTO MONITOR v4.2 - STARTING")
+        print("🚀 INTEGRATED CRYPTO MONITOR v4.3 - STARTING")
         print("="*80)
         
         print("\n📦 LOADED COMPONENTS:")
@@ -1351,7 +1373,7 @@ def create_directories():
 def print_system_info():
     """Вывод информации о системе"""
     print("="*80)
-    print("💎 CRYPTO COMPASS - Integrated Monitoring System v4.2")
+    print("💎 CRYPTO COMPASS - Integrated Monitoring System v4.3")
     print("="*80)
     print(f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(f"🐍 Python {sys.version.split()[0]}")
@@ -1369,7 +1391,7 @@ def main():
     
     create_directories()
     
-    print("🚀 Запуск Integrated Crypto Monitor v4.2...\n")
+    print("🚀 Запуск Integrated Crypto Monitor v4.3...\n")
     
     bot = IntegratedCryptoMonitor()
     
