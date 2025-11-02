@@ -1,5 +1,5 @@
 """
-INTEGRATED CRYPTO MONITOR v4.0 - Complete Edition
+INTEGRATED CRYPTO MONITOR v4.1 - Complete Edition with Enhanced Rate Limiting
 Unified system: News Bot + Whale Monitor + Trading System + Telegram Commands
 
 РЕВОЛЮЦИОННЫЕ ВОЗМОЖНОСТИ:
@@ -10,7 +10,8 @@ Unified system: News Bot + Whale Monitor + Trading System + Telegram Commands
 ✅ Unified Health Monitoring
 ✅ Graceful Shutdown
 ✅ Performance Analytics
-✅ Multi-Chain Support
+✅ Multi-Chain Support with Adaptive Rate Limiting
+✅ Automatic Chain Recovery from 429 Errors
 ✅ Advanced Analytics
 ✅ Position Management
 ✅ Risk Management
@@ -37,6 +38,162 @@ if sys.version_info < (3, 8):
 
 from aiohttp import web
 import aiohttp
+
+
+# ============================================================================
+# CHAIN RATE LIMITER
+# ============================================================================
+
+class ChainRateLimiter:
+    """
+    Адаптивный rate limiter для блокчейн RPC endpoints
+    
+    Автоматически управляет частотой запросов для каждой цепи:
+    - Отслеживает 429 ошибки
+    - Временно отключает проблемные цепи
+    - Автоматически восстанавливает через backoff период
+    - Динамически настраивает задержки между запросами
+    """
+    
+    def __init__(self):
+        self.chain_stats = {}
+        self.disabled_chains = {}
+        self.last_request_time = {}
+        self.min_delay_between_requests = 2.0
+        self.max_consecutive_429 = 3
+        self.backoff_periods = [60, 300, 900, 1800]
+        self.current_backoff_index = {}
+        
+        print("🔒 [RATE_LIMITER] Chain Rate Limiter инициализирован")
+    
+    def init_chain(self, chain: str):
+        """Инициализация статистики для цепи"""
+        if chain not in self.chain_stats:
+            self.chain_stats[chain] = {
+                'total_requests': 0,
+                'successful_requests': 0,
+                'failed_requests': 0,
+                'consecutive_429': 0,
+                'total_429_errors': 0,
+                'last_429_time': None,
+                'recovery_attempts': 0
+            }
+            self.last_request_time[chain] = datetime.now(timezone.utc) - timedelta(seconds=10)
+            self.current_backoff_index[chain] = 0
+    
+    def is_chain_enabled(self, chain: str) -> bool:
+        """Проверка доступности цепи"""
+        self.init_chain(chain)
+        
+        if chain not in self.disabled_chains:
+            return True
+        
+        disabled_until = self.disabled_chains[chain]
+        now = datetime.now(timezone.utc)
+        
+        if now >= disabled_until:
+            print(f"🔄 [RATE_LIMITER] {chain} - Попытка восстановления")
+            del self.disabled_chains[chain]
+            self.chain_stats[chain]['recovery_attempts'] += 1
+            self.chain_stats[chain]['consecutive_429'] = 0
+            return True
+        
+        return False
+    
+    async def wait_if_needed(self, chain: str):
+        """Ожидание перед запросом если необходимо"""
+        self.init_chain(chain)
+        
+        last_request = self.last_request_time.get(chain)
+        if last_request:
+            elapsed = (datetime.now(timezone.utc) - last_request).total_seconds()
+            delay_needed = self.min_delay_between_requests - elapsed
+            
+            if delay_needed > 0:
+                await asyncio.sleep(delay_needed)
+        
+        self.last_request_time[chain] = datetime.now(timezone.utc)
+        self.chain_stats[chain]['total_requests'] += 1
+    
+    def record_success(self, chain: str):
+        """Регистрация успешного запроса"""
+        if chain not in self.chain_stats:
+            self.init_chain(chain)
+        
+        self.chain_stats[chain]['successful_requests'] += 1
+        self.chain_stats[chain]['consecutive_429'] = 0
+        
+        if self.current_backoff_index[chain] > 0:
+            self.current_backoff_index[chain] = max(0, self.current_backoff_index[chain] - 1)
+    
+    def record_429_error(self, chain: str):
+        """Регистрация 429 ошибки"""
+        if chain not in self.chain_stats:
+            self.init_chain(chain)
+        
+        stats = self.chain_stats[chain]
+        stats['failed_requests'] += 1
+        stats['consecutive_429'] += 1
+        stats['total_429_errors'] += 1
+        stats['last_429_time'] = datetime.now(timezone.utc)
+        
+        if stats['consecutive_429'] >= self.max_consecutive_429:
+            backoff_idx = min(
+                self.current_backoff_index[chain],
+                len(self.backoff_periods) - 1
+            )
+            backoff_duration = self.backoff_periods[backoff_idx]
+            
+            disabled_until = datetime.now(timezone.utc) + timedelta(seconds=backoff_duration)
+            self.disabled_chains[chain] = disabled_until
+            
+            self.current_backoff_index[chain] = min(
+                self.current_backoff_index[chain] + 1,
+                len(self.backoff_periods) - 1
+            )
+            
+            print(f"⏸️ [RATE_LIMITER] {chain} - Временно отключен на {backoff_duration}с")
+            print(f"   Причина: {stats['consecutive_429']} последовательных 429 ошибок")
+            print(f"   Будет восстановлен: {disabled_until.strftime('%H:%M:%S UTC')}")
+    
+    def record_other_error(self, chain: str):
+        """Регистрация других ошибок"""
+        if chain not in self.chain_stats:
+            self.init_chain(chain)
+        
+        self.chain_stats[chain]['failed_requests'] += 1
+    
+    def get_stats(self) -> Dict:
+        """Получить статистику rate limiter"""
+        return {
+            'chains': self.chain_stats,
+            'disabled_chains': {
+                chain: until.isoformat()
+                for chain, until in self.disabled_chains.items()
+            }
+        }
+    
+    def print_stats(self):
+        """Вывести статистику"""
+        print("\n📊 [RATE_LIMITER] Статистика:")
+        
+        for chain, stats in self.chain_stats.items():
+            status = "✅ Active"
+            if chain in self.disabled_chains:
+                until = self.disabled_chains[chain]
+                remaining = (until - datetime.now(timezone.utc)).total_seconds()
+                status = f"⏸️ Disabled ({int(remaining)}s remaining)"
+            
+            success_rate = 0
+            if stats['total_requests'] > 0:
+                success_rate = (stats['successful_requests'] / stats['total_requests']) * 100
+            
+            print(f"\n{chain}:")
+            print(f"  Status: {status}")
+            print(f"  Requests: {stats['total_requests']} (Success: {stats['successful_requests']}, Failed: {stats['failed_requests']})")
+            print(f"  Success Rate: {success_rate:.1f}%")
+            print(f"  429 Errors: {stats['total_429_errors']} (Current streak: {stats['consecutive_429']})")
+            print(f"  Recovery Attempts: {stats['recovery_attempts']}")
 
 
 # ============================================================================
@@ -141,21 +298,25 @@ async def health_check_handler(request):
     """Health check endpoint для Render.com и других хостингов"""
     try:
         resource_monitor = request.app.get('resource_monitor')
+        rate_limiter = request.app.get('rate_limiter')
         
         stats = {}
         if resource_monitor:
-            stats = resource_monitor.get_stats()
+            stats['resources'] = resource_monitor.get_stats()
+        
+        if rate_limiter:
+            stats['rate_limiter'] = rate_limiter.get_stats()
         
         return web.json_response({
             'status': 'healthy',
             'timestamp': datetime.utcnow().isoformat(),
-            'resources': stats
+            **stats
         })
     except:
         return web.Response(text="OK", status=200)
 
 
-async def start_health_server(bot_application=None, resource_monitor=None):
+async def start_health_server(bot_application=None, resource_monitor=None, rate_limiter=None):
     """
     Запуск HTTP сервера для health checks и webhook
     
@@ -169,6 +330,7 @@ async def start_health_server(bot_application=None, resource_monitor=None):
     
     app['bot_application'] = bot_application
     app['resource_monitor'] = resource_monitor
+    app['rate_limiter'] = rate_limiter
     
     app.router.add_get('/', health_check_handler)
     app.router.add_get('/health', health_check_handler)
@@ -395,6 +557,7 @@ class IntegratedCryptoMonitor:
     3. Trading System - Генерация торговых сигналов с ML предсказаниями
     4. Telegram Bot - Интерактивный обработчик команд пользователя (WEBHOOK)
     5. HTTP Health Server - Endpoint для мониторинга и webhook (Render.com)
+    6. Chain Rate Limiter - Адаптивное управление запросами к RPC
     
     Все системы публикуют в один канал с умной приоритизацией
     и координацией для избежания перегрузки канала
@@ -402,7 +565,7 @@ class IntegratedCryptoMonitor:
     
     def __init__(self):
         print("\n" + "="*80)
-        print("🚀 INITIALIZING INTEGRATED CRYPTO MONITOR")
+        print("🚀 INITIALIZING INTEGRATED CRYPTO MONITOR v4.1")
         print("="*80 + "\n")
         
         try:
@@ -440,6 +603,11 @@ class IntegratedCryptoMonitor:
         self.resource_monitor = ResourceMonitor(
             max_memory_mb=int(os.getenv('MAX_MEMORY_MB', '450'))
         )
+        self.rate_limiter = ChainRateLimiter()
+        
+        if self.whale_scheduler and hasattr(self.whale_scheduler, 'set_rate_limiter'):
+            self.whale_scheduler.set_rate_limiter(self.rate_limiter)
+            print("✅ Rate Limiter подключен к Whale Scheduler")
         
         self.shutdown_event = asyncio.Event()
         self._tasks: List[asyncio.Task] = []
@@ -457,7 +625,7 @@ class IntegratedCryptoMonitor:
             "restarts": 0
         }
         
-        print("\n✅ Integrated Crypto Monitor инициализирован")
+        print("\n✅ Integrated Crypto Monitor v4.1 инициализирован")
     
     def _patch_bot_handlers(self) -> bool:
         """
@@ -531,7 +699,8 @@ class IntegratedCryptoMonitor:
         
         self._health_server_runner = await start_health_server(
             self.bot_application,
-            self.resource_monitor
+            self.resource_monitor,
+            self.rate_limiter
         )
         
         try:
@@ -850,6 +1019,8 @@ class IntegratedCryptoMonitor:
                 
                 self.resource_monitor.check_memory()
                 
+                self.rate_limiter.print_stats()
+                
                 await asyncio.sleep(self.health_monitor.check_interval)
             
             except asyncio.CancelledError:
@@ -995,7 +1166,7 @@ class IntegratedCryptoMonitor:
     def _print_startup_banner(self):
         """Вывод стартового баннера"""
         print("\n" + "="*80)
-        print("🚀 INTEGRATED CRYPTO MONITOR v4.0 - STARTING UP")
+        print("🚀 INTEGRATED CRYPTO MONITOR v4.1 - STARTING UP")
         print("="*80 + "\n")
         
         print("📦 АКТИВНЫЕ КОМПОНЕНТЫ:\n")
@@ -1020,6 +1191,7 @@ class IntegratedCryptoMonitor:
             print("   ├─ Pattern recognition")
             print("   ├─ Adaptive thresholds")
             print("   ├─ Performance validation")
+            print("   ├─ Adaptive Rate Limiting")
             print("   └─ Status: ✅ Active")
         else:
             print("🐋 Whale Monitor")
@@ -1051,6 +1223,15 @@ class IntegratedCryptoMonitor:
         print("   ├─ Error rate monitoring")
         print("   ├─ Auto-restart on failures")
         print(f"   ├─ Check interval: {self.health_monitor.check_interval}s")
+        print("   └─ Status: ✅ Active")
+        
+        print()
+        
+        print("🔒 Chain Rate Limiter")
+        print("   ├─ Adaptive request throttling")
+        print("   ├─ Automatic 429 error handling")
+        print("   ├─ Dynamic chain disable/enable")
+        print("   ├─ Exponential backoff recovery")
         print("   └─ Status: ✅ Active")
         
         print()
@@ -1094,6 +1275,18 @@ class IntegratedCryptoMonitor:
         if health_stats['total_cycles'] > 0:
             error_rate = (health_stats['total_errors'] / health_stats['total_cycles']) * 100
             print(f"   Error Rate: {error_rate:.2f}%")
+        
+        print(f"\n🔒 RATE LIMITER:")
+        rate_stats = self.rate_limiter.get_stats()
+        for chain, stats in rate_stats['chains'].items():
+            success_rate = 0
+            if stats['total_requests'] > 0:
+                success_rate = (stats['successful_requests'] / stats['total_requests']) * 100
+            
+            print(f"   {chain}:")
+            print(f"     Requests: {stats['total_requests']} (Success rate: {success_rate:.1f}%)")
+            print(f"     429 Errors: {stats['total_429_errors']}")
+            print(f"     Recovery Attempts: {stats['recovery_attempts']}")
         
         resource_stats = self.resource_monitor.get_stats()
         if resource_stats:
@@ -1221,7 +1414,7 @@ def create_directories():
 def print_system_info():
     """Вывод информации о системе"""
     print("="*80)
-    print("💎 CRYPTO COMPASS - Integrated Monitoring System v4.0")
+    print("💎 CRYPTO COMPASS - Integrated Monitoring System v4.1")
     print("="*80)
     print(f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(f"🐍 Python {sys.version.split()[0]}")
@@ -1239,7 +1432,7 @@ def main():
     
     create_directories()
     
-    print("🚀 Запуск Integrated Crypto Monitor...\n")
+    print("🚀 Запуск Integrated Crypto Monitor v4.1...\n")
     
     bot = IntegratedCryptoMonitor()
     
