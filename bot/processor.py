@@ -1,5 +1,5 @@
 """
-NEWS PROCESSOR v3.1 - Complete Edition with Enhanced Error Handling
+NEWS PROCESSOR v3.2 - Complete Edition with Enhanced Error Handling
 AI-powered crypto news aggregation and publishing
 
 ВОЗМОЖНОСТИ:
@@ -12,6 +12,7 @@ AI-powered crypto news aggregation and publishing
 ✅ Error recovery with retry
 ✅ Comprehensive metrics
 ✅ Graceful degradation if dependencies unavailable
+✅ ИСПРАВЛЕНО v3.2: Added run_cycle() and process_cycle() methods for integration
 """
 
 import asyncio
@@ -152,13 +153,18 @@ class NewsProcessor:
     - AI анализ контента
     - Smart gate фильтрацию
     - Telegram публикацию
+    
+    НОВОЕ v3.2: Методы для интеграции с main.py:
+    - run_cycle() - выполняет один цикл обработки
+    - process_cycle() - алиас для run_cycle()
+    - run() - бесконечный цикл (для standalone использования)
     """
     
     def __init__(self):
         """Инициализация процессора"""
         
         print("\n" + "="*80)
-        print("📰 NEWS PROCESSOR - INITIALIZATION")
+        print("📰 NEWS PROCESSOR - INITIALIZATION v3.2")
         print("="*80 + "\n")
         
         # Проверяем доступность конфига
@@ -239,10 +245,13 @@ class NewsProcessor:
         # Shutdown flag
         self.shutdown_requested = False
         
+        # Baseline loaded flag
+        self._baseline_loaded = False
+        
         # Initialization complete
         self._initialized = True
         
-        print("✅ News Processor инициализирован")
+        print("✅ News Processor v3.2 инициализирован")
         print(f"   • Sources: {len(NEWS_SOURCES)}")
         print(f"   • Fetch interval: {FETCH_INTERVAL}s")
         print(f"   • Posts per hour cap: {POSTS_PER_HOUR_CAP}")
@@ -250,6 +259,7 @@ class NewsProcessor:
         print(f"   • AI Handler: {'✅' if AI_HANDLER_AVAILABLE else '⚠️ dummy'}")
         print(f"   • Database: {'✅' if DATABASE_AVAILABLE else '⚠️ dummy'}")
         print(f"   • Telegram: {'✅' if TELEGRAM_AVAILABLE else '⚠️ dummy'}")
+        print(f"   • Available methods: run(), run_cycle(), process_cycle()")
         print()
     
     @property
@@ -257,9 +267,85 @@ class NewsProcessor:
         """Проверка инициализации"""
         return getattr(self, '_initialized', False)
     
+    async def run_cycle(self):
+        """
+        НОВОЕ v3.2: Выполняет ОДИН цикл обработки новостей
+        
+        Этот метод предназначен для интеграции с main.py
+        main.py вызывает его в своем цикле с контролируемыми интервалами
+        
+        Steps:
+        1. Загружает baseline при первом запуске
+        2. Fetch новостей из всех источников
+        3. Обработка через AI
+        4. Фильтрация через Smart Gate
+        5. Публикация лучших
+        
+        Raises:
+            Exception: При критических ошибках
+        """
+        
+        if not self.is_initialized:
+            print("⚠️ [NEWS] Processor not initialized, skipping cycle")
+            return
+        
+        # Загружаем baseline при первом запуске
+        if not self._baseline_loaded:
+            await self._initial_baseline()
+            self._baseline_loaded = True
+        
+        cycle_start = datetime.now(timezone.utc)
+        
+        print("\n" + "#"*80)
+        print(f"🔄 NEWS CYCLE #{self.metrics.cycles_completed + 1} - {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
+        print("#"*80 + "\n")
+        
+        # 1. Fetch новостей
+        articles = await self._fetch_all_sources()
+        
+        if not articles:
+            print("⚠️ [NEWS] Нет новых статей в этом цикле")
+            self.metrics.cycles_completed += 1
+            return
+        
+        print(f"\n📊 [NEWS] Собрано {len(articles)} новых статей")
+        
+        # 2. Обработка и фильтрация
+        candidates = await self._process_articles(articles)
+        
+        if not candidates:
+            print("⚠️ [NEWS] Нет кандидатов для публикации")
+            self.metrics.cycles_completed += 1
+            return
+        
+        print(f"✅ [NEWS] {len(candidates)} кандидатов прошли фильтры")
+        
+        # 3. Публикация
+        published = await self._publish_best(candidates)
+        
+        print(f"📤 [NEWS] Опубликовано: {published}/{len(candidates)}")
+        
+        # 4. Обновляем метрики
+        self.metrics.cycles_completed += 1
+        
+        cycle_duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
+        print(f"\n⏱️ [NEWS] Цикл завершен за {cycle_duration:.1f}s\n")
+    
+    async def process_cycle(self):
+        """
+        НОВОЕ v3.2: Алиас для run_cycle()
+        
+        Этот метод существует для совместимости с main.py
+        который может вызывать либо run_cycle(), либо process_cycle()
+        """
+        await self.run_cycle()
+    
     async def run(self):
         """
-        Главный цикл обработки новостей
+        Главный цикл обработки новостей (бесконечный)
+        
+        ВНИМАНИЕ: Этот метод НЕ используется в интеграции с main.py
+        Он предназначен для standalone запуска NewsProcessor
         
         Бесконечный цикл:
         1. Fetch новостей из всех источников
@@ -274,11 +360,12 @@ class NewsProcessor:
             await asyncio.sleep(300)
             return
         
-        print("🚀 [NEWS] Запуск главного цикла\n")
+        print("🚀 [NEWS] Запуск главного цикла (standalone mode)\n")
         
         # Загружаем baseline при первом запуске
-        if self.metrics.cycles_completed == 0:
+        if not self._baseline_loaded:
             await self._initial_baseline()
+            self._baseline_loaded = True
         
         while not self.shutdown_requested:
             try:
@@ -785,7 +872,7 @@ class NewsProcessor:
         """Вывод статистики"""
         
         print("\n" + "="*80)
-        print("📊 NEWS PROCESSOR STATISTICS")
+        print("📊 NEWS PROCESSOR STATISTICS v3.2")
         print("="*80)
         print(f"Uptime: {self.metrics.get_uptime()/3600:.1f}h")
         print(f"Cycles: {self.metrics.cycles_completed}")
