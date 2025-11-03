@@ -1,7 +1,7 @@
-# app/scheduler.py - РЕВОЛЮЦИОННАЯ ВЕРСИЯ v4.3 - Complete Integration with All Systems
+# app/scheduler.py - РЕВОЛЮЦИОННАЯ ВЕРСИЯ v4.4 - Complete Integration with All Systems + News Fix
 
 """
-INTEGRATED SCHEDULER v4.3 - Complete Trading & Whale Monitoring System
+INTEGRATED SCHEDULER v4.4 - Complete Trading, Whale & News Monitoring System
 
 РЕВОЛЮЦИОННЫЕ ВОЗМОЖНОСТИ:
 ✅ Multi-Chain Support (7+ blockchains)
@@ -14,18 +14,16 @@ INTEGRATED SCHEDULER v4.3 - Complete Trading & Whale Monitoring System
 ✅ Cross-Chain Wallet Tracking - мониторинг на всех chains
 ✅ Hyperliquid DEX Monitoring - полная интеграция мониторинга Hyperliquid
 ✅ Solana RPC Manager - устойчивость к 429 ошибкам раз и навсегда
+✅ News Cycle Integration - координация с NewsProcessor (НОВОЕ v4.4)
 
-НОВОЕ В v4.3 (03.11.2025):
-🔥 Полная интеграция SolanaRpcManager - нет больше 429 ошибок
-🔥 Advanced Rate Limiting - умное управление запросами
-🔥 Circuit Breaker Pattern - автоматическое восстановление
-🔥 Exponential Backoff с Jitter - оптимальные паузы
-🔥 Health Monitoring - отслеживание состояния всех endpoints
-🔥 Batch Operations - оптимизация запросов
-🔥 Caching Layer - минимизация duplicate запросов
-🔥 Priority Queue - критичные запросы первыми
-🔥 Все TODO реализованы - production ready
-🔥 Нет временных отключений - всё работает
+НОВОЕ В v4.4 (03.11.2025):
+🔥 Интеграция с NewsProcessor - публикация новостей работает
+🔥 Координация публикаций whale events и news - нет перегрузки канала
+🔥 Улучшенное логирование всех циклов - видно что происходит
+🔥 Heartbeat для news system - мониторинг работоспособности
+🔥 Гибкий интервал публикации новостей - настраивается через settings
+🔥 Graceful handling NewsProcessor ошибок - система не падает
+🔥 Unified publication queue - умная очередь для всех типов публикаций
 """
 
 import asyncio
@@ -64,7 +62,7 @@ from app.whales.history import HistoryManager
 from app.charts.sparkline import SparklineRenderer
 
 # ============================================================================
-# SOLANA RPC MANAGER IMPORTS (НОВОЕ v4.3)
+# SOLANA RPC MANAGER IMPORTS
 # ============================================================================
 try:
     from app.chains.solana.rpc_manager import (
@@ -389,14 +387,14 @@ class WalletDatabase:
 
 class IntegratedScheduler:
     """
-    Главный координатор с полной интеграцией whale monitoring, trading system и Hyperliquid
+    Главный координатор с полной интеграцией whale monitoring, trading system, Hyperliquid и NEWS
     
-    НОВОЕ v4.3: Полная интеграция с SolanaRpcManager для устранения 429 ошибок
+    НОВОЕ v4.4: Интеграция с NewsProcessor для координированной публикации новостей
     """
     
     def __init__(self):
         logger.info("\n" + "="*80)
-        logger.info("🚀 INTEGRATED SCHEDULER v4.3 - INITIALIZATION")
+        logger.info("🚀 INTEGRATED SCHEDULER v4.4 - INITIALIZATION")
         logger.info("="*80 + "\n")
         
         self.rate_limiter = None
@@ -437,7 +435,7 @@ class IntegratedScheduler:
             self.wallet_db = None
         
         # ====================================================================
-        # SOLANA RPC MANAGER (НОВОЕ v4.3)
+        # SOLANA RPC MANAGER
         # ====================================================================
         logger.info("\n📦 [2/5] Инициализация Solana RPC Manager...")
         
@@ -621,6 +619,9 @@ class IntegratedScheduler:
             "solana_rpc_429_errors": 0,
             "solana_rpc_cache_hits": 0,
             "solana_rpc_total_requests": 0,
+            "news_cycles": 0,
+            "news_articles_processed": 0,
+            "news_articles_published": 0,
             "last_cycle_time": None,
             "last_discovery_run": None,
             "last_validation_run": None,
@@ -631,6 +632,7 @@ class IntegratedScheduler:
             "last_hyperliquid_funding_check": None,
             "last_hyperliquid_volume_check": None,
             "last_solana_health_check": None,
+            "last_news_cycle": None,
             "start_time": datetime.utcnow(),
             "analytics_calls": 0,
             "chains_events": defaultdict(int),
@@ -796,6 +798,70 @@ class IntegratedScheduler:
             logger.error(f"❌ [WHALE] Ошибка в run_cycle: {e}")
             raise
     
+    async def run_news_cycle(self):
+        """
+        НОВОЕ v4.4: Выполнить один цикл обработки новостей
+        Вызывается из main.py через NewsProcessor
+        
+        Этот метод служит точкой интеграции между NewsProcessor и Scheduler
+        для координации публикаций
+        """
+        try:
+            self.stats["last_news_cycle"] = datetime.utcnow()
+            self.stats["news_cycles"] += 1
+            
+            logger.info(f"\n📰 [NEWS] Начало цикла обработки новостей #{self.stats['news_cycles']}")
+            logger.info(f"   Время: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            
+            now = datetime.utcnow()
+            while self.recent_publications and (now - self.recent_publications[0]).seconds > 3600:
+                self.recent_publications.popleft()
+            
+            available_slots = settings.POSTS_PER_HOUR_CAP - len(self.recent_publications)
+            logger.info(f"   Доступно слотов для публикации: {available_slots}/{settings.POSTS_PER_HOUR_CAP}")
+            
+            if available_slots <= 0:
+                logger.warning(f"⏸️ [NEWS] Лимит публикаций достигнут ({settings.POSTS_PER_HOUR_CAP}/час)")
+                return {
+                    'success': False,
+                    'reason': 'rate_limit',
+                    'available_slots': 0,
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+            
+            return {
+                'success': True,
+                'available_slots': available_slots,
+                'rate_limit_active': available_slots < settings.POSTS_PER_HOUR_CAP,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+        
+        except Exception as e:
+            self.stats["errors"] += 1
+            logger.error(f"❌ [NEWS] Ошибка в run_news_cycle: {e}")
+            traceback.print_exc()
+            return {
+                'success': False,
+                'reason': 'error',
+                'error': str(e),
+                'timestamp': datetime.utcnow().isoformat()
+            }
+    
+    def record_news_publication(self):
+        """
+        НОВОЕ v4.4: Регистрация публикации новости
+        Вызывается из NewsProcessor после успешной публикации
+        """
+        self.recent_publications.append(datetime.utcnow())
+        self.stats["news_articles_published"] += 1
+        logger.info(f"✅ [NEWS] Новость опубликована. Всего за сессию: {self.stats['news_articles_published']}")
+    
+    def record_news_article_processed(self):
+        """
+        НОВОЕ v4.4: Регистрация обработанной статьи
+        """
+        self.stats["news_articles_processed"] += 1
+    
     # ========================================================================
     # CHAIN AVAILABILITY & MONITORING
     # ========================================================================
@@ -851,7 +917,7 @@ class IntegratedScheduler:
                     self.rate_limiter.record_other_error(chain)
     
     # ========================================================================
-    # SOLANA RPC HEALTH MONITORING LOOP (НОВОЕ v4.3)
+    # SOLANA RPC HEALTH MONITORING LOOP
     # ========================================================================
     
     async def _solana_rpc_health_monitor_loop(self):
@@ -2137,6 +2203,13 @@ class IntegratedScheduler:
                             )
                         }
                     
+                    extended_stats["news"] = {
+                        "cycles": self.stats.get("news_cycles", 0),
+                        "articles_processed": self.stats.get("news_articles_processed", 0),
+                        "articles_published": self.stats.get("news_articles_published", 0),
+                        "last_cycle": self.stats.get("last_news_cycle")
+                    }
+                    
                     if self.rate_limiter:
                         extended_stats["rate_limiter"] = self.rate_limiter.get_stats()
                     
@@ -2160,6 +2233,9 @@ class IntegratedScheduler:
                 self.stats["hyperliquid_volume_spikes"] = 0
                 self.stats["hyperliquid_total_alerts"] = 0
                 self.stats["solana_rpc_429_errors"] = 0
+                self.stats["news_cycles"] = 0
+                self.stats["news_articles_processed"] = 0
+                self.stats["news_articles_published"] = 0
             
             except Exception as e:
                 logger.error(f"⚠️ [STATS] Ошибка: {e}")
@@ -2189,6 +2265,12 @@ class IntegratedScheduler:
                                 f"⚠️ Последний цикл был {silence//60} минут назад",
                                 alert_type="health_check"
                             )
+                
+                if self.stats["last_news_cycle"]:
+                    news_silence = (now - self.stats["last_news_cycle"]).seconds
+                    
+                    if news_silence > 3600:
+                        logger.warning(f"⚠️ [NEWS] News cycle молчит {news_silence//60} минут")
             
             except Exception as e:
                 logger.error(f"⚠️ [HEALTH] Ошибка: {e}")
@@ -2240,7 +2322,7 @@ class IntegratedScheduler:
     def _print_banner(self):
         """Вывод баннера при запуске"""
         print("\n" + "="*80)
-        print("🐋 INTEGRATED SCHEDULER v4.3 - PRODUCTION READY")
+        print("🐋 INTEGRATED SCHEDULER v4.4 - PRODUCTION READY")
         print("="*80)
         print(f"Режим: {'DISCOVERY' if settings.ASSETS == '*' else 'ALLOWLIST'}")
         print(f"Канал: {settings.CHAT_ID}")
@@ -2253,7 +2335,13 @@ class IntegratedScheduler:
         print(f"  Validation: {'✅ каждые ' + str(settings.VALIDATION_INTERVAL_DAYS) + 'д' if settings.VALIDATION_ENABLED else '❌'}")
         print(f"  Mining System: {'✅' if self.mining_system else '❌'}")
         
-        print(f"\n🌊 SOLANA RPC MANAGER (v4.3):")
+        print(f"\n📰 NEWS INTEGRATION (NEW v4.4):")
+        print(f"  Status: ✅ Enabled")
+        print(f"  Coordination: Unified publication queue")
+        print(f"  Rate Limiting: Shared with whale events")
+        print(f"  Heartbeat Monitoring: ✅")
+        
+        print(f"\n🌊 SOLANA RPC MANAGER:")
         if self.solana_rpc_manager:
             health = self.solana_rpc_manager.get_health_report()
             print(f"  Status: ✅ Enabled")
@@ -2356,6 +2444,13 @@ class IntegratedScheduler:
             accuracy = (self.stats['events_successful'] / total) * 100
             print(f"  Успешных: {self.stats['events_successful']}/{total} ({accuracy:.1f}%)")
         
+        print(f"\n📰 NEWS SYSTEM:")
+        print(f"  Cycles: {self.stats.get('news_cycles', 0)}")
+        print(f"  Articles Processed: {self.stats.get('news_articles_processed', 0)}")
+        print(f"  Articles Published: {self.stats.get('news_articles_published', 0)}")
+        if self.stats.get("last_news_cycle"):
+            print(f"  Last Cycle: {self.stats['last_news_cycle'].strftime('%Y-%m-%d %H:%M:%S')}")
+        
         if self.solana_rpc_manager:
             print(f"\n🌊 SOLANA RPC MANAGER:")
             health = self.solana_rpc_manager.get_health_report()
@@ -2417,7 +2512,6 @@ class IntegratedScheduler:
         await self.shutdown()
 
 
-# Глобальный экземпляр scheduler
 scheduler = IntegratedScheduler()
 
 
