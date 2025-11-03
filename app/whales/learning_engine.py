@@ -1,4 +1,3 @@
-# app/whales/learning_engine.py
 """
 LEARNING ENGINE v1.0
 
@@ -33,16 +32,10 @@ class LearningState:
     version: str = "1.0"
     last_updated: datetime = None
     
-    # Веса типов сигналов
     signal_type_weights: Dict[str, float] = None
-    
-    # Оптимизированные пороги
     optimized_thresholds: Dict[str, float] = None
-    
-    # Обнаруженные паттерны
     patterns: List[Dict] = None
     
-    # Статистика обучения
     training_samples: int = 0
     last_accuracy: float = 0.0
     improvement_rate: float = 0.0
@@ -78,14 +71,15 @@ class LearningEngine:
     def __init__(self, weights_file: str = None):
         self.weights_file = weights_file or settings.LEARNING_WEIGHTS_FILE
         
-        # Параметры обучения
         self.learning_rate = settings.LEARNING_RATE
         self.min_samples = settings.LEARNING_MIN_SAMPLES
         self.window_days = settings.LEARNING_WINDOW_DAYS
         self.max_weight_adjustment = settings.LEARNING_MAX_WEIGHT_ADJUSTMENT
         
-        # Состояние
         self.state = self._load_state()
+        
+        # История обучения
+        self.training_history: List[Dict] = []
     
     # ========================================================================
     # SIGNAL TYPE WEIGHTS OPTIMIZATION
@@ -96,11 +90,7 @@ class LearningEngine:
         Обновляет веса типов сигналов на основе производительности
         
         Args:
-            performance_data: Список {
-                "signal_type": str,
-                "outcome": "success" | "failure",
-                "confidence": int
-            }
+            performance_data: Список результатов сигналов
         
         Returns:
             Обновлённые веса
@@ -114,10 +104,21 @@ class LearningEngine:
             print(f"⚠️  Недостаточно данных ({len(performance_data)}/{self.min_samples})")
             return self.state.signal_type_weights
         
+        # Фильтруем по периоду
+        cutoff = datetime.utcnow() - timedelta(days=self.window_days)
+        recent_data = [
+            d for d in performance_data
+            if datetime.fromisoformat(d.get("published_at", datetime.utcnow().isoformat())) >= cutoff
+        ]
+        
+        if len(recent_data) < self.min_samples:
+            print(f"⚠️  Недостаточно данных за {self.window_days} дней")
+            return self.state.signal_type_weights
+        
         # Рассчитываем точность по типам
         type_performance = defaultdict(lambda: {"success": 0, "total": 0})
         
-        for data in performance_data:
+        for data in recent_data:
             signal_type = data.get("signal_type", "smart_money")
             outcome = data.get("outcome")
             
@@ -132,17 +133,15 @@ class LearningEngine:
             if perf["total"] > 0:
                 type_accuracy[signal_type] = perf["success"] / perf["total"]
             else:
-                type_accuracy[signal_type] = 0.5  # нейтрально
+                type_accuracy[signal_type] = 0.5
         
         print(f"\n📊 Точность по типам (текущая):")
         for signal_type, accuracy in type_accuracy.items():
             current_weight = self.state.signal_type_weights.get(signal_type, 0)
-            print(f"   {signal_type}: {accuracy:.1%} (вес: {current_weight:.1%})")
+            sample_size = type_performance[signal_type]["total"]
+            print(f"   {signal_type}: {accuracy:.1%} (вес: {current_weight:.1%}, n={sample_size})")
         
         # Обновляем веса с использованием Reinforcement Learning
-        # Награда = accuracy - 0.5 (центрируем вокруг 50%)
-        # Новый вес = старый вес + learning_rate * награда
-        
         new_weights = {}
         total_adjustment = 0
         
@@ -150,7 +149,7 @@ class LearningEngine:
             old_weight = self.state.signal_type_weights.get(signal_type, 0.25)
             accuracy = type_accuracy.get(signal_type, 0.5)
             
-            # Награда (от -0.5 до +0.5)
+            # Reward (от -0.5 до +0.5)
             reward = accuracy - 0.5
             
             # Обновление веса
@@ -160,7 +159,7 @@ class LearningEngine:
             adjustment = max(-self.max_weight_adjustment, min(self.max_weight_adjustment, adjustment))
             
             new_weight = old_weight + adjustment
-            new_weight = max(0.05, min(0.70, new_weight))  # Веса от 5% до 70%
+            new_weight = max(0.05, min(0.70, new_weight))
             
             new_weights[signal_type] = new_weight
             total_adjustment += adjustment
@@ -172,10 +171,25 @@ class LearningEngine:
         # Сохраняем
         old_weights = self.state.signal_type_weights.copy()
         self.state.signal_type_weights = new_weights
-        self.state.training_samples = len(performance_data)
+        self.state.training_samples = len(recent_data)
         self.state.last_updated = datetime.utcnow()
         
+        # Рассчитываем общую точность
+        total_success = sum(p["success"] for p in type_performance.values())
+        total_count = sum(p["total"] for p in type_performance.values())
+        self.state.last_accuracy = total_success / total_count if total_count > 0 else 0.0
+        
         self._save_state()
+        
+        # Сохраняем в историю
+        self.training_history.append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": "weight_update",
+            "old_weights": old_weights,
+            "new_weights": new_weights,
+            "accuracy": self.state.last_accuracy,
+            "samples": len(recent_data)
+        })
         
         print(f"\n✅ Веса обновлены:")
         for signal_type in ["smart_money", "mining", "onchain", "social"]:
@@ -185,6 +199,7 @@ class LearningEngine:
             arrow = "↑" if change > 0 else "↓" if change < 0 else "="
             print(f"   {signal_type}: {old:.1%} → {new:.1%} {arrow} ({change:+.1%})")
         
+        print(f"\n🎯 Общая точность: {self.state.last_accuracy:.1%}")
         print(f"{'=' * 80}\n")
         
         return new_weights
@@ -203,11 +218,7 @@ class LearningEngine:
         
         Args:
             performance_data: Данные производительности
-            current_thresholds: Текущие пороги {
-                "min_confidence": int,
-                "min_size_rel": float,
-                "min_volume_24h": int
-            }
+            current_thresholds: Текущие пороги
         
         Returns:
             Оптимизированные пороги
@@ -221,51 +232,43 @@ class LearningEngine:
             print(f"⚠️  Недостаточно данных ({len(performance_data)}/{self.min_samples})")
             return current_thresholds
         
-        # Анализируем взаимосвязь confidence и успешности
-        confidence_success = defaultdict(list)
+        # Оптимизируем min_confidence
+        best_confidence = self._optimize_confidence_threshold(performance_data)
         
-        for data in performance_data:
-            confidence = data.get("confidence", 50)
-            outcome = data.get("outcome")
-            
-            if outcome in ["success", "failure"]:
-                is_success = 1 if outcome == "success" else 0
-                confidence_success[confidence].append(is_success)
+        # Оптимизируем min_size_rel
+        best_size_rel = self._optimize_size_threshold(performance_data)
         
-        # Находим оптимальный порог confidence
-        # (где accuracy максимальна при достаточном количестве сигналов)
+        # Оптимизируем min_volume_24h
+        best_volume = self._optimize_volume_threshold(performance_data)
         
-        best_threshold = current_thresholds["min_confidence"]
-        best_accuracy = 0.0
-        
-        for threshold in range(20, 91, 5):  # 20, 25, 30, ..., 90
-            # Сигналы с confidence >= threshold
-            above_threshold = [
-                data for data in performance_data
-                if data.get("confidence", 0) >= threshold and data.get("outcome") in ["success", "failure"]
-            ]
-            
-            if len(above_threshold) < 10:  # Минимум 10 сигналов
-                continue
-            
-            successful = sum(1 for d in above_threshold if d.get("outcome") == "success")
-            accuracy = successful / len(above_threshold)
-            
-            if accuracy > best_accuracy:
-                best_accuracy = accuracy
-                best_threshold = threshold
-        
-        # Обновляем порог если улучшение >5%
+        # Создаём новые пороги
         new_thresholds = current_thresholds.copy()
         
-        current_min_conf = current_thresholds["min_confidence"]
+        changes_made = False
         
-        if best_accuracy > 0.65 and abs(best_threshold - current_min_conf) > 5:
-            new_thresholds["min_confidence"] = best_threshold
-            print(f"✅ Оптимальный min_confidence: {best_threshold} (accuracy: {best_accuracy:.1%})")
-            print(f"   Изменение: {current_min_conf} → {best_threshold}")
-        else:
-            print(f"ℹ️  Текущий min_confidence оптимален: {current_min_conf}")
+        if best_confidence is not None:
+            old_conf = current_thresholds["min_confidence"]
+            if abs(best_confidence - old_conf) > 5:
+                new_thresholds["min_confidence"] = best_confidence
+                changes_made = True
+                print(f"✅ min_confidence: {old_conf} → {best_confidence}")
+        
+        if best_size_rel is not None:
+            old_size = current_thresholds["min_size_rel"]
+            if abs(best_size_rel - old_size) > 0.01:
+                new_thresholds["min_size_rel"] = best_size_rel
+                changes_made = True
+                print(f"✅ min_size_rel: {old_size:.3f} → {best_size_rel:.3f}")
+        
+        if best_volume is not None:
+            old_vol = current_thresholds["min_volume_24h"]
+            if abs(best_volume - old_vol) > 10000:
+                new_thresholds["min_volume_24h"] = best_volume
+                changes_made = True
+                print(f"✅ min_volume_24h: ${old_vol:,.0f} → ${best_volume:,.0f}")
+        
+        if not changes_made:
+            print(f"ℹ️  Текущие пороги оптимальны")
         
         # Сохраняем
         self.state.optimized_thresholds = new_thresholds
@@ -274,6 +277,152 @@ class LearningEngine:
         print(f"{'=' * 80}\n")
         
         return new_thresholds
+    
+    def _optimize_confidence_threshold(self, performance_data: List[Dict]) -> Optional[int]:
+        """
+        Находит оптимальный порог confidence
+        
+        Returns:
+            Оптимальный min_confidence или None
+        """
+        
+        best_threshold = None
+        best_accuracy = 0.0
+        best_sample_size = 0
+        
+        for threshold in range(20, 91, 5):
+            above_threshold = [
+                d for d in performance_data
+                if d.get("confidence", 0) >= threshold and d.get("outcome") in ["success", "failure"]
+            ]
+            
+            if len(above_threshold) < 10:
+                continue
+            
+            successful = sum(1 for d in above_threshold if d.get("outcome") == "success")
+            accuracy = successful / len(above_threshold)
+            
+            # Предпочитаем высокую accuracy с достаточным количеством сигналов
+            score = accuracy * (1 - 0.1 * (100 - len(above_threshold)) / 100)
+            
+            if score > best_accuracy or (score == best_accuracy and len(above_threshold) > best_sample_size):
+                best_accuracy = score
+                best_threshold = threshold
+                best_sample_size = len(above_threshold)
+        
+        if best_threshold and best_accuracy > 0.60:
+            print(f"   Оптимальный min_confidence: {best_threshold} (accuracy: {best_accuracy:.1%}, n={best_sample_size})")
+            return best_threshold
+        
+        return None
+    
+    def _optimize_size_threshold(self, performance_data: List[Dict]) -> Optional[float]:
+        """
+        Находит оптимальный порог size_rel
+        
+        Returns:
+            Оптимальный min_size_rel или None
+        """
+        
+        # Группируем по размерам сделок
+        size_performance = defaultdict(lambda: {"success": 0, "total": 0})
+        
+        for d in performance_data:
+            size_rel = d.get("size_rel", 0)
+            outcome = d.get("outcome")
+            
+            if outcome not in ["success", "failure"]:
+                continue
+            
+            # Группируем по диапазонам
+            if size_rel < 0.05:
+                size_range = "small"
+            elif size_rel < 0.10:
+                size_range = "medium"
+            else:
+                size_range = "large"
+            
+            size_performance[size_range]["total"] += 1
+            if outcome == "success":
+                size_performance[size_range]["success"] += 1
+        
+        # Находим наиболее успешный диапазон
+        best_range = None
+        best_accuracy = 0.0
+        
+        for size_range, perf in size_performance.items():
+            if perf["total"] < 10:
+                continue
+            
+            accuracy = perf["success"] / perf["total"]
+            
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                best_range = size_range
+        
+        if best_range == "large":
+            return 0.10
+        elif best_range == "medium":
+            return 0.05
+        elif best_range == "small":
+            return 0.02
+        
+        return None
+    
+    def _optimize_volume_threshold(self, performance_data: List[Dict]) -> Optional[int]:
+        """
+        Находит оптимальный порог volume_24h
+        
+        Returns:
+            Оптимальный min_volume_24h или None
+        """
+        
+        # Группируем по объёмам
+        volume_performance = defaultdict(lambda: {"success": 0, "total": 0})
+        
+        for d in performance_data:
+            volume = d.get("volume_24h", 0)
+            outcome = d.get("outcome")
+            
+            if outcome not in ["success", "failure"]:
+                continue
+            
+            # Группируем по диапазонам
+            if volume < 100000:
+                vol_range = "very_low"
+            elif volume < 500000:
+                vol_range = "low"
+            elif volume < 1000000:
+                vol_range = "medium"
+            else:
+                vol_range = "high"
+            
+            volume_performance[vol_range]["total"] += 1
+            if outcome == "success":
+                volume_performance[vol_range]["success"] += 1
+        
+        # Находим наиболее успешный диапазон
+        best_range = None
+        best_accuracy = 0.0
+        
+        for vol_range, perf in volume_performance.items():
+            if perf["total"] < 10:
+                continue
+            
+            accuracy = perf["success"] / perf["total"]
+            
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                best_range = vol_range
+        
+        if best_range == "high":
+            return 1000000
+        elif best_range == "medium":
+            return 500000
+        elif best_range == "low":
+            return 100000
+        
+        return None
     
     # ========================================================================
     # PATTERN DETECTION
@@ -287,12 +436,7 @@ class LearningEngine:
             performance_data: История сигналов с результатами
         
         Returns:
-            Список обнаруженных паттернов [{
-                "pattern_type": str,
-                "conditions": Dict,
-                "accuracy": float,
-                "sample_size": int
-            }]
+            Список обнаруженных паттернов
         """
         
         print(f"\n{'=' * 80}")
@@ -305,11 +449,44 @@ class LearningEngine:
         
         patterns = []
         
-        # ====================================================================
         # ПАТТЕРН 1: Количество кошельков
-        # ====================================================================
+        wallet_patterns = self._detect_wallet_count_patterns(performance_data)
+        patterns.extend(wallet_patterns)
         
-        # Группируем по количеству кошельков
+        # ПАТТЕРН 2: Специализация кошельков
+        specialization_patterns = self._detect_specialization_patterns(performance_data)
+        patterns.extend(specialization_patterns)
+        
+        # ПАТТЕРН 3: Комбинация confidence + verdict
+        combo_patterns = self._detect_confidence_verdict_patterns(performance_data)
+        patterns.extend(combo_patterns)
+        
+        # ПАТТЕРН 4: Временные паттерны
+        time_patterns = self._detect_time_patterns(performance_data)
+        patterns.extend(time_patterns)
+        
+        # ПАТТЕРН 5: Размер сделки
+        size_patterns = self._detect_size_patterns(performance_data)
+        patterns.extend(size_patterns)
+        
+        # Сохраняем паттерны
+        self.state.patterns = patterns
+        self._save_state()
+        
+        print(f"✅ Обнаружено {len(patterns)} паттернов с высокой точностью:")
+        for pattern in patterns[:10]:
+            print(f"   • {pattern['pattern_type']}: {pattern['conditions']} "
+                  f"(accuracy: {pattern['accuracy']:.1%}, n={pattern['sample_size']})")
+        
+        print(f"{'=' * 80}\n")
+        
+        return patterns
+    
+    def _detect_wallet_count_patterns(self, performance_data: List[Dict]) -> List[Dict]:
+        """Обнаруживает паттерны по количеству кошельков"""
+        
+        patterns = []
+        
         by_wallet_count = defaultdict(list)
         
         for data in performance_data:
@@ -319,30 +496,57 @@ class LearningEngine:
             if outcome in ["success", "failure"]:
                 by_wallet_count[wallet_count].append(outcome == "success")
         
-        # Анализируем
         for count, outcomes in by_wallet_count.items():
-            if len(outcomes) >= 10:  # Минимум 10 сигналов
+            if len(outcomes) >= 10:
                 accuracy = sum(outcomes) / len(outcomes)
                 
-                if accuracy > 0.70:  # >70% accuracy
+                if accuracy > 0.70:
                     patterns.append({
                         "pattern_type": "wallet_count",
                         "conditions": {"min_wallets": count},
                         "accuracy": accuracy,
-                        "sample_size": len(outcomes)
+                        "sample_size": len(outcomes),
+                        "discovered_at": datetime.utcnow().isoformat()
                     })
         
-        # ====================================================================
-        # ПАТТЕРН 2: Специализация кошельков
-        # ====================================================================
+        return patterns
+    
+    def _detect_specialization_patterns(self, performance_data: List[Dict]) -> List[Dict]:
+        """Обнаруживает паттерны по специализации кошельков"""
         
-        # TODO: Анализ специализации (DeFi, Memecoins, etc)
+        patterns = []
         
-        # ====================================================================
-        # ПАТТЕРН 3: Комбинация confidence + verdict
-        # ====================================================================
+        by_specialization = defaultdict(list)
         
-        # Группируем по (confidence_bin, verdict)
+        for data in performance_data:
+            # Получаем специализацию из wallet_data
+            wallet_data = data.get("wallet_data", {})
+            specialization = wallet_data.get("specialization", "unknown")
+            outcome = data.get("outcome")
+            
+            if outcome in ["success", "failure"]:
+                by_specialization[specialization].append(outcome == "success")
+        
+        for spec, outcomes in by_specialization.items():
+            if len(outcomes) >= 10:
+                accuracy = sum(outcomes) / len(outcomes)
+                
+                if accuracy > 0.70:
+                    patterns.append({
+                        "pattern_type": "specialization",
+                        "conditions": {"specialization": spec},
+                        "accuracy": accuracy,
+                        "sample_size": len(outcomes),
+                        "discovered_at": datetime.utcnow().isoformat()
+                    })
+        
+        return patterns
+    
+    def _detect_confidence_verdict_patterns(self, performance_data: List[Dict]) -> List[Dict]:
+        """Обнаруживает паттерны по комбинации confidence + verdict"""
+        
+        patterns = []
+        
         combinations = defaultdict(list)
         
         for data in performance_data:
@@ -350,7 +554,7 @@ class LearningEngine:
             verdict = data.get("verdict", "neutral")
             outcome = data.get("outcome")
             
-            # Бины confidence: <50, 50-70, 70-85, >85
+            # Бины confidence
             if confidence < 50:
                 conf_bin = "<50"
             elif confidence < 70:
@@ -365,7 +569,6 @@ class LearningEngine:
             if outcome in ["success", "failure"]:
                 combinations[key].append(outcome == "success")
         
-        # Анализируем
         for key, outcomes in combinations.items():
             if len(outcomes) >= 10:
                 accuracy = sum(outcomes) / len(outcomes)
@@ -376,19 +579,105 @@ class LearningEngine:
                         "pattern_type": "confidence_verdict",
                         "conditions": {"confidence_bin": conf_bin, "verdict": verdict},
                         "accuracy": accuracy,
-                        "sample_size": len(outcomes)
+                        "sample_size": len(outcomes),
+                        "discovered_at": datetime.utcnow().isoformat()
                     })
         
-        # Сохраняем паттерны
-        self.state.patterns = patterns
-        self._save_state()
+        return patterns
+    
+    def _detect_time_patterns(self, performance_data: List[Dict]) -> List[Dict]:
+        """Обнаруживает временные паттерны"""
         
-        print(f"✅ Обнаружено {len(patterns)} паттернов с высокой точностью:")
-        for pattern in patterns:
-            print(f"   • {pattern['pattern_type']}: {pattern['conditions']} "
-                  f"(accuracy: {pattern['accuracy']:.1%}, n={pattern['sample_size']})")
+        patterns = []
         
-        print(f"{'=' * 80}\n")
+        by_hour = defaultdict(list)
+        by_day_of_week = defaultdict(list)
+        
+        for data in performance_data:
+            published_at_str = data.get("published_at")
+            outcome = data.get("outcome")
+            
+            if not published_at_str or outcome not in ["success", "failure"]:
+                continue
+            
+            published_at = datetime.fromisoformat(published_at_str)
+            
+            hour = published_at.hour
+            day_of_week = published_at.weekday()
+            
+            by_hour[hour].append(outcome == "success")
+            by_day_of_week[day_of_week].append(outcome == "success")
+        
+        # Анализируем по часам
+        for hour, outcomes in by_hour.items():
+            if len(outcomes) >= 10:
+                accuracy = sum(outcomes) / len(outcomes)
+                
+                if accuracy > 0.75:
+                    patterns.append({
+                        "pattern_type": "time_of_day",
+                        "conditions": {"hour": hour},
+                        "accuracy": accuracy,
+                        "sample_size": len(outcomes),
+                        "discovered_at": datetime.utcnow().isoformat()
+                    })
+        
+        # Анализируем по дням недели
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        
+        for day, outcomes in by_day_of_week.items():
+            if len(outcomes) >= 10:
+                accuracy = sum(outcomes) / len(outcomes)
+                
+                if accuracy > 0.75:
+                    patterns.append({
+                        "pattern_type": "day_of_week",
+                        "conditions": {"day": day_names[day]},
+                        "accuracy": accuracy,
+                        "sample_size": len(outcomes),
+                        "discovered_at": datetime.utcnow().isoformat()
+                    })
+        
+        return patterns
+    
+    def _detect_size_patterns(self, performance_data: List[Dict]) -> List[Dict]:
+        """Обнаруживает паттерны по размеру сделки"""
+        
+        patterns = []
+        
+        by_size = defaultdict(list)
+        
+        for data in performance_data:
+            size_usd = data.get("size_usd", 0)
+            outcome = data.get("outcome")
+            
+            if outcome not in ["success", "failure"]:
+                continue
+            
+            # Группируем по размерам
+            if size_usd < 10000:
+                size_bin = "small"
+            elif size_usd < 50000:
+                size_bin = "medium"
+            elif size_usd < 100000:
+                size_bin = "large"
+            else:
+                size_bin = "whale"
+            
+            by_size[size_bin].append(outcome == "success")
+        
+        for size_bin, outcomes in by_size.items():
+            if len(outcomes) >= 10:
+                accuracy = sum(outcomes) / len(outcomes)
+                
+                if accuracy > 0.70:
+                    patterns.append({
+                        "pattern_type": "transaction_size",
+                        "conditions": {"size_category": size_bin},
+                        "accuracy": accuracy,
+                        "sample_size": len(outcomes),
+                        "discovered_at": datetime.utcnow().isoformat()
+                    })
         
         return patterns
     
@@ -428,9 +717,12 @@ class LearningEngine:
             signal_accuracy = successful_signals / len(signal_history)
             
             # Бонус/штраф за точность сигналов
-            accuracy_bonus = (signal_accuracy - 0.5) * 40  # от -20 до +20
+            accuracy_bonus = (signal_accuracy - 0.5) * 40
             
-            final_score = base_score + accuracy_bonus
+            # Учитываем количество сигналов
+            confidence_multiplier = min(1.0, len(signal_history) / 20)
+            
+            final_score = base_score + (accuracy_bonus * confidence_multiplier)
         else:
             final_score = base_score
         
@@ -445,13 +737,7 @@ class LearningEngine:
         Статистика системы обучения
         
         Returns:
-            {
-                "signal_type_weights": Dict,
-                "optimized_thresholds": Dict,
-                "patterns_count": int,
-                "training_samples": int,
-                "last_updated": str
-            }
+            Полная статистика
         """
         
         return {
@@ -459,7 +745,9 @@ class LearningEngine:
             "optimized_thresholds": self.state.optimized_thresholds,
             "patterns_count": len(self.state.patterns),
             "training_samples": self.state.training_samples,
-            "last_updated": self.state.last_updated.isoformat() if self.state.last_updated else None
+            "last_accuracy": self.state.last_accuracy,
+            "last_updated": self.state.last_updated.isoformat() if self.state.last_updated else None,
+            "training_history_size": len(self.training_history)
         }
     
     def generate_report(self) -> str:
@@ -474,7 +762,8 @@ class LearningEngine:
         ]
         
         for signal_type, weight in self.state.signal_type_weights.items():
-            lines.append(f"   {signal_type}: {weight:.1%}")
+            bar = "█" * int(weight * 40)
+            lines.append(f"   {signal_type:15s}: {bar:40s} {weight:.1%}")
         
         lines.extend([
             "",
@@ -483,7 +772,13 @@ class LearningEngine:
         
         if self.state.optimized_thresholds:
             for key, value in self.state.optimized_thresholds.items():
-                lines.append(f"   {key}: {value}")
+                if isinstance(value, float):
+                    if value < 1:
+                        lines.append(f"   {key}: {value:.3f}")
+                    else:
+                        lines.append(f"   {key}: {value:,.0f}")
+                else:
+                    lines.append(f"   {key}: {value}")
         else:
             lines.append("   (нет оптимизаций)")
         
@@ -492,14 +787,43 @@ class LearningEngine:
             f"🔍 ОБНАРУЖЕННЫЕ ПАТТЕРНЫ: {len(self.state.patterns)}"
         ])
         
-        for pattern in self.state.patterns[:5]:  # топ-5
-            lines.append(f"   • {pattern['pattern_type']}: {pattern['accuracy']:.1%}")
+        # Группируем по типам
+        patterns_by_type = defaultdict(list)
+        for pattern in self.state.patterns:
+            patterns_by_type[pattern["pattern_type"]].append(pattern)
+        
+        for pattern_type, patterns in patterns_by_type.items():
+            lines.append(f"   {pattern_type}: {len(patterns)} паттернов")
+            
+            # Показываем топ-3 по accuracy
+            top_patterns = sorted(patterns, key=lambda p: p["accuracy"], reverse=True)[:3]
+            for p in top_patterns:
+                lines.append(f"     • {p['conditions']}: {p['accuracy']:.1%} (n={p['sample_size']})")
         
         lines.extend([
             "",
             f"📈 СТАТИСТИКА ОБУЧЕНИЯ",
             f"   Обучающих примеров: {self.state.training_samples}",
+            f"   Последняя точность: {self.state.last_accuracy:.1%}",
             f"   Последнее обновление: {self.state.last_updated.strftime('%Y-%m-%d %H:%M')}",
+        ])
+        
+        # История обучения
+        if self.training_history:
+            lines.extend([
+                "",
+                f"📜 ИСТОРИЯ ОБУЧЕНИЯ (последние 5 обновлений):"
+            ])
+            
+            for entry in self.training_history[-5:]:
+                timestamp = datetime.fromisoformat(entry["timestamp"]).strftime('%Y-%m-%d %H:%M')
+                entry_type = entry["type"]
+                accuracy = entry.get("accuracy", 0)
+                samples = entry.get("samples", 0)
+                
+                lines.append(f"   [{timestamp}] {entry_type}: {accuracy:.1%} (n={samples})")
+        
+        lines.extend([
             "",
             "=" * 80
         ])
@@ -516,8 +840,13 @@ class LearningEngine:
             import os
             os.makedirs(os.path.dirname(self.weights_file), exist_ok=True)
             
+            data = {
+                "state": self.state.to_dict(),
+                "training_history": self.training_history[-100:]  # Последние 100 записей
+            }
+            
             with open(self.weights_file, 'w') as f:
-                json.dump(self.state.to_dict(), f, indent=2)
+                json.dump(data, f, indent=2)
         
         except Exception as e:
             print(f"⚠️  Ошибка сохранения состояния: {e}")
@@ -528,7 +857,9 @@ class LearningEngine:
             with open(self.weights_file, 'r') as f:
                 data = json.load(f)
             
-            state = LearningState.from_dict(data)
+            state = LearningState.from_dict(data.get("state", {}))
+            self.training_history = data.get("training_history", [])
+            
             print(f"📂 [LEARNING] Загружено состояние (samples: {state.training_samples})")
             return state
         
@@ -617,7 +948,10 @@ if __name__ == "__main__":
                 "signal_type": "smart_money",
                 "outcome": "success" if random.random() < 0.75 else "failure",
                 "confidence": random.randint(60, 95),
-                "wallets_involved": [f"0x{i}" for _ in range(random.randint(3, 8))]
+                "wallets_involved": [f"0x{i}" for _ in range(random.randint(3, 8))],
+                "published_at": (datetime.utcnow() - timedelta(days=random.randint(0, 30))).isoformat(),
+                "size_usd": random.randint(10000, 100000),
+                "verdict": random.choice(["bullish", "bearish"])
             })
         
         # Mining - средняя точность
@@ -626,7 +960,10 @@ if __name__ == "__main__":
                 "signal_type": "mining",
                 "outcome": "success" if random.random() < 0.60 else "failure",
                 "confidence": random.randint(50, 80),
-                "wallets_involved": []
+                "wallets_involved": [],
+                "published_at": (datetime.utcnow() - timedelta(days=random.randint(0, 30))).isoformat(),
+                "size_usd": random.randint(5000, 50000),
+                "verdict": random.choice(["bullish", "bearish"])
             })
         
         # Onchain - низкая точность
@@ -635,7 +972,10 @@ if __name__ == "__main__":
                 "signal_type": "onchain",
                 "outcome": "success" if random.random() < 0.45 else "failure",
                 "confidence": random.randint(40, 70),
-                "wallets_involved": []
+                "wallets_involved": [],
+                "published_at": (datetime.utcnow() - timedelta(days=random.randint(0, 30))).isoformat(),
+                "size_usd": random.randint(3000, 30000),
+                "verdict": random.choice(["bullish", "bearish"])
             })
         
         print(f"✅ Создано {len(test_data)} тестовых сигналов\n")

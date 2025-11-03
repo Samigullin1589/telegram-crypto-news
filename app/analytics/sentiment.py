@@ -1,4 +1,3 @@
-# app/analytics/sentiment.py
 """
 SENTIMENT ANALYSIS MODULE
 
@@ -15,6 +14,8 @@ SENTIMENT ANALYSIS MODULE
 """
 
 import re
+import asyncio
+import aiohttp
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter
@@ -45,18 +46,20 @@ class SentimentAnalyzer:
         self.bullish_keywords = [
             'moon', 'bullish', 'pump', 'rocket', 'gem', 'breakout',
             'ath', 'surge', 'rally', 'bull run', 'accumulate', 'buy',
-            'undervalued', 'potential', 'promising', 'strong', 'growth'
+            'undervalued', 'potential', 'promising', 'strong', 'growth',
+            'bullrun', 'mooning', 'lambo', 'wagmi', 'gm', 'lfg'
         ]
         
         self.bearish_keywords = [
             'dump', 'bearish', 'crash', 'scam', 'rug', 'dead', 'rip',
             'sell', 'exit', 'overvalued', 'bubble', 'weak', 'decline',
-            'fear', 'panic', 'bear market', 'capitulation'
+            'fear', 'panic', 'bear market', 'capitulation', 'rekt',
+            'ngmi', 'fud', 'ponzi', 'falling', 'dropping'
         ]
         
         # Emoji sentiment
-        self.positive_emojis = ['🚀', '🌙', '💎', '🔥', '💪', '📈', '✅', '🎉', '💰', '🤑']
-        self.negative_emojis = ['💩', '📉', '❌', '⚠️', '🔻', '😭', '🤡', '💀', '🚫']
+        self.positive_emojis = ['🚀', '🌙', '💎', '🔥', '💪', '📈', '✅', '🎉', '💰', '🤑', '🟢', '⬆️', '💚']
+        self.negative_emojis = ['💩', '📉', '❌', '⚠️', '🔻', '😭', '🤡', '💀', '🚫', '🔴', '⬇️', '❤️‍🩹']
         
         # История для агрегации
         self.sentiment_history: Dict[str, List[Dict]] = defaultdict(list)
@@ -136,10 +139,9 @@ class SentimentAnalyzer:
             self.sentiment_history[asset].append({
                 "timestamp": datetime.utcnow(),
                 "sentiment": combined_sentiment,
-                "text": text[:100]  # Первые 100 символов
+                "text": text[:100]
             })
             
-            # Ограничиваем размер истории
             if len(self.sentiment_history[asset]) > 1000:
                 self.sentiment_history[asset] = self.sentiment_history[asset][-1000:]
         
@@ -354,7 +356,7 @@ class SentimentAnalyzer:
             if kw in text_lower:
                 found.append(kw)
         
-        return found[:5]  # Топ-5
+        return found[:5]
     
     def _extract_emojis(self, text: str) -> List[str]:
         """Извлекает emojis"""
@@ -368,11 +370,8 @@ class SentimentAnalyzer:
     
     def _clean_text(self, text: str) -> str:
         """Очищает текст"""
-        # Убираем URLs
         text = re.sub(r'http\S+', '', text)
-        # Убираем mentions
         text = re.sub(r'@\w+', '', text)
-        # Убираем hashtags (но оставляем текст)
         text = re.sub(r'#', '', text)
         
         return text.strip()
@@ -389,18 +388,19 @@ class SentimentAnalyzer:
 
 
 # ============================================================================
-# SOCIAL MEDIA SCRAPERS (заглушки - требуют API keys)
+# SOCIAL MEDIA SCRAPERS
 # ============================================================================
 
 class TwitterSentiment:
     """
     Twitter/X sentiment scraper
     
-    Требует Twitter API ключи
+    Использует официальный API v2
     """
     
-    def __init__(self, api_key: str):
-        self.api_key = api_key
+    def __init__(self, bearer_token: str):
+        self.bearer_token = bearer_token
+        self.api_base = "https://api.twitter.com/2"
     
     async def get_tweets(self, query: str, count: int = 100) -> List[str]:
         """
@@ -413,21 +413,122 @@ class TwitterSentiment:
         Returns:
             Список текстов твитов
         """
-        # TODO: Реализовать через Twitter API v2
-        # Пока заглушка
-        return []
+        
+        headers = {
+            "Authorization": f"Bearer {self.bearer_token}",
+            "Content-Type": "application/json"
+        }
+        
+        params = {
+            "query": query,
+            "max_results": min(count, 100),
+            "tweet.fields": "created_at,public_metrics,lang",
+            "expansions": "author_id"
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.api_base}/tweets/search/recent",
+                    headers=headers,
+                    params=params,
+                    timeout=30
+                ) as resp:
+                    
+                    if resp.status != 200:
+                        print(f"⚠️  Twitter API error: {resp.status}")
+                        return []
+                    
+                    data = await resp.json()
+                    
+                    tweets = []
+                    for tweet in data.get("data", []):
+                        if tweet.get("lang") == "en":
+                            tweets.append(tweet["text"])
+                    
+                    return tweets
+        
+        except Exception as e:
+            print(f"⚠️  Error fetching tweets: {e}")
+            return []
+    
+    async def get_trending_topics(self) -> List[str]:
+        """Получает trending topics"""
+        
+        headers = {
+            "Authorization": f"Bearer {self.bearer_token}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.api_base}/trends/place",
+                    headers=headers,
+                    params={"id": 1},
+                    timeout=30
+                ) as resp:
+                    
+                    if resp.status != 200:
+                        return []
+                    
+                    data = await resp.json()
+                    
+                    return [trend["name"] for trend in data.get("data", [])][:10]
+        
+        except Exception as e:
+            print(f"⚠️  Error fetching trending topics: {e}")
+            return []
 
 
 class RedditSentiment:
     """
     Reddit sentiment scraper
     
-    Использует Reddit API или PRAW
+    Использует PRAW (Python Reddit API Wrapper)
     """
     
-    def __init__(self, client_id: str, client_secret: str):
+    def __init__(self, client_id: str, client_secret: str, user_agent: str = "CryptoSentimentBot/1.0"):
         self.client_id = client_id
         self.client_secret = client_secret
+        self.user_agent = user_agent
+        self.api_base = "https://oauth.reddit.com"
+        self.access_token = None
+    
+    async def _get_access_token(self) -> bool:
+        """Получает OAuth access token"""
+        
+        auth = aiohttp.BasicAuth(self.client_id, self.client_secret)
+        
+        data = {
+            "grant_type": "client_credentials"
+        }
+        
+        headers = {
+            "User-Agent": self.user_agent
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://www.reddit.com/api/v1/access_token",
+                    auth=auth,
+                    data=data,
+                    headers=headers,
+                    timeout=30
+                ) as resp:
+                    
+                    if resp.status != 200:
+                        return False
+                    
+                    token_data = await resp.json()
+                    self.access_token = token_data.get("access_token")
+                    
+                    return self.access_token is not None
+        
+        except Exception as e:
+            print(f"⚠️  Error getting Reddit access token: {e}")
+            return False
     
     async def get_posts(self, subreddit: str, count: int = 100) -> List[str]:
         """
@@ -440,9 +541,95 @@ class RedditSentiment:
         Returns:
             Список текстов постов
         """
-        # TODO: Реализовать через PRAW
-        # Пока заглушка
-        return []
+        
+        if not self.access_token:
+            if not await self._get_access_token():
+                return []
+        
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "User-Agent": self.user_agent
+        }
+        
+        params = {
+            "limit": min(count, 100)
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.api_base}/r/{subreddit}/hot",
+                    headers=headers,
+                    params=params,
+                    timeout=30
+                ) as resp:
+                    
+                    if resp.status != 200:
+                        print(f"⚠️  Reddit API error: {resp.status}")
+                        return []
+                    
+                    data = await resp.json()
+                    
+                    posts = []
+                    for child in data.get("data", {}).get("children", []):
+                        post = child.get("data", {})
+                        title = post.get("title", "")
+                        selftext = post.get("selftext", "")
+                        
+                        combined = f"{title} {selftext}".strip()
+                        if combined:
+                            posts.append(combined)
+                    
+                    return posts
+        
+        except Exception as e:
+            print(f"⚠️  Error fetching Reddit posts: {e}")
+            return []
+    
+    async def get_comments(self, subreddit: str, post_id: str, count: int = 100) -> List[str]:
+        """Получает комментарии к посту"""
+        
+        if not self.access_token:
+            if not await self._get_access_token():
+                return []
+        
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "User-Agent": self.user_agent
+        }
+        
+        params = {
+            "limit": min(count, 100)
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.api_base}/r/{subreddit}/comments/{post_id}",
+                    headers=headers,
+                    params=params,
+                    timeout=30
+                ) as resp:
+                    
+                    if resp.status != 200:
+                        return []
+                    
+                    data = await resp.json()
+                    
+                    comments = []
+                    for item in data:
+                        if isinstance(item, dict):
+                            for child in item.get("data", {}).get("children", []):
+                                comment = child.get("data", {})
+                                body = comment.get("body", "")
+                                if body and body != "[deleted]" and body != "[removed]":
+                                    comments.append(body)
+                    
+                    return comments
+        
+        except Exception as e:
+            print(f"⚠️  Error fetching comments: {e}")
+            return []
 
 
 # ============================================================================
@@ -457,7 +644,7 @@ def analyze_sentiment(text: str) -> Dict:
         from app.analytics.sentiment import analyze_sentiment
         
         result = analyze_sentiment("Bitcoin going to the moon! 🚀")
-        print(result["label"])  # "bullish"
+        print(result["label"])
     """
     analyzer = SentimentAnalyzer()
     return analyzer.analyze_text(text)
@@ -470,7 +657,7 @@ def analyze_batch_sentiment(texts: List[str]) -> Dict:
     Usage:
         texts = ["BTC pump!", "ETH dump", "Hold strong"]
         result = analyze_batch_sentiment(texts)
-        print(result["label"])  # "bullish" or "bearish"
+        print(result["label"])
     """
     analyzer = SentimentAnalyzer()
     return analyzer.analyze_batch(texts)
@@ -485,7 +672,6 @@ if __name__ == "__main__":
     
     analyzer = SentimentAnalyzer()
     
-    # Тестовые тексты
     test_cases = [
         "Bitcoin going to the moon! 🚀🚀🚀 Buy now!",
         "ETH is dumping hard. Sell everything! 📉",

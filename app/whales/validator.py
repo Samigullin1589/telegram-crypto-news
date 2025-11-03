@@ -1,4 +1,3 @@
-# app/whales/validator.py
 """
 WALLET VALIDATOR v1.0
 
@@ -28,9 +27,9 @@ from app import settings
 
 class ValidationResult(Enum):
     """Результат валидации кошелька"""
-    KEEP = "keep"  # Сохранить
-    WARNING = "warning"  # Предупреждение
-    REMOVE = "remove"  # Удалить
+    KEEP = "keep"
+    WARNING = "warning"
+    REMOVE = "remove"
 
 
 @dataclass
@@ -75,18 +74,20 @@ class WalletValidator:
     Валидатор кошельков с многоуровневой проверкой
     """
     
-    def __init__(self, etherscan_key: str):
-        self.etherscan_key = etherscan_key
+    def __init__(self, etherscan_key: str = None):
+        self.etherscan_key = etherscan_key or settings.ETHERSCAN_API_KEY
         self.session: Optional[aiohttp.ClientSession] = None
         
-        # Критерии валидации из settings
         self.max_inactive_days = settings.VALIDATION_MAX_INACTIVE_DAYS
         self.min_score_to_keep = settings.VALIDATION_MIN_SCORE_TO_KEEP
         self.min_roi_to_keep = settings.VALIDATION_MIN_ROI_TO_KEEP
         
-        # Дополнительные критерии
-        self.warning_inactive_days = self.max_inactive_days // 2  # 30 дней для warning
-        self.warning_score = self.min_score_to_keep + 10  # 40 для warning
+        self.warning_inactive_days = self.max_inactive_days // 2
+        self.warning_score = self.min_score_to_keep + 10
+        
+        # Кэш для blockchain данных
+        self.blockchain_cache: Dict[str, Tuple[Dict, datetime]] = {}
+        self.cache_ttl = timedelta(hours=1)
     
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
@@ -119,9 +120,7 @@ class WalletValidator:
         recommendations = []
         score_adjustments = []
         
-        # ====================================================================
         # ПРОВЕРКА 1: АКТИВНОСТЬ
-        # ====================================================================
         activity_check = self._check_activity(wallet_data)
         
         if activity_check["status"] == "inactive":
@@ -137,9 +136,7 @@ class WalletValidator:
         else:
             recommendations.append("Активность в норме")
         
-        # ====================================================================
         # ПРОВЕРКА 2: ПРОИЗВОДИТЕЛЬНОСТЬ
-        # ====================================================================
         performance_check = self._check_performance(wallet_data)
         
         if performance_check["status"] == "poor":
@@ -156,9 +153,7 @@ class WalletValidator:
             score_adjustments.append(+3)
             recommendations.append("Производительность в норме")
         
-        # ====================================================================
         # ПРОВЕРКА 3: СКОР
-        # ====================================================================
         score_check = self._check_score(wallet_data)
         
         if score_check["status"] == "critical":
@@ -169,30 +164,38 @@ class WalletValidator:
             issues.append(f"Низкий скор ({current_score}/100)")
             recommendations.append("Повысить скор или удалить")
         
-        # ====================================================================
-        # ПРОВЕРКА 4: СПЕЦИАЛИЗАЦИЯ (опционально)
-        # ====================================================================
+        # ПРОВЕРКА 4: СПЕЦИАЛИЗАЦИЯ
         specialization = wallet_data.get("specialization", [])
         if not specialization or specialization == ["Other"]:
             issues.append("Нет чёткой специализации")
             score_adjustments.append(-2)
+            recommendations.append("Определить профиль кошелька")
         
-        # ====================================================================
         # ПРОВЕРКА 5: ВОЗРАСТ В СИСТЕМЕ
-        # ====================================================================
         discovered_at = datetime.fromisoformat(wallet_data.get("discovered_at", datetime.utcnow().isoformat()))
         days_tracked = (datetime.utcnow() - discovered_at).days
         
         if days_tracked < 7:
-            # Новый кошелёк - даём время
             recommendations.append(f"Новый кошелёк ({days_tracked} дней), даём время")
-            score_adjustments = [x // 2 for x in score_adjustments]  # Половина штрафов
+            score_adjustments = [x // 2 for x in score_adjustments]
         
-        # ====================================================================
+        # ПРОВЕРКА 6: ОБЪЁМЫ ТОРГОВЛИ
+        total_volume = wallet_data.get("total_volume_30d", 0)
+        if total_volume < 10000:  # Минимум $10k за 30 дней
+            issues.append(f"Низкий объём торговли (${total_volume:,.0f})")
+            score_adjustments.append(-3)
+            recommendations.append("Увеличить активность или удалить")
+        
+        # ПРОВЕРКА 7: КОНСИСТЕНТНОСТЬ
+        consistency_check = self._check_consistency(wallet_data)
+        if consistency_check["status"] == "inconsistent":
+            issues.append("Нестабильные результаты")
+            score_adjustments.append(-5)
+            recommendations.append("Требуется больше данных для оценки")
+        
         # ФИНАЛЬНАЯ ОЦЕНКА
-        # ====================================================================
         new_score = current_score + sum(score_adjustments)
-        new_score = max(0, min(100, new_score))  # 0-100
+        new_score = max(0, min(100, new_score))
         
         # Определяем результат
         if activity_check["status"] == "inactive" or performance_check["status"] == "poor" or score_check["status"] == "critical":
@@ -254,15 +257,12 @@ class WalletValidator:
         roi_30d = wallet_data.get("roi_30d", 0)
         win_rate = wallet_data.get("win_rate", 0)
         
-        # Критически плохо
         if roi_30d < self.min_roi_to_keep or win_rate < 0.40:
             return {"status": "poor", "roi_30d": roi_30d, "win_rate": win_rate}
         
-        # Предупреждение
         elif roi_30d < 0.20 or win_rate < 0.55:
             return {"status": "warning", "roi_30d": roi_30d, "win_rate": win_rate}
         
-        # Всё хорошо
         else:
             return {"status": "good", "roi_30d": roi_30d, "win_rate": win_rate}
     
@@ -285,6 +285,39 @@ class WalletValidator:
         else:
             return {"status": "good"}
     
+    def _check_consistency(self, wallet_data: Dict) -> Dict:
+        """
+        Проверка консистентности результатов
+        
+        Returns:
+            {"status": "consistent" | "inconsistent", "volatility": float}
+        """
+        
+        # Получаем последние результаты
+        recent_trades = wallet_data.get("recent_trades", [])
+        
+        if len(recent_trades) < 5:
+            return {"status": "consistent", "volatility": 0.0}
+        
+        # Рассчитываем волатильность результатов
+        profits = [t.get("profit_pct", 0) for t in recent_trades[-10:]]
+        
+        if not profits:
+            return {"status": "consistent", "volatility": 0.0}
+        
+        import statistics
+        
+        mean_profit = statistics.mean(profits)
+        
+        if len(profits) > 1:
+            stdev = statistics.stdev(profits)
+            
+            # Высокая волатильность = нестабильные результаты
+            if stdev > 50:  # >50% стандартное отклонение
+                return {"status": "inconsistent", "volatility": stdev}
+        
+        return {"status": "consistent", "volatility": 0.0}
+    
     # ========================================================================
     # BATCH VALIDATION
     # ========================================================================
@@ -297,14 +330,7 @@ class WalletValidator:
             wallets: Список кошельков из базы
         
         Returns:
-            {
-                "reports": List[ValidationReport],
-                "summary": {
-                    "keep": int,
-                    "warning": int,
-                    "remove": int
-                }
-            }
+            Результаты валидации
         """
         
         print(f"\n{'=' * 80}")
@@ -329,7 +355,6 @@ class WalletValidator:
                 
                 print(f"{emoji[report.result]} {report.result.value} (score: {report.score}→{report.new_score})")
                 
-                # Rate limiting
                 await asyncio.sleep(0.1)
                 
             except Exception as e:
@@ -370,24 +395,32 @@ class WalletValidator:
         - Количество транзакций
         
         Returns:
-            {
-                "is_active": bool,
-                "last_tx_timestamp": datetime,
-                "tx_count_30d": int,
-                "balance_usd": float
-            }
+            Данные из блокчейна
         """
         
-        if chain not in ["ethereum", "bsc", "polygon"]:
+        # Проверяем кэш
+        cache_key = f"{chain}_{address}"
+        if cache_key in self.blockchain_cache:
+            cached_data, cached_at = self.blockchain_cache[cache_key]
+            if datetime.utcnow() - cached_at < self.cache_ttl:
+                return cached_data
+        
+        if chain not in ["ethereum", "bsc", "polygon", "base", "arbitrum", "optimism"]:
             return None
         
         api_configs = {
             "ethereum": ("https://api.etherscan.io/api", self.etherscan_key),
             "bsc": ("https://api.bscscan.com/api", self.etherscan_key),
-            "polygon": ("https://api.polygonscan.com/api", self.etherscan_key)
+            "polygon": ("https://api.polygonscan.com/api", self.etherscan_key),
+            "base": ("https://api.basescan.org/api", self.etherscan_key),
+            "arbitrum": ("https://api.arbiscan.io/api", self.etherscan_key),
+            "optimism": ("https://api-optimistic.etherscan.io/api", self.etherscan_key)
         }
         
-        api_url, api_key = api_configs[chain]
+        api_url, api_key = api_configs.get(chain, (None, None))
+        
+        if not api_url or not api_key:
+            return None
         
         try:
             # Получаем последние транзакции
@@ -397,6 +430,8 @@ class WalletValidator:
                 "address": address,
                 "startblock": 0,
                 "endblock": 99999999,
+                "page": 1,
+                "offset": 100,
                 "sort": "desc",
                 "apikey": api_key
             }
@@ -413,34 +448,57 @@ class WalletValidator:
                 transactions = data.get("result", [])
                 
                 if not transactions:
-                    return {
+                    result = {
                         "is_active": False,
                         "last_tx_timestamp": None,
                         "tx_count_30d": 0,
-                        "balance_usd": 0
+                        "tx_count_total": 0,
+                        "balance_eth": 0
+                    }
+                else:
+                    # Последняя транзакция
+                    last_tx = transactions[0]
+                    last_tx_timestamp = datetime.fromtimestamp(int(last_tx.get("timeStamp", 0)))
+                    
+                    # Считаем транзакции за 30 дней
+                    cutoff = datetime.utcnow() - timedelta(days=30)
+                    tx_count_30d = sum(
+                        1 for tx in transactions 
+                        if datetime.fromtimestamp(int(tx.get("timeStamp", 0))) >= cutoff
+                    )
+                    
+                    # Проверяем активность
+                    days_since_tx = (datetime.utcnow() - last_tx_timestamp).days
+                    is_active = days_since_tx <= 30 and tx_count_30d >= 5
+                    
+                    result = {
+                        "is_active": is_active,
+                        "last_tx_timestamp": last_tx_timestamp,
+                        "tx_count_30d": tx_count_30d,
+                        "tx_count_total": len(transactions),
+                        "balance_eth": 0
                     }
                 
-                # Последняя транзакция
-                last_tx = transactions[0]
-                last_tx_timestamp = datetime.fromtimestamp(int(last_tx.get("timeStamp", 0)))
-                
-                # Считаем транзакции за 30 дней
-                cutoff = datetime.utcnow() - timedelta(days=30)
-                tx_count_30d = sum(
-                    1 for tx in transactions 
-                    if datetime.fromtimestamp(int(tx.get("timeStamp", 0))) >= cutoff
-                )
-                
-                # Проверяем активность
-                days_since_tx = (datetime.utcnow() - last_tx_timestamp).days
-                is_active = days_since_tx <= 30 and tx_count_30d >= 5
-                
-                return {
-                    "is_active": is_active,
-                    "last_tx_timestamp": last_tx_timestamp,
-                    "tx_count_30d": tx_count_30d,
-                    "balance_usd": 0  # TODO: получить баланс
+                # Получаем баланс
+                balance_params = {
+                    "module": "account",
+                    "action": "balance",
+                    "address": address,
+                    "tag": "latest",
+                    "apikey": api_key
                 }
+                
+                async with self.session.get(api_url, params=balance_params, timeout=10) as balance_resp:
+                    if balance_resp.status == 200:
+                        balance_data = await balance_resp.json()
+                        if balance_data.get("status") == "1":
+                            balance_wei = int(balance_data.get("result", 0))
+                            result["balance_eth"] = balance_wei / 1e18
+                
+                # Кэшируем
+                self.blockchain_cache[cache_key] = (result, datetime.utcnow())
+                
+                return result
         
         except Exception as e:
             print(f"⚠️  Ошибка onchain проверки: {e}")
@@ -470,10 +528,8 @@ class WalletValidator:
         last_trade = datetime.fromisoformat(last_trade_str)
         days_inactive = (datetime.utcnow() - last_trade).days
         
-        # Деградация из settings
         decay_per_day = settings.WALLET_SCORE_DECAY_PER_DAY
         
-        # Применяем деградацию
         decay_total = days_inactive * decay_per_day
         new_score = current_score - decay_total
         
@@ -493,27 +549,58 @@ class WalletValidator:
         roi_30d = wallet_data.get("roi_30d", 0)
         win_rate = wallet_data.get("win_rate", 0.5)
         total_trades = wallet_data.get("total_trades", 0)
+        total_volume = wallet_data.get("total_volume_30d", 0)
         
-        # Компоненты скора
-        roi_score = min(100, max(0, roi_30d * 50))  # ROI влияет на 50%
-        winrate_score = win_rate * 100  # Winrate на 100%
-        volume_score = min(100, total_trades * 2)  # Количество сделок
+        # ROI компонент (max 40 баллов)
+        roi_score = min(40, max(0, roi_30d * 40))
         
-        # Взвешенная сумма
-        final_score = (
-            roi_score * 0.40 +
-            winrate_score * 0.40 +
-            volume_score * 0.20
-        )
+        # Win rate компонент (max 40 баллов)
+        winrate_score = win_rate * 40
+        
+        # Объём торговли компонент (max 10 баллов)
+        volume_score = min(10, total_volume / 100000)
+        
+        # Количество сделок компонент (max 10 баллов)
+        trades_score = min(10, total_trades / 5)
+        
+        final_score = roi_score + winrate_score + volume_score + trades_score
         
         return int(final_score)
+    
+    def suggest_score_adjustment(self, wallet_data: Dict, validation_report: ValidationReport) -> int:
+        """
+        Предлагает корректировку скора на основе валидации
+        
+        Returns:
+            Рекомендуемый новый скор
+        """
+        
+        # Начинаем с текущего скора
+        current_score = wallet_data.get("score", 50)
+        
+        # Применяем деградацию
+        score_with_decay = self.apply_score_decay(wallet_data)
+        
+        # Применяем корректировки из валидации
+        if validation_report.new_score is not None:
+            adjusted_score = validation_report.new_score
+        else:
+            adjusted_score = score_with_decay
+        
+        # Рассчитываем performance-based score
+        performance_score = self.calculate_performance_score(wallet_data)
+        
+        # Берём среднее между adjusted и performance
+        final_score = int((adjusted_score + performance_score) / 2)
+        
+        return max(0, min(100, final_score))
 
 
 # ============================================================================
 # CONVENIENCE FUNCTIONS
 # ============================================================================
 
-async def run_validation(wallets: List[Dict], etherscan_key: str) -> Dict:
+async def run_validation(wallets: List[Dict], etherscan_key: str = None) -> Dict:
     """
     Convenience function для запуска валидации
     
@@ -547,7 +634,6 @@ if __name__ == "__main__":
     async def main():
         print("🧪 TESTING WALLET VALIDATOR\n")
         
-        # Тестовые данные
         test_wallets = [
             {
                 "address": "0x1234567890abcdef1234567890abcdef12345678",
@@ -556,11 +642,19 @@ if __name__ == "__main__":
                 "roi_90d": 1.45,
                 "win_rate": 0.72,
                 "total_trades": 15,
+                "total_volume_30d": 250000,
                 "score": 75,
                 "specialization": ["DeFi"],
                 "discovered_at": (datetime.utcnow() - timedelta(days=20)).isoformat(),
                 "last_trade_at": (datetime.utcnow() - timedelta(days=5)).isoformat(),
-                "is_active": True
+                "is_active": True,
+                "recent_trades": [
+                    {"profit_pct": 15.2},
+                    {"profit_pct": 8.5},
+                    {"profit_pct": -3.2},
+                    {"profit_pct": 22.1},
+                    {"profit_pct": 11.8}
+                ]
             },
             {
                 "address": "0xabcdef1234567890abcdef1234567890abcdef12",
@@ -569,11 +663,13 @@ if __name__ == "__main__":
                 "roi_90d": 0.20,
                 "win_rate": 0.45,
                 "total_trades": 8,
+                "total_volume_30d": 5000,
                 "score": 35,
                 "specialization": ["Memecoins"],
                 "discovered_at": (datetime.utcnow() - timedelta(days=45)).isoformat(),
                 "last_trade_at": (datetime.utcnow() - timedelta(days=25)).isoformat(),
-                "is_active": True
+                "is_active": True,
+                "recent_trades": []
             },
             {
                 "address": "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
@@ -582,11 +678,13 @@ if __name__ == "__main__":
                 "roi_90d": 0.15,
                 "win_rate": 0.52,
                 "total_trades": 20,
+                "total_volume_30d": 50000,
                 "score": 55,
                 "specialization": ["DeFi", "Gaming"],
                 "discovered_at": (datetime.utcnow() - timedelta(days=70)).isoformat(),
                 "last_trade_at": (datetime.utcnow() - timedelta(days=70)).isoformat(),
-                "is_active": True
+                "is_active": True,
+                "recent_trades": []
             }
         ]
         

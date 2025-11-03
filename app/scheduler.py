@@ -1,7 +1,7 @@
-# app/scheduler.py
+# app/scheduler.py (РЕВОЛЮЦИОННАЯ ВЕРСИЯ v4.2 - Complete Integration with Hyperliquid)
 
 """
-INTEGRATED SCHEDULER v4.2 - Complete Trading & Whale Monitoring System
+INTEGRATED SCHEDULER v4.2 - Complete Trading & Whale Monitoring System with Hyperliquid
 
 РЕВОЛЮЦИОННЫЕ ВОЗМОЖНОСТИ:
 ✅ Multi-Chain Support (7+ blockchains)
@@ -12,6 +12,7 @@ INTEGRATED SCHEDULER v4.2 - Complete Trading & Whale Monitoring System
 ✅ Adaptive Thresholds - динамические пороги
 ✅ Learning System - самообучение на ошибках
 ✅ Cross-Chain Wallet Tracking - мониторинг на всех chains
+✅ Hyperliquid DEX Monitoring - полная интеграция мониторинга Hyperliquid
 
 НОВОЕ В v4.2 (02.11.2025):
 🔥 Integrated ChainRateLimiter - единая система rate limiting
@@ -19,6 +20,7 @@ INTEGRATED SCHEDULER v4.2 - Complete Trading & Whale Monitoring System
 🔥 Intelligent Backoff Strategy - умные паузы при перегрузке API
 🔥 Enhanced Error Recovery - улучшенное восстановление после ошибок
 🔥 Trading System Integration - полная интеграция торговой системы
+🔥 Hyperliquid Monitor Integration - мониторинг whale activity, liquidations, funding, volume spikes
 """
 
 import asyncio
@@ -49,7 +51,7 @@ from app.whales.history import HistoryManager
 from app.charts.sparkline import SparklineRenderer
 
 # ============================================================================
-# TRADING SYSTEM IMPORTS (НОВОЕ)
+# TRADING SYSTEM IMPORTS
 # ============================================================================
 try:
     from app.trading.signal_generator import SignalGenerator
@@ -61,10 +63,23 @@ except ImportError:
     print("⚠️ Trading System не найден - работаем без него")
 
 # ============================================================================
+# HYPERLIQUID EXCHANGE IMPORTS (НОВОЕ v4.2)
+# ============================================================================
+try:
+    from app.exchanges import HyperliquidMonitor, HYPERLIQUID_AVAILABLE
+    if HYPERLIQUID_AVAILABLE:
+        print("✅ Hyperliquid Monitor доступен")
+    else:
+        print("⚠️ Hyperliquid Monitor недоступен")
+except ImportError:
+    HYPERLIQUID_AVAILABLE = False
+    HyperliquidMonitor = None
+    print("⚠️ Hyperliquid модуль не найден - работаем без него")
+
+# ============================================================================
 # OPTIONAL FEATURES
 # ============================================================================
 
-# Multi-Chain Support
 try:
     from app.chains import initialize_all_chains, unified_api, get_supported_chains
     CHAINS_AVAILABLE = True
@@ -72,7 +87,6 @@ except ImportError:
     CHAINS_AVAILABLE = False
     print("⚠️ Multi-Chain Support не найден")
 
-# Advanced Analytics
 try:
     from app.analytics import get_analytics_engine, AnalyticsEngine
     ANALYTICS_AVAILABLE = True
@@ -80,7 +94,6 @@ except ImportError:
     ANALYTICS_AVAILABLE = False
     print("⚠️ Analytics Engine не найден")
 
-# Mining System
 try:
     from app.mining.integration import create_mining_system
     MINING_AVAILABLE = True
@@ -88,7 +101,6 @@ except ImportError:
     MINING_AVAILABLE = False
     print("⚠️ Mining System не найден")
 
-# Алерты
 try:
     from app.alerts import get_alert_manager_sync
     ALERTS_AVAILABLE = True
@@ -96,7 +108,6 @@ except ImportError:
     ALERTS_AVAILABLE = False
     print("⚠️ Alerts не найдены - работаем без них")
 
-# Smart Money Discovery
 try:
     from app.whales.smart_discovery import SmartMoneyDiscovery
     SMART_DISCOVERY_AVAILABLE = True
@@ -325,9 +336,9 @@ class WalletDatabase:
 
 class IntegratedScheduler:
     """
-    Главный координатор с полной интеграцией whale monitoring и trading system
+    Главный координатор с полной интеграцией whale monitoring, trading system и Hyperliquid
     
-    НОВОЕ v4.2: Интегрирован с ChainRateLimiter из main.py
+    НОВОЕ v4.2: Полная интеграция с Hyperliquid DEX monitoring
     """
     
     def __init__(self):
@@ -335,15 +346,12 @@ class IntegratedScheduler:
         print("🚀 INTEGRATED SCHEDULER v4.2 - INITIALIZATION")
         print("="*80 + "\n")
         
-        # ====================================================================
-        # RATE LIMITER (будет установлен из main.py)
-        # ====================================================================
         self.rate_limiter = None
         
         # ====================================================================
         # WHALE MONITORING COMPONENTS
         # ====================================================================
-        print("📦 [1/3] Инициализация Whale Monitoring...")
+        print("📦 [1/4] Инициализация Whale Monitoring...")
         
         self.discovery = DiscoveryEngine()
         self.scorer = EventScorer()
@@ -361,7 +369,6 @@ class IntegratedScheduler:
         print("   ✓ Chart Renderer")
         print("   ✓ History Manager")
         
-        # Адаптивные системы
         if settings.ADAPTIVE_THRESHOLDS_ENABLED:
             self.adaptive_thresholds = AdaptiveThresholds()
             print("   ✓ Adaptive Thresholds")
@@ -374,7 +381,6 @@ class IntegratedScheduler:
         else:
             self.wallet_db = None
         
-        # НОВОЕ v4.2: Solana fallback RPC management
         self.solana_rpc_endpoints = [
             f"https://mainnet.helius-rpc.com/?api-key={settings.HELIUS_API_KEY}",
             "https://api.mainnet-beta.solana.com",
@@ -386,9 +392,9 @@ class IntegratedScheduler:
         print("   ✓ Solana Fallback RPC (4 endpoints)")
         
         # ====================================================================
-        # TRADING SYSTEM COMPONENTS (НОВОЕ)
+        # TRADING SYSTEM COMPONENTS
         # ====================================================================
-        print("\n📦 [2/3] Инициализация Trading System...")
+        print("\n📦 [2/4] Инициализация Trading System...")
         
         self.trading_enabled = False
         if TRADING_AVAILABLE:
@@ -412,11 +418,36 @@ class IntegratedScheduler:
             print("   ✗ Trading System не доступен")
         
         # ====================================================================
+        # HYPERLIQUID MONITORING COMPONENTS (НОВОЕ v4.2)
+        # ====================================================================
+        print("\n📦 [3/4] Инициализация Hyperliquid Monitor...")
+        
+        self.hyperliquid_enabled = False
+        if HYPERLIQUID_AVAILABLE and settings.HYPERLIQUID_ENABLED and HyperliquidMonitor is not None:
+            try:
+                self.hyperliquid_monitor = None
+                self.hyperliquid_enabled = True
+                
+                print("   ✓ Hyperliquid Monitor")
+                print("   ✓ Whale Activity Detection")
+                print("   ✓ Liquidation Detection")
+                print("   ✓ Funding Rate Analysis")
+                print("   ✓ Volume Spike Detection")
+                print(f"   ✓ API: {settings.HYPERLIQUID_API_URL}")
+                print(f"   ✓ Min Trade: ${settings.HYPERLIQUID_MIN_TRADE_USD:,.0f}")
+                print(f"   ✓ Min Liquidation: ${settings.HYPERLIQUID_MIN_LIQUIDATION_USD:,.0f}")
+                print(f"   ✓ Min Whale Activity: ${settings.HYPERLIQUID_MIN_WHALE_ACTIVITY_USD:,.0f}")
+            except Exception as e:
+                print(f"   ✗ Hyperliquid Error: {e}")
+                self.hyperliquid_enabled = False
+        else:
+            print("   ✗ Hyperliquid Monitor отключен или недоступен")
+        
+        # ====================================================================
         # OPTIONAL FEATURES
         # ====================================================================
-        print("\n📦 [3/3] Инициализация Optional Features...")
+        print("\n📦 [4/4] Инициализация Optional Features...")
         
-        # Multi-Chain Support
         self.chains_enabled = False
         if CHAINS_AVAILABLE and hasattr(settings, 'ETHERSCAN_API_KEY'):
             try:
@@ -440,7 +471,6 @@ class IntegratedScheduler:
                 print(f"   ✗ Multi-Chain Error: {e}")
                 self.chains_enabled = False
         
-        # Advanced Analytics
         self.analytics_enabled = False
         if ANALYTICS_AVAILABLE:
             try:
@@ -450,7 +480,6 @@ class IntegratedScheduler:
             except Exception as e:
                 print(f"   ✗ Analytics Error: {e}")
         
-        # Mining System
         self.mining_system = None
         if MINING_AVAILABLE and self.wallet_db:
             try:
@@ -459,7 +488,6 @@ class IntegratedScheduler:
             except Exception as e:
                 print(f"   ✗ Mining Error: {e}")
         
-        # Smart Money Discovery
         self.smart_discovery = None
         if SMART_DISCOVERY_AVAILABLE and settings.SMART_DISCOVERY_ENABLED:
             if hasattr(settings, 'ETHERSCAN_API_KEY') and settings.ETHERSCAN_API_KEY:
@@ -471,7 +499,6 @@ class IntegratedScheduler:
             else:
                 print("   ✗ Smart Discovery (no API key)")
         
-        # Алерты
         if ALERTS_AVAILABLE:
             self.alert_manager = get_alert_manager_sync(settings.ADMIN_CHAT_ID)
             print("   ✓ Alert Manager")
@@ -486,7 +513,6 @@ class IntegratedScheduler:
         self.seen_keys: Set[str] = set()
         self.recent_publications = deque(maxlen=settings.POSTS_PER_HOUR_CAP)
         
-        # Статистика
         self.stats = {
             "events_collected": 0,
             "events_qualified": 0,
@@ -501,11 +527,20 @@ class IntegratedScheduler:
             "positions_opened": 0,
             "positions_closed": 0,
             "trading_pnl_total": 0.0,
+            "hyperliquid_whale_activities": 0,
+            "hyperliquid_liquidations": 0,
+            "hyperliquid_funding_alerts": 0,
+            "hyperliquid_volume_spikes": 0,
+            "hyperliquid_total_alerts": 0,
             "last_cycle_time": None,
             "last_discovery_run": None,
             "last_validation_run": None,
             "last_smart_discovery_run": None,
             "last_trading_signal": None,
+            "last_hyperliquid_whale_check": None,
+            "last_hyperliquid_liquidation_check": None,
+            "last_hyperliquid_funding_check": None,
+            "last_hyperliquid_volume_check": None,
             "start_time": datetime.utcnow(),
             "analytics_calls": 0,
             "chains_events": defaultdict(int),
@@ -529,16 +564,13 @@ class IntegratedScheduler:
     
     def set_rate_limiter(self, rate_limiter):
         """
-        НОВОЕ v4.2: Установка rate limiter из main.py
-        
-        Этот метод вызывается из IntegratedCryptoMonitor в main.py
-        для интеграции единой системы rate limiting
+        Установка rate limiter из main.py
         """
         self.rate_limiter = rate_limiter
         print("✅ [SCHEDULER] ChainRateLimiter подключен")
     
     async def run(self):
-        """Главный цикл с полной интеграцией всех систем"""
+        """Главный цикл с полной интеграцией всех систем включая Hyperliquid"""
         
         self._print_banner()
         
@@ -580,6 +612,14 @@ class IntegratedScheduler:
                 asyncio.create_task(self._position_management_loop(), name="position_management"),
             ])
         
+        if self.hyperliquid_enabled:
+            tasks.extend([
+                asyncio.create_task(self._hyperliquid_whale_activity_loop(), name="hyperliquid_whale"),
+                asyncio.create_task(self._hyperliquid_liquidations_loop(), name="hyperliquid_liquidations"),
+                asyncio.create_task(self._hyperliquid_funding_loop(), name="hyperliquid_funding"),
+                asyncio.create_task(self._hyperliquid_volume_spikes_loop(), name="hyperliquid_volume"),
+            ])
+        
         try:
             print(f"\n🚀 [SCHEDULER] Запущено {len(tasks)} циклов:")
             for task in tasks:
@@ -601,32 +641,25 @@ class IntegratedScheduler:
     async def run_cycle(self):
         """
         Выполнить один цикл whale monitoring
-        
-        Этот метод вызывается из main.py в бесконечном цикле
-        НОВОЕ v4.2: Полная интеграция с ChainRateLimiter
         """
         try:
             self.stats["last_cycle_time"] = datetime.utcnow()
             
             start_time = datetime.utcnow() - timedelta(seconds=settings.POLL_SECONDS)
             
-            # НОВОЕ v4.2: Проверяем доступные chains через rate_limiter
             chains_to_scan = self._get_available_chains()
             
             events = []
             async with BlockchainMonitor() as monitor:
-                # НОВОЕ v4.2: Устанавливаем текущий Solana RPC
                 if "solana" in chains_to_scan:
                     monitor.apis["solana"]["url"] = self.solana_rpc_endpoints[self.current_solana_rpc_index]
                 
-                # НОВОЕ v4.2: Передаем rate_limiter в monitor
                 if self.rate_limiter:
                     monitor.rate_limiter = self.rate_limiter
                 
                 events = await monitor.fetch_events(start_time, chains=chains_to_scan)
                 self.stats["events_collected"] += len(events)
                 
-                # НОВОЕ v4.2: Обрабатываем статистику мониторинга
                 await self._handle_monitor_stats(monitor)
                 
                 if not events:
@@ -649,12 +682,12 @@ class IntegratedScheduler:
             raise
     
     # ========================================================================
-    # НОВОЕ v4.2: CHAIN AVAILABILITY & MONITORING
+    # CHAIN AVAILABILITY & MONITORING
     # ========================================================================
     
     def _get_available_chains(self) -> List[str]:
         """
-        НОВОЕ v4.2: Получить список доступных chains с учетом rate limiting
+        Получить список доступных chains с учетом rate limiting
         """
         if not self.rate_limiter:
             return settings.ENABLED_CHAINS.copy()
@@ -664,9 +697,6 @@ class IntegratedScheduler:
         for chain in settings.ENABLED_CHAINS:
             if self.rate_limiter.is_chain_enabled(chain):
                 available_chains.append(chain)
-            else:
-                # Chain временно отключен из-за 429 ошибок
-                pass
         
         if len(available_chains) < len(settings.ENABLED_CHAINS):
             disabled = set(settings.ENABLED_CHAINS) - set(available_chains)
@@ -676,29 +706,25 @@ class IntegratedScheduler:
     
     async def _handle_monitor_stats(self, monitor):
         """
-        НОВОЕ v4.2: Обработка статистики мониторинга и управление Solana RPC
+        Обработка статистики мониторинга и управление Solana RPC
         """
         if not self.rate_limiter:
             return
         
-        # Получаем статистику из monitor (если она доступна)
         if hasattr(monitor, 'get_stats'):
             monitor_stats = monitor.get_stats()
         else:
             monitor_stats = {}
         
-        # Обновляем статистику chains
         for chain in settings.ENABLED_CHAINS:
             if chain in monitor_stats.get("chains", {}):
                 chain_stats = monitor_stats["chains"][chain]
                 
-                # Проверяем успешность
                 if chain_stats.get("success", False):
                     self.rate_limiter.record_success(chain)
                 elif chain_stats.get("http_429", False):
                     self.rate_limiter.record_429_error(chain)
                     
-                    # Для Solana: переключаем RPC endpoint
                     if chain == "solana":
                         await self._switch_solana_rpc()
                 elif chain_stats.get("error", False):
@@ -706,7 +732,7 @@ class IntegratedScheduler:
     
     async def _switch_solana_rpc(self):
         """
-        НОВОЕ v4.2: Переключение Solana RPC endpoint при ошибках
+        Переключение Solana RPC endpoint при ошибках
         """
         old_index = self.current_solana_rpc_index
         self.current_solana_rpc_index = (self.current_solana_rpc_index + 1) % len(self.solana_rpc_endpoints)
@@ -731,7 +757,6 @@ class IntegratedScheduler:
                 print(f"\n📊 [WHALE] Цикл: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
                 self.stats["last_cycle_time"] = datetime.utcnow()
                 
-                # НОВОЕ v4.2: Получаем доступные chains
                 chains_to_scan = self._get_available_chains()
                 
                 if not chains_to_scan:
@@ -740,18 +765,15 @@ class IntegratedScheduler:
                     continue
                 
                 async with BlockchainMonitor() as monitor:
-                    # НОВОЕ v4.2: Устанавливаем Solana RPC
                     if "solana" in chains_to_scan:
                         monitor.apis["solana"]["url"] = self.solana_rpc_endpoints[self.current_solana_rpc_index]
                     
-                    # НОВОЕ v4.2: Передаем rate_limiter
                     if self.rate_limiter:
                         monitor.rate_limiter = self.rate_limiter
                     
                     events = await monitor.fetch_events(start_time, chains=chains_to_scan)
                     self.stats["events_collected"] += len(events)
                     
-                    # НОВОЕ v4.2: Обрабатываем статистику
                     await self._handle_monitor_stats(monitor)
                     
                     if not events:
@@ -1031,6 +1053,245 @@ class IntegratedScheduler:
             except Exception as e:
                 print(f"❌ [PUBLISH] Ошибка: {e}")
                 self.stats["errors"] += 1
+    
+    # ========================================================================
+    # HYPERLIQUID MONITORING LOOPS (НОВОЕ v4.2)
+    # ========================================================================
+    
+    async def _hyperliquid_whale_activity_loop(self):
+        """Цикл мониторинга whale activity на Hyperliquid"""
+        
+        if not self.hyperliquid_enabled:
+            return
+        
+        print("🌊 [HYPERLIQUID] Запущен цикл Whale Activity")
+        
+        await asyncio.sleep(240)
+        
+        while not self._shutdown_flag:
+            try:
+                print(f"\n🌊 [HYPERLIQUID] Проверка Whale Activity")
+                self.stats["last_hyperliquid_whale_check"] = datetime.utcnow()
+                
+                async with HyperliquidMonitor() as monitor:
+                    activities = await monitor.detect_whale_activity(
+                        min_activity_usd=settings.HYPERLIQUID_MIN_WHALE_ACTIVITY_USD,
+                        lookback_minutes=settings.HYPERLIQUID_WHALE_ACTIVITY_LOOKBACK_MINUTES
+                    )
+                    
+                    if activities and settings.HYPERLIQUID_NOTIFY_WHALE_ACTIVITY:
+                        for activity in activities:
+                            if activity.confidence >= settings.HYPERLIQUID_WHALE_MIN_CONFIDENCE:
+                                try:
+                                    message = monitor.format_whale_activity_alert(activity)
+                                    
+                                    await self.publisher.bot.send_message(
+                                        chat_id=settings.CHAT_ID,
+                                        text=message,
+                                        parse_mode='HTML'
+                                    )
+                                    
+                                    self.stats["hyperliquid_whale_activities"] += 1
+                                    self.stats["hyperliquid_total_alerts"] += 1
+                                    
+                                    print(f"✅ [HYPERLIQUID] Whale activity отправлен: {activity.asset}")
+                                    
+                                    await asyncio.sleep(2)
+                                
+                                except Exception as e:
+                                    print(f"⚠️ [HYPERLIQUID] Send error: {e}")
+                    
+                    if activities:
+                        print(f"   Найдено {len(activities)} whale activities")
+                    else:
+                        print(f"   Whale activities не найдены")
+                
+                interval = settings.HYPERLIQUID_WHALE_ACTIVITY_CHECK_INTERVAL
+                print(f"⏰ [HYPERLIQUID] Следующая проверка whale через {interval}с")
+                await asyncio.sleep(interval)
+            
+            except Exception as e:
+                print(f"❌ [HYPERLIQUID] Whale activity error: {e}")
+                traceback.print_exc()
+                self.stats["errors"] += 1
+                await asyncio.sleep(300)
+    
+    async def _hyperliquid_liquidations_loop(self):
+        """Цикл мониторинга ликвидаций на Hyperliquid"""
+        
+        if not self.hyperliquid_enabled:
+            return
+        
+        print("💥 [HYPERLIQUID] Запущен цикл Liquidations")
+        
+        await asyncio.sleep(360)
+        
+        while not self._shutdown_flag:
+            try:
+                print(f"\n💥 [HYPERLIQUID] Проверка Liquidations")
+                self.stats["last_hyperliquid_liquidation_check"] = datetime.utcnow()
+                
+                async with HyperliquidMonitor() as monitor:
+                    liquidations = await monitor.detect_liquidations(
+                        lookback_minutes=settings.HYPERLIQUID_LIQUIDATION_LOOKBACK_MINUTES,
+                        min_liquidation_usd=settings.HYPERLIQUID_MIN_LIQUIDATION_USD
+                    )
+                    
+                    if liquidations and settings.HYPERLIQUID_NOTIFY_LIQUIDATIONS:
+                        for liq in liquidations:
+                            if liq.confidence >= settings.HYPERLIQUID_LIQUIDATION_MIN_CONFIDENCE:
+                                try:
+                                    message = monitor.format_liquidation_alert(liq)
+                                    
+                                    await self.publisher.bot.send_message(
+                                        chat_id=settings.CHAT_ID,
+                                        text=message,
+                                        parse_mode='HTML'
+                                    )
+                                    
+                                    self.stats["hyperliquid_liquidations"] += 1
+                                    self.stats["hyperliquid_total_alerts"] += 1
+                                    
+                                    print(f"✅ [HYPERLIQUID] Liquidation отправлен: {liq.asset}")
+                                    
+                                    await asyncio.sleep(2)
+                                
+                                except Exception as e:
+                                    print(f"⚠️ [HYPERLIQUID] Send error: {e}")
+                    
+                    if liquidations:
+                        print(f"   Найдено {len(liquidations)} liquidations")
+                    else:
+                        print(f"   Liquidations не найдены")
+                
+                interval = settings.HYPERLIQUID_LIQUIDATION_CHECK_INTERVAL
+                print(f"⏰ [HYPERLIQUID] Следующая проверка liquidations через {interval}с")
+                await asyncio.sleep(interval)
+            
+            except Exception as e:
+                print(f"❌ [HYPERLIQUID] Liquidations error: {e}")
+                traceback.print_exc()
+                self.stats["errors"] += 1
+                await asyncio.sleep(300)
+    
+    async def _hyperliquid_funding_loop(self):
+        """Цикл мониторинга funding rates на Hyperliquid"""
+        
+        if not self.hyperliquid_enabled:
+            return
+        
+        print("📊 [HYPERLIQUID] Запущен цикл Funding Rates")
+        
+        await asyncio.sleep(480)
+        
+        while not self._shutdown_flag:
+            try:
+                print(f"\n📊 [HYPERLIQUID] Проверка Funding Rates")
+                self.stats["last_hyperliquid_funding_check"] = datetime.utcnow()
+                
+                async with HyperliquidMonitor() as monitor:
+                    funding_rates = await monitor.get_all_funding_rates()
+                    
+                    if not funding_rates:
+                        print(f"   Funding rates не получены")
+                        await asyncio.sleep(settings.HYPERLIQUID_FUNDING_CHECK_INTERVAL)
+                        continue
+                    
+                    extreme = monitor.detect_extreme_funding(
+                        funding_rates,
+                        threshold=settings.HYPERLIQUID_EXTREME_FUNDING_THRESHOLD
+                    )
+                    
+                    high_oi = monitor.detect_high_oi_coins(
+                        funding_rates,
+                        min_oi=settings.HYPERLIQUID_MIN_OI_USD
+                    )
+                    
+                    if extreme and settings.HYPERLIQUID_NOTIFY_FUNDING:
+                        try:
+                            message = monitor.format_funding_summary(extreme, top_n=10)
+                            
+                            await self.publisher.bot.send_message(
+                                chat_id=settings.CHAT_ID,
+                                text=message,
+                                parse_mode='HTML'
+                            )
+                            
+                            self.stats["hyperliquid_funding_alerts"] += 1
+                            self.stats["hyperliquid_total_alerts"] += 1
+                            
+                            print(f"✅ [HYPERLIQUID] Funding summary отправлен")
+                        
+                        except Exception as e:
+                            print(f"⚠️ [HYPERLIQUID] Send error: {e}")
+                    
+                    if extreme:
+                        print(f"   Найдено {len(extreme)} extreme funding rates")
+                    else:
+                        print(f"   Extreme funding rates не найдены")
+                
+                interval = settings.HYPERLIQUID_FUNDING_CHECK_INTERVAL
+                print(f"⏰ [HYPERLIQUID] Следующая проверка funding через {interval}с")
+                await asyncio.sleep(interval)
+            
+            except Exception as e:
+                print(f"❌ [HYPERLIQUID] Funding error: {e}")
+                traceback.print_exc()
+                self.stats["errors"] += 1
+                await asyncio.sleep(600)
+    
+    async def _hyperliquid_volume_spikes_loop(self):
+        """Цикл мониторинга volume spikes на Hyperliquid"""
+        
+        if not self.hyperliquid_enabled:
+            return
+        
+        print("🔥 [HYPERLIQUID] Запущен цикл Volume Spikes")
+        
+        await asyncio.sleep(600)
+        
+        while not self._shutdown_flag:
+            try:
+                print(f"\n🔥 [HYPERLIQUID] Проверка Volume Spikes")
+                self.stats["last_hyperliquid_volume_check"] = datetime.utcnow()
+                
+                async with HyperliquidMonitor() as monitor:
+                    spikes = await monitor.detect_volume_spikes(
+                        spike_multiplier=settings.HYPERLIQUID_VOLUME_SPIKE_MULTIPLIER
+                    )
+                    
+                    if spikes and settings.HYPERLIQUID_NOTIFY_VOLUME_SPIKES:
+                        try:
+                            message = monitor.format_volume_spike_alert(spikes)
+                            
+                            await self.publisher.bot.send_message(
+                                chat_id=settings.CHAT_ID,
+                                text=message,
+                                parse_mode='HTML'
+                            )
+                            
+                            self.stats["hyperliquid_volume_spikes"] += 1
+                            self.stats["hyperliquid_total_alerts"] += 1
+                            
+                            print(f"✅ [HYPERLIQUID] Volume spikes отправлены")
+                        
+                        except Exception as e:
+                            print(f"⚠️ [HYPERLIQUID] Send error: {e}")
+                    
+                    if spikes:
+                        print(f"   Найдено {len(spikes)} volume spikes")
+                    else:
+                        print(f"   Volume spikes не найдены")
+                
+                interval = settings.HYPERLIQUID_VOLUME_SPIKE_CHECK_INTERVAL
+                print(f"⏰ [HYPERLIQUID] Следующая проверка volume через {interval}с")
+                await asyncio.sleep(interval)
+            
+            except Exception as e:
+                print(f"❌ [HYPERLIQUID] Volume spikes error: {e}")
+                traceback.print_exc()
+                self.stats["errors"] += 1
+                await asyncio.sleep(600)
     
     # ========================================================================
     # TRADING SYSTEM LOOPS
@@ -1651,13 +1912,20 @@ class IntegratedScheduler:
                         except:
                             pass
                     
-                    # НОВОЕ v4.2: Solana stats
+                    if self.hyperliquid_enabled:
+                        extended_stats["hyperliquid"] = {
+                            "whale_activities": self.stats.get("hyperliquid_whale_activities", 0),
+                            "liquidations": self.stats.get("hyperliquid_liquidations", 0),
+                            "funding_alerts": self.stats.get("hyperliquid_funding_alerts", 0),
+                            "volume_spikes": self.stats.get("hyperliquid_volume_spikes", 0),
+                            "total_alerts": self.stats.get("hyperliquid_total_alerts", 0)
+                        }
+                    
                     extended_stats["solana"] = {
                         "rpc_switches": self.stats.get("solana_rpc_switches", 0),
                         "current_rpc_index": self.current_solana_rpc_index
                     }
                     
-                    # НОВОЕ v4.2: Rate Limiter stats
                     if self.rate_limiter:
                         extended_stats["rate_limiter"] = self.rate_limiter.get_stats()
                     
@@ -1675,6 +1943,11 @@ class IntegratedScheduler:
                 self.stats["chains_events"] = defaultdict(int)
                 self.stats["trading_signals_generated"] = 0
                 self.stats["trading_signals_sent"] = 0
+                self.stats["hyperliquid_whale_activities"] = 0
+                self.stats["hyperliquid_liquidations"] = 0
+                self.stats["hyperliquid_funding_alerts"] = 0
+                self.stats["hyperliquid_volume_spikes"] = 0
+                self.stats["hyperliquid_total_alerts"] = 0
             
             except Exception as e:
                 print(f"⚠️ [STATS] Ошибка: {e}")
@@ -1785,6 +2058,20 @@ class IntegratedScheduler:
         else:
             print(f"  Status: ❌ Disabled")
         
+        print(f"\n🌊 HYPERLIQUID DEX:")
+        if self.hyperliquid_enabled:
+            print(f"  Status: ✅ Enabled")
+            print(f"  API: {settings.HYPERLIQUID_API_URL}")
+            print(f"  Whale Activity: Every {settings.HYPERLIQUID_WHALE_ACTIVITY_CHECK_INTERVAL}s")
+            print(f"  Liquidations: Every {settings.HYPERLIQUID_LIQUIDATION_CHECK_INTERVAL}s")
+            print(f"  Funding: Every {settings.HYPERLIQUID_FUNDING_CHECK_INTERVAL}s")
+            print(f"  Volume Spikes: Every {settings.HYPERLIQUID_VOLUME_SPIKE_CHECK_INTERVAL}s")
+            print(f"  Min Trade: ${settings.HYPERLIQUID_MIN_TRADE_USD:,.0f}")
+            print(f"  Min Liquidation: ${settings.HYPERLIQUID_MIN_LIQUIDATION_USD:,.0f}")
+            print(f"  Min Whale Activity: ${settings.HYPERLIQUID_MIN_WHALE_ACTIVITY_USD:,.0f}")
+        else:
+            print(f"  Status: ❌ Disabled")
+        
         print(f"\n🌐 MULTI-CHAIN:")
         if self.chains_enabled:
             print(f"  Status: ✅ Enabled")
@@ -1864,6 +2151,14 @@ class IntegratedScheduler:
                     print(f"     Profit Factor: {metrics.profit_factor:.2f}")
             except:
                 pass
+        
+        if self.hyperliquid_enabled:
+            print(f"\n🌊 HYPERLIQUID DEX:")
+            print(f"  Whale Activities: {self.stats.get('hyperliquid_whale_activities', 0)}")
+            print(f"  Liquidations: {self.stats.get('hyperliquid_liquidations', 0)}")
+            print(f"  Funding Alerts: {self.stats.get('hyperliquid_funding_alerts', 0)}")
+            print(f"  Volume Spikes: {self.stats.get('hyperliquid_volume_spikes', 0)}")
+            print(f"  Total Alerts: {self.stats.get('hyperliquid_total_alerts', 0)}")
         
         if self.analytics_enabled:
             print(f"\n📊 ANALYTICS:")
