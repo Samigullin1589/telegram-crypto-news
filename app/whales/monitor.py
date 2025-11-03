@@ -1,6 +1,6 @@
 # app/whales/monitor.py
 """
-BLOCKCHAIN MONITOR v4.2
+BLOCKCHAIN MONITOR v4.3
 
 Универсальный мониторинг крупных транзакций на всех блокчейнах:
 - Multi-chain support (Ethereum, BSC, Solana, Tron, Base, Arbitrum, Polygon)
@@ -10,8 +10,7 @@ BLOCKCHAIN MONITOR v4.2
 - Automatic retry с exponential backoff
 - Circuit breaker для защиты от перегрузки
 - Rate limiting и caching
-- НОВОЕ v4.2: Полная интеграция с ChainRateLimiter из main.py
-- НОВОЕ v4.2: Унифицированное управление rate limiting для всех chains
+- НОВОЕ v4.3: Детальное логирование фильтрации для диагностики
 """
 
 import aiohttp
@@ -107,13 +106,12 @@ class BlockchainMonitor:
     """
     Универсальный монитор всех блокчейнов
     
-    НОВОЕ v4.2: Полная интеграция с ChainRateLimiter
+    НОВОЕ v4.3: Улучшенное логирование для диагностики
     """
     
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
         
-        # НОВОЕ v4.2: Интеграция с ChainRateLimiter из main.py
         self.rate_limiter = None
         
         # API endpoints и ключи
@@ -183,17 +181,19 @@ class BlockchainMonitor:
             "requests_made": defaultdict(int),
             "events_found": defaultdict(int),
             "events_filtered": defaultdict(int),
+            "events_parsed_total": defaultdict(int),
+            "events_parsed_none": defaultdict(int),
+            "events_below_threshold": defaultdict(int),
+            "events_exchange_filtered": defaultdict(int),
+            "events_bridge_filtered": defaultdict(int),
+            "events_internal_filtered": defaultdict(int),
             "cache_hits": 0,
             "errors": defaultdict(int),
             "circuit_breaker_trips": defaultdict(int),
             "dex_detected": defaultdict(int),
             "retries_429": defaultdict(int),
-            "chains": {}  # НОВОЕ v4.2: детальная статистика по chains
+            "chains": {}
         }
-    
-    # ========================================================================
-    # CONTEXT MANAGER
-    # ========================================================================
     
     async def __aenter__(self):
         """Создает aiohttp сессию"""
@@ -203,7 +203,7 @@ class BlockchainMonitor:
             timeout=timeout,
             connector=connector,
             headers={
-                "User-Agent": "CryptoCompass/4.2",
+                "User-Agent": "CryptoCompass/4.3",
                 "Accept": "application/json"
             }
         )
@@ -214,10 +214,6 @@ class BlockchainMonitor:
         if self.session:
             await self.session.close()
     
-    # ========================================================================
-    # НОВОЕ v4.2: ИНТЕГРАЦИЯ С CHAINRATELIMITER
-    # ========================================================================
-    
     async def _execute_with_rate_limit(
         self,
         chain: str,
@@ -226,18 +222,9 @@ class BlockchainMonitor:
         **kwargs
     ):
         """
-        НОВОЕ v4.2: Выполняет запрос с интеграцией ChainRateLimiter
-        
-        Args:
-            chain: Название chain
-            request_func: Async функция для запроса
-            *args, **kwargs: Аргументы для request_func
-        
-        Returns:
-            Результат request_func или None при неудаче
+        Выполняет запрос с интеграцией ChainRateLimiter
         """
         
-        # Инициализируем статистику для chain
         if chain not in self.stats["chains"]:
             self.stats["chains"][chain] = {
                 "success": False,
@@ -249,15 +236,12 @@ class BlockchainMonitor:
         chain_stats = self.stats["chains"][chain]
         chain_stats["attempts"] += 1
         
-        # НОВОЕ v4.2: Используем ChainRateLimiter если он доступен
         if self.rate_limiter:
-            # Проверяем доступность chain
             if not self.rate_limiter.is_chain_enabled(chain):
                 print(f"⏸️ [MONITOR] {chain} временно отключен rate limiter")
                 chain_stats["error"] = True
                 return None
             
-            # Ждем если нужно
             await self.rate_limiter.wait_if_needed(chain)
         
         max_attempts = getattr(settings, 'RETRY_MAX_ATTEMPTS', 3)
@@ -268,7 +252,6 @@ class BlockchainMonitor:
             try:
                 result = await request_func(*args, **kwargs)
                 
-                # Успех - записываем в rate_limiter
                 if self.rate_limiter:
                     self.rate_limiter.record_success(chain)
                 
@@ -282,7 +265,6 @@ class BlockchainMonitor:
                 if e.status == 429:
                     chain_stats["http_429"] = True
                     
-                    # Записываем 429 в rate_limiter
                     if self.rate_limiter:
                         self.rate_limiter.record_429_error(chain)
                     
@@ -298,7 +280,6 @@ class BlockchainMonitor:
                         chain_stats["error"] = True
                         return None
                 else:
-                    # Другие HTTP ошибки
                     print(f"❌ [MONITOR] {chain} HTTP {e.status}: {e}")
                     
                     if self.rate_limiter:
@@ -327,10 +308,6 @@ class BlockchainMonitor:
         
         return None
     
-    # ========================================================================
-    # MAIN FETCH
-    # ========================================================================
-    
     async def fetch_events(
         self,
         start_time: datetime,
@@ -339,29 +316,18 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Получает события со всех блокчейнов
-        
-        Args:
-            start_time: Начало временного окна
-            chains: Список chains для мониторинга (None = все)
-            assets: Список активов для фильтрации (None = все)
-        
-        Returns:
-            Список WhaleEvent
         """
         
         if not self.session:
             raise RuntimeError("BlockchainMonitor должен использоваться с async context manager")
         
-        # Определяем chains для мониторинга
         chains_to_monitor = chains or list(self.apis.keys())
         
-        # Фильтруем chains с доступными API ключами (кроме Solana/Tron)
         chains_to_monitor = [
             chain for chain in chains_to_monitor
             if self.apis[chain]["key"] or chain in ["solana", "tron"]
         ]
         
-        # НОВОЕ v4.2: Фильтруем chains через rate_limiter
         if self.rate_limiter:
             available_chains = [
                 chain for chain in chains_to_monitor
@@ -370,7 +336,7 @@ class BlockchainMonitor:
             
             if len(available_chains) < len(chains_to_monitor):
                 disabled = set(chains_to_monitor) - set(available_chains)
-                print(f"⏸️ [MONITOR] Rate limiter отключил: {', '.join(disabled)}")
+                print(f"⏸️ [CHAINS] Временно отключены: {', '.join(disabled)}")
             
             chains_to_monitor = available_chains
         
@@ -380,7 +346,9 @@ class BlockchainMonitor:
         
         print(f"🔍 [MONITOR] Сканирую {len(chains_to_monitor)} chains: {', '.join(chains_to_monitor)}")
         
-        # Параллельно запрашиваем все chains
+        min_threshold = getattr(settings, 'MIN_USD_FLOOR', 10000)
+        print(f"💰 [MONITOR] Минимальный порог: ${min_threshold:,.0f}")
+        
         tasks = [
             self._fetch_chain_events(chain, start_time, assets)
             for chain in chains_to_monitor
@@ -388,7 +356,6 @@ class BlockchainMonitor:
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Объединяем результаты
         all_events = []
         for chain, result in zip(chains_to_monitor, results):
             if isinstance(result, Exception):
@@ -401,7 +368,6 @@ class BlockchainMonitor:
                 self.stats["events_found"][chain] += len(result)
                 print(f"✅ [MONITOR] {chain}: найдено {len(result)} событий")
         
-        # Фильтруем дубликаты по tx_hash
         unique_events = {}
         for event in all_events:
             if event.tx_hash not in unique_events:
@@ -409,7 +375,6 @@ class BlockchainMonitor:
         
         all_events = list(unique_events.values())
         
-        # Сортируем по времени
         all_events.sort(key=lambda e: e.tx_time_utc, reverse=True)
         
         print(f"🎯 [MONITOR] Всего уникальных событий: {len(all_events)}")
@@ -426,14 +391,12 @@ class BlockchainMonitor:
         Получает события для конкретного chain
         """
         
-        # Проверяем circuit breaker
         if not self.circuit_breakers[chain].can_execute():
             print(f"⚠️ [MONITOR] {chain} circuit breaker OPEN, пропускаю")
             self.stats["circuit_breaker_trips"][chain] += 1
             return []
         
         try:
-            # Routing по типу chain
             if chain in ["ethereum", "bsc", "base", "arbitrum", "polygon"]:
                 events = await self._fetch_evm_events(chain, start_time, assets)
             elif chain == "solana":
@@ -444,7 +407,6 @@ class BlockchainMonitor:
                 print(f"⚠️ [MONITOR] Неизвестный chain: {chain}")
                 return []
             
-            # Успех - обновляем circuit breaker
             self.circuit_breakers[chain].record_success()
             self.stats["requests_made"][chain] += 1
             
@@ -455,10 +417,6 @@ class BlockchainMonitor:
             self.circuit_breakers[chain].record_failure()
             self.stats["errors"][chain] += 1
             return []
-    
-    # ========================================================================
-    # EVM CHAINS
-    # ========================================================================
     
     async def _fetch_evm_events(
         self,
@@ -476,20 +434,17 @@ class BlockchainMonitor:
         
         events = []
         
-        # Стратегия 1: Получаем крупные нативные транзакции
         native_events = await self._fetch_evm_native_transfers(
             chain, api_url, api_key, start_time
         )
         events.extend(native_events)
         
-        # Стратегия 2: Получаем крупные ERC-20 трансферы
         if assets:
             token_events = await self._fetch_evm_token_transfers(
                 chain, api_url, api_key, start_time, assets
             )
             events.extend(token_events)
         
-        # Стратегия 3: Мониторим DEX swaps
         dex_events = await self._fetch_evm_dex_swaps(
             chain, api_url, api_key, start_time
         )
@@ -506,13 +461,11 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Получает крупные нативные транзакции (ETH, BNB, etc)
-        НОВОЕ v4.2: Интеграция с ChainRateLimiter
         """
         
         events = []
         
         try:
-            # Публичные RPC endpoints для каждого chain
             rpc_endpoints = {
                 "ethereum": "https://eth.llamarpc.com",
                 "bsc": "https://bsc-dataseed.binance.org",
@@ -523,7 +476,6 @@ class BlockchainMonitor:
             
             rpc_url = rpc_endpoints.get(chain, api_url)
             
-            # JSON-RPC запрос для получения последнего блока
             async def _get_latest_block():
                 rpc_payload = {
                     "jsonrpc": "2.0",
@@ -556,16 +508,13 @@ class BlockchainMonitor:
                     else:
                         raise Exception(f"Неверный формат блока: {result}")
             
-            # НОВОЕ v4.2: Используем rate limiter
             latest_block = await self._execute_with_rate_limit(chain, _get_latest_block)
             
             if latest_block is None:
                 return []
             
-            # Определяем сколько блоков сканировать
             time_window_minutes = (datetime.utcnow() - start_time).total_seconds() / 60
             
-            # Примерное время блока для каждого chain
             block_times = {
                 "ethereum": 12,
                 "bsc": 3,
@@ -580,7 +529,6 @@ class BlockchainMonitor:
             
             start_block = max(latest_block - blocks_to_scan, 0)
             
-            # Batch запрос блоков
             for block_num in range(start_block, latest_block, 10):
                 batch_size = min(10, latest_block - block_num)
                 
@@ -593,7 +541,6 @@ class BlockchainMonitor:
                 
                 blocks = await asyncio.gather(*block_tasks, return_exceptions=True)
                 
-                # Парсим транзакции из блоков
                 for block_data in blocks:
                     if isinstance(block_data, Exception) or not block_data:
                         continue
@@ -609,14 +556,13 @@ class BlockchainMonitor:
                         event = await self._parse_evm_native_transaction(tx, chain)
                         
                         if event:
-                            if self._should_filter_event(event):
+                            if self._should_filter_event(event, chain):
                                 self.stats["events_filtered"][chain] += 1
                                 continue
                             
                             events.append(event)
                             self.tx_cache.add(tx_hash)
                 
-                # Rate limiting между batch
                 await asyncio.sleep(0.3)
         
         except Exception as e:
@@ -633,11 +579,9 @@ class BlockchainMonitor:
     ) -> Optional[Dict]:
         """
         Получает блок с транзакциями через прямой JSON-RPC
-        НОВОЕ v4.2: Интеграция с ChainRateLimiter
         """
         
         try:
-            # Публичные RPC endpoints
             rpc_endpoints = {
                 "https://api.etherscan.io/api": "https://eth.llamarpc.com",
                 "https://api.bscscan.com/api": "https://bsc-dataseed.binance.org",
@@ -667,7 +611,6 @@ class BlockchainMonitor:
                     
                     return data.get("result")
             
-            # НОВОЕ v4.2: Используем rate limiter
             return await self._execute_with_rate_limit(chain, _get_block)
         
         except Exception:
@@ -689,29 +632,25 @@ class BlockchainMonitor:
             if not from_addr or not to_addr:
                 return None
             
-            # Парсим value
             value_hex = tx.get("value", "0x0")
             value_wei = int(value_hex, 16)
             
             if value_wei == 0:
                 return None
             
-            # Конвертируем в нативный токен
             api_config = self.apis[chain]
             decimals = api_config["decimals"]
             native_token = api_config["native_token"]
             
             amount = value_wei / (10 ** decimals)
             
-            # Быстрая оценка USD используя fallback цены
             price = settings.FALLBACK_PRICES.get(native_token, 2000)
             amount_usd = amount * price
             
-            # Фильтруем маленькие транзакции
-            if amount_usd < settings.MIN_USD_FLOOR:
+            min_threshold = getattr(settings, 'MIN_USD_FLOOR', 10000)
+            if amount_usd < min_threshold:
                 return None
             
-            # Парсим timestamp
             timestamp_hex = tx.get("timestamp")
             if timestamp_hex:
                 timestamp = int(timestamp_hex, 16)
@@ -719,10 +658,8 @@ class BlockchainMonitor:
             else:
                 tx_time = datetime.utcnow()
             
-            # Определяем DEX
             dex = self._detect_dex(chain, to_addr)
             
-            # Создаем событие
             event = WhaleEvent(
                 chain=chain,
                 asset=native_token,
@@ -754,9 +691,6 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Получает крупные ERC-20 трансферы для указанных токенов
-        
-        Note: Требует знания контрактных адресов токенов
-        Возвращает пустой список - расширенный функционал
         """
         
         events = []
@@ -772,18 +706,11 @@ class BlockchainMonitor:
     ) -> List[WhaleEvent]:
         """
         Мониторит крупные DEX swaps
-        
-        Note: Требует парсинг event logs (Swap events)
-        Возвращает пустой список - расширенный функционал
         """
         
         events = []
         
         return events
-    
-    # ========================================================================
-    # SOLANA
-    # ========================================================================
     
     async def _fetch_solana_events(
         self,
@@ -791,7 +718,7 @@ class BlockchainMonitor:
         assets: Optional[List[str]] = None
     ) -> List[WhaleEvent]:
         """
-        НОВОЕ v4.2: Получает события для Solana с полной интеграцией ChainRateLimiter
+        Получает события для Solana
         """
         
         api_url = self.apis["solana"]["url"]
@@ -801,7 +728,6 @@ class BlockchainMonitor:
             print(f"🔍 [DEBUG] solana - Запрос к RPC:")
             print(f"   RPC URL: {api_url}")
             
-            # НОВОЕ v4.2: Запрос через rate limiter
             async def _get_signatures():
                 payload = {
                     "jsonrpc": "2.0",
@@ -826,7 +752,6 @@ class BlockchainMonitor:
             signatures = data.get("result", [])
             print(f"✅ [DEBUG] solana - Получено {len(signatures)} сигнатур")
             
-            # Получаем детали транзакций (batch)
             tx_tasks = [
                 self._get_solana_transaction(api_url, sig["signature"])
                 for sig in signatures[:20]
@@ -834,20 +759,22 @@ class BlockchainMonitor:
             
             transactions = await asyncio.gather(*tx_tasks, return_exceptions=True)
             
-            # Парсим транзакции
+            parsed_count = 0
             for tx_data in transactions:
                 if isinstance(tx_data, Exception) or not tx_data:
                     continue
                 
+                parsed_count += 1
                 event = await self._parse_solana_transaction(tx_data)
                 
                 if event:
-                    if self._should_filter_event(event):
+                    if self._should_filter_event(event, "solana"):
                         continue
                     
                     events.append(event)
             
-            print(f"✅ [DEBUG] solana - Найдено {len(events)} событий")
+            self.stats["events_parsed_total"]["solana"] = parsed_count
+            print(f"✅ [DEBUG] solana - Распарсено {parsed_count} транзакций, найдено {len(events)} событий")
         
         except Exception as e:
             print(f"❌ [MONITOR] Ошибка Solana: {e}")
@@ -860,7 +787,7 @@ class BlockchainMonitor:
         signature: str
     ) -> Optional[Dict]:
         """
-        НОВОЕ v4.2: Получает детали Solana транзакции с rate limiting
+        Получает детали Solana транзакции
         """
         
         try:
@@ -900,18 +827,15 @@ class BlockchainMonitor:
             meta = tx_data.get("meta", {})
             transaction = tx_data.get("transaction", {})
             
-            # Проверяем успешность
             if meta.get("err"):
                 return None
             
-            # Получаем изменения балансов
             pre_balances = meta.get("preBalances", [])
             post_balances = meta.get("postBalances", [])
             
             if not pre_balances or not post_balances:
                 return None
             
-            # Находим наибольшее изменение
             max_change = 0
             from_idx = -1
             to_idx = -1
@@ -927,26 +851,21 @@ class BlockchainMonitor:
                     else:
                         to_idx = i
             
-            # Конвертируем lamports в SOL
             amount_sol = max_change / 1e9
             
             if amount_sol < 10:
                 return None
             
-            # Получаем адреса
             account_keys = transaction.get("message", {}).get("accountKeys", [])
             
             from_addr = account_keys[from_idx] if 0 <= from_idx < len(account_keys) else "unknown"
             to_addr = account_keys[to_idx] if 0 <= to_idx < len(account_keys) else "unknown"
             
-            # DEX detection для Solana
             dex = self._detect_solana_dex(account_keys)
             
-            # Оценка USD
             price = settings.FALLBACK_PRICES.get("SOL", 150)
             amount_usd = amount_sol * price
             
-            # Timestamp
             block_time = tx_data.get("blockTime")
             tx_time = datetime.fromtimestamp(block_time) if block_time else datetime.utcnow()
             
@@ -976,7 +895,6 @@ class BlockchainMonitor:
         Определяет Solana DEX по account keys
         """
         
-        # Известные program IDs Solana DEXes
         solana_dexes = {
             "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": "Raydium",
             "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": "Orca",
@@ -992,18 +910,14 @@ class BlockchainMonitor:
         
         return None
     
-    # ========================================================================
-    # TRON
-    # ========================================================================
-    
     async def _fetch_tron_events(
         self,
         start_time: datetime,
         assets: Optional[List[str]] = None
     ) -> List[WhaleEvent]:
         """
-        Получает события для Tron
-        НОВОЕ v4.2: Интеграция с ChainRateLimiter
+        Получает события для Tron с детальным логированием
+        НОВОЕ v4.3: Улучшенная диагностика фильтрации
         """
         
         api_url = self.apis["tron"]["url"]
@@ -1038,33 +952,55 @@ class BlockchainMonitor:
             transfers = await self._execute_with_rate_limit("tron", _get_transfers)
             
             if not transfers:
+                print(f"⚠️ [DEBUG] tron - Нет трансферов от API")
                 return []
             
             print(f"✅ [DEBUG] tron - Получено {len(transfers)} трансферов")
             
-            # Парсим трансферы
-            for transfer in transfers:
-                event = await self._parse_tron_transfer(transfer)
-                
-                if event:
-                    if self._should_filter_event(event):
-                        continue
-                    
-                    events.append(event)
+            min_threshold = getattr(settings, 'MIN_USD_FLOOR', 10000)
+            print(f"💰 [DEBUG] tron - Минимальный порог: ${min_threshold:,.0f}")
             
+            parsed_count = 0
+            none_count = 0
+            
+            for idx, transfer in enumerate(transfers):
+                self.stats["events_parsed_total"]["tron"] += 1
+                parsed_count += 1
+                
+                event = await self._parse_tron_transfer(transfer, idx + 1)
+                
+                if event is None:
+                    none_count += 1
+                    self.stats["events_parsed_none"]["tron"] += 1
+                    continue
+                
+                if self._should_filter_event(event, "tron"):
+                    continue
+                
+                events.append(event)
+            
+            print(f"📊 [DEBUG] tron - Статистика парсинга:")
+            print(f"   Всего трансферов: {len(transfers)}")
+            print(f"   Распарсено: {parsed_count}")
+            print(f"   Вернули None: {none_count}")
+            print(f"   Прошли фильтры: {len(events)}")
             print(f"✅ [DEBUG] tron - Найдено {len(events)} событий")
         
         except Exception as e:
             print(f"❌ [MONITOR] Ошибка Tron: {e}")
+            import traceback
+            traceback.print_exc()
         
         return events
     
     async def _parse_tron_transfer(
         self,
-        transfer: Dict
+        transfer: Dict,
+        transfer_num: int = 0
     ) -> Optional[WhaleEvent]:
         """
-        Парсит Tron трансфер
+        Парсит Tron трансфер с детальным логированием
+        НОВОЕ v4.3: Подробные логи для диагностики
         """
         
         try:
@@ -1073,16 +1009,38 @@ class BlockchainMonitor:
             token_symbol = token_info.get("tokenSymbol", "TRX")
             token_decimals = int(token_info.get("tokenDecimal", 6))
             
-            amount = float(amount_str) / (10 ** token_decimals)
+            amount_raw = float(amount_str)
+            amount = amount_raw / (10 ** token_decimals)
             
             price = settings.FALLBACK_PRICES.get(token_symbol, 0.1)
             amount_usd = amount * price
             
-            if amount_usd < settings.MIN_USD_FLOOR:
+            min_threshold = getattr(settings, 'MIN_USD_FLOOR', 10000)
+            
+            if transfer_num <= 3:
+                print(f"🔍 [DEBUG] tron - Трансфер #{transfer_num}:")
+                print(f"   Token: {token_symbol}")
+                print(f"   Amount raw: {amount_raw}")
+                print(f"   Decimals: {token_decimals}")
+                print(f"   Amount: {amount:,.2f} {token_symbol}")
+                print(f"   Price: ${price}")
+                print(f"   USD Value: ${amount_usd:,.2f}")
+                print(f"   Min threshold: ${min_threshold:,.0f}")
+                print(f"   Pass threshold: {amount_usd >= min_threshold}")
+            
+            if amount_usd < min_threshold:
+                if transfer_num <= 3:
+                    print(f"   ❌ Отклонено: сумма ${amount_usd:,.2f} < ${min_threshold:,.0f}")
+                self.stats["events_below_threshold"]["tron"] += 1
                 return None
             
             from_addr = transfer.get("transferFromAddress", "")
             to_addr = transfer.get("transferToAddress", "")
+            
+            if transfer_num <= 3:
+                print(f"   ✅ Прошло порог!")
+                print(f"   From: {from_addr[:10]}...")
+                print(f"   To: {to_addr[:10]}...")
             
             timestamp = transfer.get("timestamp", 0) / 1000
             tx_time = datetime.fromtimestamp(timestamp)
@@ -1105,12 +1063,10 @@ class BlockchainMonitor:
             
             return event
         
-        except Exception:
+        except Exception as e:
+            if transfer_num <= 3:
+                print(f"❌ [DEBUG] tron - Ошибка парсинга трансфера #{transfer_num}: {e}")
             return None
-    
-    # ========================================================================
-    # DEX DETECTION
-    # ========================================================================
     
     def _detect_dex(self, chain: str, address: str) -> Optional[str]:
         """
@@ -1157,33 +1113,41 @@ class BlockchainMonitor:
             }
         }
     
-    # ========================================================================
-    # FILTERS
-    # ========================================================================
-    
-    def _should_filter_event(self, event: WhaleEvent) -> bool:
+    def _should_filter_event(self, event: WhaleEvent, chain: str) -> bool:
         """
-        Определяет нужно ли фильтровать событие
-        
-        Returns:
-            True если событие нужно отфильтровать
+        Определяет нужно ли фильтровать событие с детальным логированием
+        НОВОЕ v4.3: Логирование причин фильтрации
         """
         
-        # Фильтр 1: Биржи
-        if self._is_exchange_address(event.from_address) or \
-           self._is_exchange_address(event.to_address):
-            return True
+        reasons = []
         
-        # Фильтр 2: Мосты (только если не DEX)
+        if self._is_exchange_address(event.from_address):
+            reasons.append(f"from_exchange ({event.from_address[:10]}...)")
+            self.stats["events_exchange_filtered"][chain] += 1
+        
+        if self._is_exchange_address(event.to_address):
+            reasons.append(f"to_exchange ({event.to_address[:10]}...)")
+            self.stats["events_exchange_filtered"][chain] += 1
+        
         if not event.dex and event.is_bridge:
-            return True
+            reasons.append("bridge_transfer")
+            self.stats["events_bridge_filtered"][chain] += 1
         
-        # Фильтр 3: Внутренние переводы
         if event.is_internal:
-            return True
+            reasons.append("internal_transfer")
+            self.stats["events_internal_filtered"][chain] += 1
         
-        # Фильтр 4: Слишком маленькие суммы
-        if event.amount_usd < settings.MIN_USD_FLOOR:
+        min_threshold = getattr(settings, 'MIN_USD_FLOOR', 10000)
+        if event.amount_usd < min_threshold:
+            reasons.append(f"below_threshold (${event.amount_usd:,.2f} < ${min_threshold:,.0f})")
+            self.stats["events_below_threshold"][chain] += 1
+        
+        if reasons:
+            print(f"🚫 [FILTER] {chain} - Событие отфильтровано:")
+            print(f"   TX: {event.tx_hash[:16]}...")
+            print(f"   Amount: ${event.amount_usd:,.2f}")
+            print(f"   Reasons: {', '.join(reasons)}")
+            self.stats["events_filtered"][chain] += 1
             return True
         
         return False
@@ -1202,42 +1166,25 @@ class BlockchainMonitor:
         """
         
         exchanges = {
-            # Binance
             "0x28c6c06298d514db089934071355e5743bf21d60",
             "0x21a31ee1afc51d94c2efccaa2092ad1028285549",
             "0xdfd5293d8e347dfe59e90efd55b2956a1343963d",
             "0x564286362092d8e7936f0549571a803b203aaced",
             "0x0681d8db095565fe8a346fa0277bffde9c0edbbf",
-            
-            # Coinbase
             "0x71660c4005ba85c37ccec55d0c4493e66fe775d3",
             "0x503828976d22510aad0201ac7ec88293211d23da",
             "0xddfabcdc4d8ffc6d5beaf154f18b778f892a0740",
             "0xa090e606e30bd747d4e6245a1517ebe430f0057e",
-            
-            # Kraken
             "0x2910543af39aba0cd09dbb2d50200b3e800a63d2",
             "0x0a869d79a7052c7f1b55a8ebabbea3420f0d1e13",
             "0xe853c56864a2ebe4576a807d26fdc4a0ada51919",
-            
-            # Bitfinex
             "0x1151314c646ce4e0efd76d1af4760ae66a9fe30f",
             "0x876eabf441b2ee5b5b0554fd502a8e0600950cfa",
-            
-            # OKX
             "0x98ec059dc3adfbdd63429454aeb0c990fba4a128",
             "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b",
-            
-            # Bybit
             "0xf89d7b9c864f589bbf53a82105107622b35eaa40",
-            
-            # Gate.io
             "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c",
-            
-            # Huobi
             "0xab5c66752a9e8167967685f1450532fb96d5d24f",
-            
-            # KuCoin
             "0x2b5634c42055806a59e9107ed44d43c426e58258"
         }
         
@@ -1249,44 +1196,33 @@ class BlockchainMonitor:
         """
         
         bridges = {
-            # Multichain (Anyswap)
             "0x6b7a87899490ece95443e979ca9485cbe7e71522",
-            
-            # Celer
             "0x5427fefa711eff984124bfbb1ab6fbf5e3da1820",
-            
-            # Synapse
             "0x2796317b0ff8538f253012862c06787adfb8ceb6",
-            
-            # Across
             "0xc186fa914353c44b2e33ebe05f21846f1048beda",
-            
-            # Hop Protocol
             "0x3666f603cc164936c1b87e207f36babaa41b67aa",
-            
-            # Stargate
             "0x8731d54e9d02c286767d56ac03e8037c07e01e98",
-            
-            # LayerZero
             "0x66a71dcef29a0ffbdbe3c6a460a3b5bc225cd675"
         }
         
         return bridges
     
-    # ========================================================================
-    # STATS
-    # ========================================================================
-    
     def get_stats(self) -> Dict:
         """
         Возвращает статистику мониторинга
-        НОВОЕ v4.2: Включает детальную статистику по chains
+        НОВОЕ v4.3: Расширенная статистика фильтрации
         """
         
         return {
             "requests_made": dict(self.stats["requests_made"]),
             "events_found": dict(self.stats["events_found"]),
             "events_filtered": dict(self.stats["events_filtered"]),
+            "events_parsed_total": dict(self.stats["events_parsed_total"]),
+            "events_parsed_none": dict(self.stats["events_parsed_none"]),
+            "events_below_threshold": dict(self.stats["events_below_threshold"]),
+            "events_exchange_filtered": dict(self.stats["events_exchange_filtered"]),
+            "events_bridge_filtered": dict(self.stats["events_bridge_filtered"]),
+            "events_internal_filtered": dict(self.stats["events_internal_filtered"]),
             "cache_hits": self.stats["cache_hits"],
             "errors": dict(self.stats["errors"]),
             "circuit_breaker_trips": dict(self.stats["circuit_breaker_trips"]),
@@ -1296,7 +1232,7 @@ class BlockchainMonitor:
                 chain: breaker.state
                 for chain, breaker in self.circuit_breakers.items()
             },
-            "chains": dict(self.stats["chains"])  # НОВОЕ v4.2
+            "chains": dict(self.stats["chains"])
         }
     
     def print_stats(self):
@@ -1305,7 +1241,7 @@ class BlockchainMonitor:
         stats = self.get_stats()
         
         print("\n" + "=" * 80)
-        print("📊 BLOCKCHAIN MONITOR STATISTICS v4.2")
+        print("📊 BLOCKCHAIN MONITOR STATISTICS v4.3")
         print("=" * 80)
         
         print(f"\n📡 Requests Made:")
@@ -1320,6 +1256,16 @@ class BlockchainMonitor:
         for chain, count in stats["events_filtered"].items():
             if count > 0:
                 print(f"   {chain:12s}: {count:4d}")
+        
+        print(f"\n📊 Filter Details:")
+        print(f"   Below threshold: {dict(stats['events_below_threshold'])}")
+        print(f"   Exchange filtered: {dict(stats['events_exchange_filtered'])}")
+        print(f"   Bridge filtered: {dict(stats['events_bridge_filtered'])}")
+        print(f"   Internal filtered: {dict(stats['events_internal_filtered'])}")
+        
+        print(f"\n🔍 Parsing Stats:")
+        print(f"   Total parsed: {dict(stats['events_parsed_total'])}")
+        print(f"   Returned None: {dict(stats['events_parsed_none'])}")
         
         print(f"\n💾 Cache Hits: {stats['cache_hits']}")
         
@@ -1338,9 +1284,8 @@ class BlockchainMonitor:
             emoji = "✅" if state == "CLOSED" else "⚠️" if state == "HALF_OPEN" else "🔴"
             print(f"   {chain:12s}: {emoji} {state}")
         
-        # НОВОЕ v4.2: Детальная статистика chains
         if stats["chains"]:
-            print(f"\n🔗 Chain Status (v4.2):")
+            print(f"\n🔗 Chain Status (v4.3):")
             for chain, chain_stats in stats["chains"].items():
                 status = "✅" if chain_stats.get("success", False) else "❌"
                 http_429 = "🔴 429" if chain_stats.get("http_429", False) else ""
