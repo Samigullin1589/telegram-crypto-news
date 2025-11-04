@@ -60,21 +60,13 @@ def get_bot():
 
 
 # ============================================================================
-# MODULE-LEVEL LAZY LOADING через __getattr__
+# MODULE-LEVEL VARIABLES - Создаем переменные для корректного импорта
 # ============================================================================
 
-def __getattr__(name):
-    """
-    Ленивая инициализация переменных уровня модуля
-    
-    Это позволяет импортировать 'application' и 'bot' без их немедленного создания
-    Объекты создаются только при первом обращении к ним
-    """
-    if name == 'application':
-        return get_application()
-    elif name == 'bot':
-        return get_bot()
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+# Инициализируем переменные модуля сразу при импорте
+# Это необходимо для работы "from app.bot import application"
+application = get_application()
+bot = get_bot()
 
 
 # Определяем что можно импортировать из модуля
