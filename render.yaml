@@ -1,36 +1,50 @@
+# render.yaml - ИСПРАВЛЕНО (04.11.2025)
+# Production-ready конфигурация для Render.com
+
 services:
+  # ========================================================================
+  # WEB SERVICE - Main Application
+  # ========================================================================
   - type: web
     name: crypto-compass
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
+    
+    # Автодеплой при push в main
     autoDeploy: true
     
+    # Health check configuration
     healthCheckPath: /health
     
+    # Plan (можно изменить на standard/pro)
     plan: starter
     
+    # Region (Frankfurt для EU, можно изменить)
     region: frankfurt
     
+    # ========================================================================
+    # КРИТИЧЕСКИЕ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
+    # ========================================================================
     envVars:
-      - key: TELEGRAM_TOKEN
-        sync: false
-      
+      # ----------------------------------------------------------------
+      # TELEGRAM BOT (REQUIRED - sync: false означает секретные)
+      # ----------------------------------------------------------------
       - key: TELEGRAM_BOT_TOKEN
         sync: false
-      
-      - key: CHAT_ID
-        sync: false
+        # Получить: @BotFather в Telegram
       
       - key: TELEGRAM_CHANNEL_ID
         sync: false
+        # Формат: @channel_name или -100xxxxxxxxxx
       
       - key: ADMIN_CHAT_ID
         sync: false
+        # Ваш Telegram user ID
       
-      - key: WEBHOOK_URL
-        value: https://crypto-compass.onrender.com/webhook/telegram
-      
+      # ----------------------------------------------------------------
+      # RENDER CONFIGURATION (автоматически)
+      # ----------------------------------------------------------------
       - key: PORT
         value: "8000"
       
@@ -40,40 +54,36 @@ services:
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
       
+      # ----------------------------------------------------------------
+      # HTTP & TIMEOUT SETTINGS
+      # ----------------------------------------------------------------
       - key: HTTP_TIMEOUT
         value: "30"
       
       - key: RPC_TIMEOUT
         value: "15"
       
+      - key: WEBHOOK_TIMEOUT
+        value: "10"
+      
+      # ----------------------------------------------------------------
+      # MEMORY MANAGEMENT (Render Free Tier = 512MB)
+      # ----------------------------------------------------------------
       - key: MAX_MEMORY_MB
-        value: "480"
+        value: "450"
+        # Оставляем 62MB для system overhead
       
-      - key: FETCH_INTERVAL
+      - key: GC_INTERVAL_SECONDS
         value: "300"
+        # Garbage collection каждые 5 минут
       
-      - key: NEWS_CHECK_INTERVAL
-        value: "300"
+      # ----------------------------------------------------------------
+      # SYSTEM FEATURES
+      # ----------------------------------------------------------------
+      - key: WHALE_ENABLED
+        value: "true"
       
-      - key: POSTS_PER_HOUR_CAP
-        value: "5"
-      
-      - key: MIN_CONFIDENCE_SCORE
-        value: "6"
-      
-      - key: WHALE_MIN_VALUE_USD
-        value: "50000"
-      
-      - key: MIN_USD_THRESHOLD
-        value: "50000"
-      
-      - key: POLL_SECONDS
-        value: "120"
-      
-      - key: START_FROM_MINUTES_AGO
-        value: "60"
-      
-      - key: TRADING_ENABLED
+      - key: NEWS_ENABLED
         value: "true"
       
       - key: CHAINS_ENABLED
@@ -82,21 +92,15 @@ services:
       - key: ANALYTICS_ENABLED
         value: "true"
       
+      - key: TRADING_ENABLED
+        value: "true"
+      
       - key: HYPERLIQUID_ENABLED
         value: "true"
       
-      - key: SMART_DISCOVERY_ENABLED
-        value: "true"
-      
-      - key: VALIDATION_ENABLED
-        value: "true"
-      
-      - key: ADAPTIVE_THRESHOLDS_ENABLED
-        value: "true"
-      
-      - key: PERFORMANCE_TRACKING_ENABLED
-        value: "true"
-      
+      # ----------------------------------------------------------------
+      # MONITORING & HEALTH
+      # ----------------------------------------------------------------
       - key: HEALTH_CHECK_ENABLED
         value: "true"
       
@@ -112,53 +116,77 @@ services:
       - key: SEND_DAILY_STATS
         value: "true"
       
-      - key: ENABLE_IMAGES
-        value: "true"
+      # ----------------------------------------------------------------
+      # RATE LIMITING & PERFORMANCE
+      # ----------------------------------------------------------------
+      - key: POSTS_PER_HOUR_CAP
+        value: "5"
       
-      - key: ASSETS
-        value: "*"
+      - key: FETCH_INTERVAL
+        value: "300"
       
-      - key: DISCOVERY_REFRESH_HOURS
+      - key: NEWS_CHECK_INTERVAL
+        value: "300"
+      
+      - key: POLL_SECONDS
+        value: "120"
+      
+      # ----------------------------------------------------------------
+      # WHALE DETECTION
+      # ----------------------------------------------------------------
+      - key: WHALE_MIN_VALUE_USD
+        value: "50000"
+      
+      - key: MIN_USD_THRESHOLD
+        value: "50000"
+      
+      - key: MIN_CONFIDENCE_SCORE
         value: "6"
       
+      - key: START_FROM_MINUTES_AGO
+        value: "60"
+      
+      # ----------------------------------------------------------------
+      # ENABLED CHAINS
+      # ----------------------------------------------------------------
       - key: ENABLED_CHAINS
         value: "ethereum,bsc,polygon,arbitrum,base,solana"
       
-      - key: ETH_RPC_URL
-        value: https://eth.llamarpc.com
-      
+      # ----------------------------------------------------------------
+      # RPC ENDPOINTS (бесплатные публичные)
+      # ----------------------------------------------------------------
       - key: ETHEREUM_RPC_URL
-        value: https://eth.llamarpc.com
+        value: "https://eth.llamarpc.com"
       
       - key: BSC_RPC_URL
-        value: https://bsc-dataseed.binance.org
+        value: "https://bsc-dataseed.binance.org"
       
       - key: POLYGON_RPC_URL
-        value: https://polygon-rpc.com
+        value: "https://polygon-rpc.com"
       
       - key: ARBITRUM_RPC_URL
-        value: https://arb1.arbitrum.io/rpc
+        value: "https://arb1.arbitrum.io/rpc"
       
       - key: BASE_RPC_URL
-        value: https://mainnet.base.org
+        value: "https://mainnet.base.org"
       
       - key: SOLANA_RPC_URL
-        value: https://api.mainnet-beta.solana.com
+        value: "https://api.mainnet-beta.solana.com"
       
-      - key: OPTIMISM_RPC_URL
-        value: https://mainnet.optimism.io
-      
-      - key: AVALANCHE_RPC_URL
-        value: https://api.avax.network/ext/bc/C/rpc
-      
+      # ----------------------------------------------------------------
+      # API KEYS (опциональные, но рекомендуемые)
+      # ----------------------------------------------------------------
       - key: ETHERSCAN_API_KEY
         sync: false
+        # Получить: https://etherscan.io/apis
       
       - key: BSCSCAN_API_KEY
         sync: false
+        # Получить: https://bscscan.com/apis
       
       - key: POLYGONSCAN_API_KEY
         sync: false
+        # Получить: https://polygonscan.com/apis
       
       - key: ARBISCAN_API_KEY
         sync: false
@@ -166,26 +194,30 @@ services:
       - key: BASESCAN_API_KEY
         sync: false
       
-      - key: OPTIMISM_API_KEY
-        sync: false
-      
-      - key: SNOWTRACE_API_KEY
-        sync: false
-      
       - key: HELIUS_API_KEY
         sync: false
+        # Рекомендуется для Solana: https://helius.dev
       
       - key: COINGECKO_API_KEY
         sync: false
+        # Опционально для цен: https://coingecko.com/api
       
+      # ----------------------------------------------------------------
+      # AI KEYS (для новостей)
+      # ----------------------------------------------------------------
       - key: OPENAI_API_KEY
         sync: false
+        # Опционально для AI summaries
       
       - key: ANTHROPIC_API_KEY
         sync: false
+        # Альтернатива OpenAI
       
+      # ----------------------------------------------------------------
+      # HYPERLIQUID EXCHANGE
+      # ----------------------------------------------------------------
       - key: HYPERLIQUID_API_URL
-        value: https://api.hyperliquid.xyz
+        value: "https://api.hyperliquid.xyz"
       
       - key: HYPERLIQUID_MIN_TRADE_USD
         value: "100000"
@@ -196,59 +228,26 @@ services:
       - key: HYPERLIQUID_MIN_WHALE_ACTIVITY_USD
         value: "500000"
       
-      - key: HYPERLIQUID_WHALE_MIN_CONFIDENCE
-        value: "70"
-      
-      - key: HYPERLIQUID_LIQUIDATION_MIN_CONFIDENCE
-        value: "60"
-      
       - key: HYPERLIQUID_NOTIFY_WHALE_ACTIVITY
         value: "true"
       
       - key: HYPERLIQUID_NOTIFY_LIQUIDATIONS
         value: "true"
       
-      - key: HYPERLIQUID_NOTIFY_FUNDING
-        value: "true"
-      
-      - key: HYPERLIQUID_NOTIFY_VOLUME_SPIKES
-        value: "true"
-      
-      - key: HYPERLIQUID_WHALE_ACTIVITY_CHECK_INTERVAL
-        value: "300"
-      
-      - key: HYPERLIQUID_WHALE_ACTIVITY_LOOKBACK_MINUTES
-        value: "60"
-      
-      - key: HYPERLIQUID_LIQUIDATION_CHECK_INTERVAL
-        value: "300"
-      
-      - key: HYPERLIQUID_LIQUIDATION_LOOKBACK_MINUTES
-        value: "60"
-      
-      - key: HYPERLIQUID_FUNDING_CHECK_INTERVAL
-        value: "600"
-      
-      - key: HYPERLIQUID_EXTREME_FUNDING_THRESHOLD
-        value: "0.01"
-      
-      - key: HYPERLIQUID_MIN_OI_USD
-        value: "10000000"
-      
-      - key: HYPERLIQUID_VOLUME_SPIKE_CHECK_INTERVAL
-        value: "600"
-      
-      - key: HYPERLIQUID_VOLUME_SPIKE_MULTIPLIER
-        value: "3.0"
-      
+      # ----------------------------------------------------------------
+      # TRADING SYSTEM
+      # ----------------------------------------------------------------
       - key: TRADING_SIGNAL_INTERVAL_HOURS
         value: "1"
       
-      - key: POSITION_UPDATE_INTERVAL_SECONDS
-        value: "60"
-      
       - key: TRADING_MONITORED_ASSETS
-        value: "BTC,ETH,SOL,BNB,XRP,ADA,AVAX,DOT,MATIC,LINK,UNI,AAVE,ARB,OP"
+        value: "BTC,ETH,SOL,BNB,XRP,ADA,AVAX,DOT,MATIC,LINK"
+      
+      # ----------------------------------------------------------------
+      # SMART DISCOVERY
+      # ----------------------------------------------------------------
+      - key: SMART_DISCOVERY_ENABLED
+        value: "true"
       
       - key: SMART_DISCOVERY_INTERVAL_HOURS
         value: "6"
@@ -256,131 +255,101 @@ services:
       - key: SMART_DISCOVERY_MAX_NEW_WALLETS
         value: "10"
       
+      # ----------------------------------------------------------------
+      # VALIDATION
+      # ----------------------------------------------------------------
+      - key: VALIDATION_ENABLED
+        value: "true"
+      
       - key: VALIDATION_INTERVAL_DAYS
         value: "1"
       
       - key: VALIDATION_MIN_SCORE_TO_KEEP
         value: "30"
       
-      - key: VALIDATION_MAX_INACTIVE_DAYS
-        value: "30"
-      
-      - key: VALIDATION_MIN_ROI_TO_KEEP
-        value: "-0.20"
-      
-      - key: VALIDATION_CHECK_PERFORMANCE
+      # ----------------------------------------------------------------
+      # ADAPTIVE THRESHOLDS
+      # ----------------------------------------------------------------
+      - key: ADAPTIVE_THRESHOLDS_ENABLED
         value: "true"
-      
-      - key: VALIDATION_NOTIFY_THRESHOLD
-        value: "5"
-      
-      - key: WALLET_DB_JSON_PATH
-        value: "data/wallets/tracked_wallets.json"
-      
-      - key: WALLET_AUTO_PRUNE
-        value: "true"
-      
-      - key: WALLET_MAX_TRACKED
-        value: "500"
-      
-      - key: WALLET_INITIAL_SCORE
-        value: "50"
-      
-      - key: WALLET_MIN_SCORE
-        value: "0"
-      
-      - key: WALLET_MAX_SCORE
-        value: "100"
-      
-      - key: WALLET_SCORE_UPDATE_ON_SUCCESS
-        value: "5"
-      
-      - key: WALLET_SCORE_UPDATE_ON_FAILURE
-        value: "-10"
       
       - key: ADAPTIVE_BASE_MIN_CONFIDENCE
         value: "40"
       
-      - key: ADAPTIVE_BASE_MIN_SIZE_REL
-        value: "0.10"
-      
-      - key: ADAPTIVE_BASE_MIN_VOLUME_24H
-        value: "1000000"
-      
-      - key: ADAPTIVE_BULL_THRESHOLD
-        value: "5.0"
-      
-      - key: ADAPTIVE_BEAR_THRESHOLD
-        value: "-5.0"
-      
-      - key: ADAPTIVE_BULL_CONFIDENCE_MODIFIER
-        value: "-5"
-      
-      - key: ADAPTIVE_BULL_SIZE_REL_MODIFIER
-        value: "-0.03"
-      
-      - key: ADAPTIVE_BULL_VOLUME_MODIFIER
-        value: "1.5"
-      
-      - key: ADAPTIVE_BEAR_CONFIDENCE_MODIFIER
-        value: "10"
-      
-      - key: ADAPTIVE_BEAR_SIZE_REL_MODIFIER
-        value: "0.05"
-      
-      - key: ADAPTIVE_BEAR_VOLUME_MODIFIER
-        value: "0.7"
-      
-      - key: ADAPTIVE_MIN_SIGNALS_FOR_ADAPTATION
-        value: "20"
-      
-      - key: ADAPTIVE_LOW_ACCURACY_THRESHOLD
-        value: "0.40"
-      
-      - key: ADAPTIVE_HIGH_ACCURACY_THRESHOLD
-        value: "0.70"
-      
-      - key: ADAPTIVE_ACCURACY_ADJUSTMENT
-        value: "5"
-      
-      - key: ADAPTIVE_MARKET_REGIME_UPDATE_HOURS
-        value: "6"
+      # ----------------------------------------------------------------
+      # PERFORMANCE TRACKING
+      # ----------------------------------------------------------------
+      - key: PERFORMANCE_TRACKING_ENABLED
+        value: "true"
       
       - key: PERFORMANCE_SUCCESS_THRESHOLD
         value: "0.05"
       
-      - key: PERFORMANCE_HISTORY_SIZE
-        value: "100"
+      # ----------------------------------------------------------------
+      # SOLANA RATE LIMITING (КРИТИЧНО!)
+      # ----------------------------------------------------------------
+      - key: SOLANA_RATE_LIMIT_REQUESTS
+        value: "50"
+      
+      - key: SOLANA_RATE_LIMIT_WINDOW
+        value: "60"
+      
+      - key: SOLANA_RETRY_ON_429
+        value: "1"
+      
+      # ----------------------------------------------------------------
+      # PATHS (для Render Disk)
+      # ----------------------------------------------------------------
+      - key: WALLET_DB_JSON_PATH
+        value: "data/wallets/tracked_wallets.json"
       
       - key: STATE_FILE
         value: "data/state.json"
-      
-      - key: SOLANA_RPC_CACHE_TTL_SECONDS
-        value: "30"
-      
-      - key: SOLANA_RPC_MAX_RETRIES
-        value: "3"
-      
-      - key: SOLANA_RPC_BASE_DELAY_SECONDS
-        value: "2"
-      
-      - key: SOLANA_RPC_MAX_DELAY_SECONDS
-        value: "60"
-      
-      - key: SOLANA_RPC_CIRCUIT_BREAKER_THRESHOLD
-        value: "5"
-      
-      - key: SOLANA_RPC_CIRCUIT_BREAKER_TIMEOUT_SECONDS
-        value: "300"
-      
-      - key: SOLANA_RPC_PRIORITY_QUEUE_ENABLED
-        value: "true"
-      
-      - key: SOLANA_RPC_BATCH_ENABLED
-        value: "true"
-      
-      - key: SOLANA_RPC_BATCH_SIZE
-        value: "10"
-      
-      - key: SOLANA_RPC_BATCH_DELAY_MS
-        value: "50"
+
+# ============================================================================
+# DATABASES (опционально - для будущего использования)
+# ============================================================================
+databases:
+  # Пример PostgreSQL (если понадобится)
+  # - name: crypto-compass-db
+  #   databaseName: crypto_compass
+  #   user: crypto_compass_user
+  #   plan: starter
+  #   region: frankfurt
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# 
+# SETUP INSTRUCTIONS:
+# 1. Fork this repository
+# 2. Создать сервис на Render.com
+# 3. Подключить GitHub repo
+# 4. Добавить секретные переменные через Render UI:
+#    - TELEGRAM_BOT_TOKEN
+#    - TELEGRAM_CHANNEL_ID
+#    - ADMIN_CHAT_ID
+#    - API keys (опционально)
+# 5. Deploy!
+#
+# WEBHOOK URL:
+# Автоматически будет: https://crypto-compass.onrender.com/webhook/telegram
+# Если изменили service name, обновите в коде
+#
+# PERSISTENT STORAGE:
+# Если нужно сохранять данные между деплоями:
+# 1. Добавить Render Disk в UI
+# 2. Mount path: /app/data
+# 3. Обновить DB_PATH в database.py
+#
+# MONITORING:
+# - Health: https://crypto-compass.onrender.com/health
+# - Logs: Render Dashboard → Logs
+#
+# SCALING:
+# Free tier имеет ограничения:
+# - 512MB RAM
+# - Sleeps after 15 min inactivity
+# - 750 hours/month
+#
+# Для production рекомендуется plan: starter или выше
