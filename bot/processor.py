@@ -1,5 +1,5 @@
 """
-NEWS PROCESSOR v3.2 - Complete Edition with Enhanced Error Handling
+NEWS PROCESSOR v3.3 - ИСПРАВЛЕНО для интеграции с TelegramPoster
 AI-powered crypto news aggregation and publishing
 
 ВОЗМОЖНОСТИ:
@@ -12,7 +12,7 @@ AI-powered crypto news aggregation and publishing
 ✅ Error recovery with retry
 ✅ Comprehensive metrics
 ✅ Graceful degradation if dependencies unavailable
-✅ ИСПРАВЛЕНО v3.2: Added run_cycle() and process_cycle() methods for integration
+✅ ИСПРАВЛЕНО v3.3: Правильная интеграция с TelegramPoster.post()
 """
 
 import asyncio
@@ -35,9 +35,8 @@ except ImportError:
     BROTLI_AVAILABLE = False
     print("⚠️ [NEWS] Brotli not available - install: pip install brotli brotlipy")
 
-# Импорты зависимостей с graceful fallback
 try:
-    from bot.config import NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP
+    from bot.config import NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP, MIN_CONFIDENCE_SCORE
     CONFIG_AVAILABLE = True
 except ImportError as e:
     print(f"⚠️ [NEWS] Config import error: {e}")
@@ -45,6 +44,7 @@ except ImportError as e:
     NEWS_SOURCES = []
     FETCH_INTERVAL = 300
     POSTS_PER_HOUR_CAP = 3
+    MIN_CONFIDENCE_SCORE = 6
 
 try:
     from bot.ai_handler import AIHandler
@@ -138,9 +138,9 @@ class DummyDatabase:
 class DummyTelegram:
     """Заглушка для Telegram если он недоступен"""
     
-    async def post_article(self, article: Dict) -> bool:
+    async def post(self, text=None, link=None, image_data=None, **kwargs) -> bool:
         """Симулирует успешную публикацию"""
-        print(f"📤 [TELEGRAM DUMMY] Would post: {article.get('title', 'No title')[:50]}")
+        print(f"📤 [TELEGRAM DUMMY] Would post: {(text or '')[:50]}")
         return True
 
 
@@ -154,27 +154,26 @@ class NewsProcessor:
     - Smart gate фильтрацию
     - Telegram публикацию
     
-    НОВОЕ v3.2: Методы для интеграции с main.py:
+    НОВОЕ v3.3:
     - run_cycle() - выполняет один цикл обработки
     - process_cycle() - алиас для run_cycle()
     - run() - бесконечный цикл (для standalone использования)
+    - ИСПРАВЛЕНО: Правильный вызов TelegramPoster.post()
     """
     
     def __init__(self):
         """Инициализация процессора"""
         
         print("\n" + "="*80)
-        print("📰 NEWS PROCESSOR - INITIALIZATION v3.2")
+        print("📰 NEWS PROCESSOR v3.3 - INITIALIZATION")
         print("="*80 + "\n")
         
-        # Проверяем доступность конфига
         if not CONFIG_AVAILABLE or not NEWS_SOURCES:
             print("❌ [NEWS] Config not available or empty NEWS_SOURCES")
             print("   News Processor will be disabled")
             self._initialized = False
             return
         
-        # Компоненты с fallback
         if AI_HANDLER_AVAILABLE and AIHandler:
             try:
                 self.ai_handler = AIHandler()
@@ -218,22 +217,17 @@ class NewsProcessor:
             print("⚠️ Telegram unavailable, using dummy")
             self.telegram = DummyTelegram()
         
-        # Metrics
         self.metrics = NewsMetrics()
         
-        # Fetch settings
         self.fetch_timeout = 30
         self.max_fetch_retries = 3
         
-        # Cache для дедупликации
         self.seen_urls: Set[str] = set()
         self.seen_hashes: Set[str] = set()
         
-        # Rate limiting
         self.last_fetch_times: Dict[str, datetime] = {}
         self.min_fetch_interval = 5.0
         
-        # User agents для ротации
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -242,19 +236,15 @@ class NewsProcessor:
         ]
         self.current_ua_index = 0
         
-        # Shutdown flag
         self.shutdown_requested = False
-        
-        # Baseline loaded flag
         self._baseline_loaded = False
-        
-        # Initialization complete
         self._initialized = True
         
-        print("✅ News Processor v3.2 инициализирован")
+        print("✅ News Processor v3.3 инициализирован")
         print(f"   • Sources: {len(NEWS_SOURCES)}")
         print(f"   • Fetch interval: {FETCH_INTERVAL}s")
         print(f"   • Posts per hour cap: {POSTS_PER_HOUR_CAP}")
+        print(f"   • Min confidence: {MIN_CONFIDENCE_SCORE}/10")
         print(f"   • Brotli support: {'✅' if BROTLI_AVAILABLE else '❌'}")
         print(f"   • AI Handler: {'✅' if AI_HANDLER_AVAILABLE else '⚠️ dummy'}")
         print(f"   • Database: {'✅' if DATABASE_AVAILABLE else '⚠️ dummy'}")
@@ -269,7 +259,7 @@ class NewsProcessor:
     
     async def run_cycle(self):
         """
-        НОВОЕ v3.2: Выполняет ОДИН цикл обработки новостей
+        НОВОЕ v3.3: Выполняет ОДИН цикл обработки новостей
         
         Этот метод предназначен для интеграции с main.py
         main.py вызывает его в своем цикле с контролируемыми интервалами
@@ -289,7 +279,6 @@ class NewsProcessor:
             print("⚠️ [NEWS] Processor not initialized, skipping cycle")
             return
         
-        # Загружаем baseline при первом запуске
         if not self._baseline_loaded:
             await self._initial_baseline()
             self._baseline_loaded = True
@@ -297,35 +286,31 @@ class NewsProcessor:
         cycle_start = datetime.now(timezone.utc)
         
         print("\n" + "#"*80)
-        print(f"🔄 NEWS CYCLE #{self.metrics.cycles_completed + 1} - {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"📰 NEWS CYCLE #{self.metrics.cycles_completed + 1} - {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
         print("#"*80 + "\n")
         
-        # 1. Fetch новостей
         articles = await self._fetch_all_sources()
         
         if not articles:
-            print("⚠️ [NEWS] Нет новых статей в этом цикле")
+            print("👍 [NEWS] Нет новых статей в этом цикле")
             self.metrics.cycles_completed += 1
             return
         
         print(f"\n📊 [NEWS] Собрано {len(articles)} новых статей")
         
-        # 2. Обработка и фильтрация
         candidates = await self._process_articles(articles)
         
         if not candidates:
-            print("⚠️ [NEWS] Нет кандидатов для публикации")
+            print("⚠️ [NEWS] Нет кандидатов для публикации (низкий score)")
             self.metrics.cycles_completed += 1
             return
         
         print(f"✅ [NEWS] {len(candidates)} кандидатов прошли фильтры")
         
-        # 3. Публикация
         published = await self._publish_best(candidates)
         
         print(f"📤 [NEWS] Опубликовано: {published}/{len(candidates)}")
         
-        # 4. Обновляем метрики
         self.metrics.cycles_completed += 1
         
         cycle_duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
@@ -333,7 +318,7 @@ class NewsProcessor:
     
     async def process_cycle(self):
         """
-        НОВОЕ v3.2: Алиас для run_cycle()
+        НОВОЕ v3.3: Алиас для run_cycle()
         
         Этот метод существует для совместимости с main.py
         который может вызывать либо run_cycle(), либо process_cycle()
@@ -362,7 +347,6 @@ class NewsProcessor:
         
         print("🚀 [NEWS] Запуск главного цикла (standalone mode)\n")
         
-        # Загружаем baseline при первом запуске
         if not self._baseline_loaded:
             await self._initial_baseline()
             self._baseline_loaded = True
@@ -375,7 +359,6 @@ class NewsProcessor:
                 print(f"🔄 ЦИКЛ #{self.metrics.cycles_completed + 1} - {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
                 print("#"*80 + "\n")
                 
-                # 1. Fetch новостей
                 articles = await self._fetch_all_sources()
                 
                 if not articles:
@@ -386,7 +369,6 @@ class NewsProcessor:
                 
                 print(f"\n📊 [NEWS] Собрано {len(articles)} новых статей")
                 
-                # 2. Обработка и фильтрация
                 candidates = await self._process_articles(articles)
                 
                 if not candidates:
@@ -397,15 +379,12 @@ class NewsProcessor:
                 
                 print(f"✅ [NEWS] {len(candidates)} кандидатов прошли фильтры")
                 
-                # 3. Публикация
                 published = await self._publish_best(candidates)
                 
                 print(f"📤 [NEWS] Опубликовано: {published}/{len(candidates)}")
                 
-                # 4. Обновляем метрики
                 self.metrics.cycles_completed += 1
                 
-                # 5. Пауза до следующего цикла
                 cycle_duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
                 
                 if cycle_duration < FETCH_INTERVAL:
@@ -423,7 +402,6 @@ class NewsProcessor:
                 print(f"   {e}")
                 traceback.print_exc()
                 
-                # Пауза перед retry
                 await asyncio.sleep(60)
     
     async def _initial_baseline(self):
@@ -448,18 +426,15 @@ class NewsProcessor:
             List[Dict]: Список новых статей
         """
         
-        # Сортируем источники по приоритету
         sorted_sources = sorted(
             NEWS_SOURCES,
             key=lambda s: s.get('priority', 5),
             reverse=True
         )
         
-        # Показываем что будем fetch-ить
         for source in sorted_sources[:6]:
             print(f"📡 [FETCH] {source['name']} (приоритет: {source.get('priority', 5)})")
         
-        # Fetch параллельно (max 5 одновременно)
         semaphore = asyncio.Semaphore(5)
         
         async def fetch_with_semaphore(source):
@@ -473,7 +448,6 @@ class NewsProcessor:
         tasks = [fetch_with_semaphore(source) for source in sorted_sources]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Собираем все статьи
         all_articles = []
         
         for result in results:
@@ -503,12 +477,10 @@ class NewsProcessor:
             List[Dict]: Список статей
         """
         
-        # Rate limiting
         await self._respect_rate_limit(name)
         
         start_time = datetime.now(timezone.utc)
         
-        # Retry loop
         for attempt in range(self.max_fetch_retries):
             try:
                 articles = await self._fetch_with_brotli(url, name, attempt)
@@ -534,7 +506,6 @@ class NewsProcessor:
             except aiohttp.ClientError as e:
                 error_msg = str(e)
                 
-                # Специальная обработка Brotli
                 if 'brotli' in error_msg.lower() or 'br' in error_msg.lower():
                     try:
                         articles = await self._fetch_without_compression(url, name)
@@ -545,7 +516,6 @@ class NewsProcessor:
                     except:
                         pass
                 
-                # Короткий лог ошибки
                 error_short = error_msg[:100] if len(error_msg) > 100 else error_msg
                 
                 if attempt == self.max_fetch_retries - 1:
@@ -691,7 +661,6 @@ class NewsProcessor:
             if not url:
                 return None
             
-            # Published date
             published = None
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                 try:
@@ -706,7 +675,6 @@ class NewsProcessor:
             if not published:
                 published = datetime.now(timezone.utc)
             
-            # Summary
             summary = ''
             if hasattr(entry, 'summary'):
                 summary = entry.summary
@@ -760,7 +728,6 @@ class NewsProcessor:
         self.seen_urls.add(url)
         self.seen_hashes.add(title_hash)
         
-        # Ограничиваем cache
         if len(self.seen_urls) > 10000:
             to_remove = int(len(self.seen_urls) * 0.2)
             self.seen_urls = set(list(self.seen_urls)[to_remove:])
@@ -780,18 +747,19 @@ class NewsProcessor:
         
         for article in articles:
             try:
-                # AI анализ
                 analysis = await self.ai_handler.analyze_article(article)
                 
                 if not analysis:
                     continue
                 
-                # Smart Gate фильтр
-                if analysis['score'] < 70:
+                score = analysis.get('score', 0)
+                
+                threshold = MIN_CONFIDENCE_SCORE * 10
+                
+                if score < threshold:
                     self.metrics.articles_filtered += 1
                     continue
                 
-                # Добавляем к кандидатам
                 article['ai_analysis'] = analysis
                 candidates.append(article)
                 
@@ -804,13 +772,14 @@ class NewsProcessor:
     
     async def _publish_best(self, candidates: List[Dict]) -> int:
         """
-        Публикация лучших кандидатов
+        ИСПРАВЛЕНО v3.3: Публикация лучших кандидатов
+        
+        Использует правильный формат вызова TelegramPoster.post(text=..., link=..., image_data=...)
         
         Returns:
             int: Количество опубликованных
         """
         
-        # Сортируем по score
         sorted_candidates = sorted(
             candidates,
             key=lambda c: c.get('ai_analysis', {}).get('score', 0),
@@ -819,23 +788,52 @@ class NewsProcessor:
         
         published = 0
         
-        # Публикуем топ-N
         for candidate in sorted_candidates[:POSTS_PER_HOUR_CAP]:
             try:
-                success = await self.telegram.post_article(candidate)
+                title = candidate['title']
+                summary = candidate.get('summary', '')
+                source = candidate.get('source', 'Unknown')
+                score = candidate.get('ai_analysis', {}).get('score', 0)
+                sentiment = candidate.get('ai_analysis', {}).get('sentiment', 'neutral')
+                
+                sentiment_emoji = {
+                    'positive': '🚀',
+                    'bullish': '📈',
+                    'negative': '📉',
+                    'bearish': '🔻',
+                    'neutral': '📊'
+                }.get(sentiment, '📰')
+                
+                message_text = f"{sentiment_emoji} **{title}**\n\n"
+                
+                if summary:
+                    clean_summary = summary[:300]
+                    message_text += f"{clean_summary}...\n\n"
+                
+                message_text += f"_Источник: {source}_\n"
+                message_text += f"_Оценка AI: {score}/100_"
+                
+                success = await self.telegram.post(
+                    text=message_text,
+                    link=candidate['url'],
+                    image_data=None
+                )
                 
                 if success:
                     published += 1
                     self.metrics.articles_published += 1
                     
-                    # Сохраняем в БД
                     await self.database.save_article(candidate)
                     
-                    # Пауза между публикациями
+                    print(f"✅ [PUBLISHED] {title[:60]}")
+                    
                     await asyncio.sleep(5)
+                else:
+                    print(f"❌ [FAILED] {title[:60]}")
             
             except Exception as e:
                 print(f"⚠️ [PUBLISH] Ошибка: {e}")
+                traceback.print_exc()
                 continue
         
         return published
@@ -872,7 +870,7 @@ class NewsProcessor:
         """Вывод статистики"""
         
         print("\n" + "="*80)
-        print("📊 NEWS PROCESSOR STATISTICS v3.2")
+        print("📊 NEWS PROCESSOR STATISTICS v3.3")
         print("="*80)
         print(f"Uptime: {self.metrics.get_uptime()/3600:.1f}h")
         print(f"Cycles: {self.metrics.cycles_completed}")
