@@ -32,7 +32,12 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from app import settings
+from app import (
+    TELEGRAM_BOT_TOKEN,
+    ADMIN_CHAT_ID,
+    TELEGRAM_CHANNEL_ID,
+    config
+)
 
 # ============================================================================
 # BOT INITIALIZATION - SINGLETON PATTERN WITH LAZY LOADING
@@ -46,7 +51,7 @@ def get_application():
     """Получить или создать единственный экземпляр application"""
     global _application, _bot
     if _application is None:
-        _application = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
+        _application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         _bot = _application.bot
         print("✅ [BOT] Telegram bot initialized")
     return _application
@@ -107,7 +112,7 @@ __all__ = [
 def is_admin(user_id: int) -> bool:
     """Проверка прав администратора"""
     try:
-        admin_id = int(settings.ADMIN_CHAT_ID) if isinstance(settings.ADMIN_CHAT_ID, str) else settings.ADMIN_CHAT_ID
+        admin_id = int(ADMIN_CHAT_ID) if isinstance(ADMIN_CHAT_ID, str) else ADMIN_CHAT_ID
         return user_id == admin_id
     except (ValueError, TypeError):
         return False
@@ -891,17 +896,17 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # General
         text += "<b>🔧 GENERAL</b>\n"
-        text += f"Assets Mode: {settings.ASSETS}\n"
-        text += f"Posts per Hour: {settings.POSTS_PER_HOUR_CAP}\n"
-        text += f"Poll Interval: {settings.POLL_SECONDS}s\n"
-        text += f"Images: {'✅' if settings.ENABLE_IMAGES else '❌'}\n\n"
+        text += f"Assets Mode: {getattr(config, "ASSETS", "All")}\n"
+        text += f"Posts per Hour: {config.whale.posts_per_hour_cap}\n"
+        text += f"Poll Interval: {config.whale.poll_seconds}s\n"
+        text += f"Images: {'✅' if getattr(config.news, "image_download_enabled", True) else '❌'}\n\n"
         
         # Whale Monitoring
         text += "<b>🐋 WHALE MONITORING</b>\n"
-        text += f"Smart Discovery: {'✅' if settings.SMART_DISCOVERY_ENABLED else '❌'}\n"
-        text += f"Adaptive Thresholds: {'✅' if settings.ADAPTIVE_THRESHOLDS_ENABLED else '❌'}\n"
-        text += f"Performance Tracking: {'✅' if settings.PERFORMANCE_TRACKING_ENABLED else '❌'}\n"
-        text += f"Validation: {'✅' if settings.VALIDATION_ENABLED else '❌'}\n\n"
+        text += f"Smart Discovery: {'✅' if config.smart_discovery.enabled else '❌'}\n"
+        text += f"Adaptive Thresholds: {'✅' if config.adaptive_thresholds.enabled else '❌'}\n"
+        text += f"Performance Tracking: {'✅' if config.performance.tracking_enabled else '❌'}\n"
+        text += f"Validation: {'✅' if config.validation.enabled else '❌'}\n\n"
         
         # Trading System
         if scheduler.trading_enabled:
@@ -1021,8 +1026,8 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Критерии
         text += "<b>Критерии:</b>\n"
-        text += f"• Bull: >+{settings.ADAPTIVE_BULL_THRESHOLD}% (7d)\n"
-        text += f"• Bear: <{settings.ADAPTIVE_BEAR_THRESHOLD}% (7d)\n"
+        text += f"• Bull: >+{getattr(config.adaptive_thresholds, "max_threshold", 70)}% (7d)\n"
+        text += f"• Bear: <{getattr(config.adaptive_thresholds, "min_threshold", 30)}% (7d)\n"
         text += f"• Sideways: между ними\n"
         
         await update.message.reply_text(text, parse_mode='HTML')
