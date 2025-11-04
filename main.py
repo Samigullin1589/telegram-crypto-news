@@ -1,5 +1,3 @@
-# main.py
-
 """
 INTEGRATED CRYPTO MONITOR v4.3 - Complete Edition with Enhanced Rate Limiting
 Unified system: News Bot + Whale Monitor + Trading System + Telegram Commands
@@ -21,6 +19,7 @@ Unified system: News Bot + Whale Monitor + Trading System + Telegram Commands
 ✅ HTTP Health Check Server (для Render.com)
 ✅ ИСПРАВЛЕНО: Solana Rate Limiting (02.11.2025)
 ✅ ИСПРАВЛЕНО: NewsProcessor integration (02.11.2025)
+✅ ИСПРАВЛЕНО: HTTP Server AssertionError (04.11.2025)
 """
 
 import asyncio
@@ -287,85 +286,6 @@ class ResourceMonitor:
 
 
 # ============================================================================
-# HTTP HEALTH CHECK SERVER
-# ============================================================================
-
-async def health_handler(request):
-    """Простой health check endpoint"""
-    resource_monitor = request.app.get('resource_monitor')
-    rate_limiter = request.app.get('rate_limiter')
-    
-    health_status = {
-        'status': 'healthy',
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'service': 'crypto-compass-v4.3'
-    }
-    
-    if resource_monitor:
-        resource_stats = resource_monitor.get_stats()
-        health_status['resources'] = resource_stats
-    
-    if rate_limiter:
-        rate_stats = rate_limiter.get_stats()
-        health_status['rate_limiter'] = {
-            'active_chains': len([c for c in rate_stats['chains'] if c not in rate_stats['disabled_chains']]),
-            'disabled_chains': list(rate_stats['disabled_chains'].keys())
-        }
-    
-    return web.json_response(health_status)
-
-
-async def webhook_handler(request):
-    """Webhook endpoint для Telegram"""
-    bot_application = request.app.get('bot_application')
-    
-    if not bot_application:
-        return web.json_response({'error': 'Bot not initialized'}, status=503)
-    
-    try:
-        update_data = await request.json()
-        
-        from telegram import Update
-        update = Update.de_json(update_data, bot_application.bot)
-        
-        await bot_application.process_update(update)
-        
-        return web.json_response({'ok': True})
-    
-    except Exception as e:
-        print(f"❌ [WEBHOOK] Ошибка обработки: {e}")
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def start_health_server(bot_application, resource_monitor, rate_limiter):
-    """Запуск HTTP сервера для health checks и webhooks"""
-    app = web.Application()
-    
-    app['bot_application'] = bot_application
-    app['resource_monitor'] = resource_monitor
-    app['rate_limiter'] = rate_limiter
-    
-    app.router.add_get('/', health_handler)
-    app.router.add_get('/health', health_handler)
-    app.router.add_post('/webhook/telegram', webhook_handler)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.environ.get('PORT', 8000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    
-    await site.start()
-    
-    print(f"🌐 [HTTP] Health server запущен на порту {port}")
-    print(f"   Endpoints:")
-    print(f"   • GET  / или /health - Health check")
-    print(f"   • POST /webhook/telegram - Telegram webhook")
-    
-    return runner
-
-
-# ============================================================================
 # SYSTEM HEALTH MONITOR
 # ============================================================================
 
@@ -442,7 +362,7 @@ class SystemHealthMonitor:
         elif system == "bot":
             self.bot_errors += 1
     
-    def check_health(self) -> tuple[bool, List[str]]:
+    def check_health(self) -> tuple:
         """Проверка здоровья всех систем"""
         issues = []
         now = datetime.now(timezone.utc)
@@ -616,7 +536,11 @@ class IntegratedCryptoMonitor:
         self.shutdown_event = asyncio.Event()
         self._tasks: List[asyncio.Task] = []
         self._shutdown_in_progress = False
-        self._health_server_runner = None
+        
+        # HTTP Server components - ИСПРАВЛЕНО: правильное управление жизненным циклом
+        self._http_app = None
+        self._http_runner = None
+        self._http_site = None
         
         self.stats = {
             "start_time": datetime.now(timezone.utc),
@@ -694,6 +618,137 @@ class IntegratedCryptoMonitor:
             tb.print_exc()
             return False
     
+    async def _health_handler(self, request: web.Request) -> web.Response:
+        """HTTP handler для health check"""
+        try:
+            health_status = {
+                'status': 'healthy',
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'service': 'crypto-compass-v4.3'
+            }
+            
+            if self.resource_monitor:
+                resource_stats = self.resource_monitor.get_stats()
+                health_status['resources'] = resource_stats
+            
+            if self.rate_limiter:
+                rate_stats = self.rate_limiter.get_stats()
+                health_status['rate_limiter'] = {
+                    'active_chains': len([c for c in rate_stats['chains'] if c not in rate_stats['disabled_chains']]),
+                    'disabled_chains': list(rate_stats['disabled_chains'].keys())
+                }
+            
+            health_stats = self.health_monitor.get_stats()
+            health_status['uptime'] = health_stats['uptime_formatted']
+            health_status['systems'] = health_stats['systems']
+            
+            return web.json_response(health_status)
+        
+        except Exception as e:
+            print(f"❌ [HEALTH] Error in health handler: {e}")
+            return web.json_response({'status': 'error', 'error': str(e)}, status=500)
+    
+    async def _webhook_handler(self, request: web.Request) -> web.Response:
+        """HTTP handler для Telegram webhook"""
+        try:
+            if not self.bot_application:
+                return web.json_response({'error': 'Bot not initialized'}, status=503)
+            
+            update_data = await request.json()
+            
+            from telegram import Update
+            update = Update.de_json(update_data, self.bot_application.bot)
+            
+            await self.bot_application.process_update(update)
+            
+            return web.json_response({'ok': True})
+        
+        except Exception as e:
+            print(f"❌ [WEBHOOK] Ошибка обработки: {e}")
+            tb.print_exc()
+            return web.json_response({'error': str(e)}, status=500)
+    
+    async def _start_http_server(self):
+        """
+        Запуск HTTP сервера для health checks и webhooks
+        
+        ИСПРАВЛЕНО v4.3 (04.11.2025):
+        - Правильная последовательность: AppRunner -> setup() -> TCPSite -> start()
+        - Корректное управление жизненным циклом объектов
+        - Исправлен AssertionError при создании сервера
+        """
+        try:
+            print("🌐 [HTTP] Инициализация health server...")
+            
+            # Создаем приложение
+            self._http_app = web.Application()
+            
+            # Добавляем роуты
+            self._http_app.router.add_get('/', self._health_handler)
+            self._http_app.router.add_get('/health', self._health_handler)
+            self._http_app.router.add_post('/webhook/telegram', self._webhook_handler)
+            
+            # ИСПРАВЛЕНО: Правильная последовательность создания сервера
+            # 1. Создаем AppRunner
+            self._http_runner = web.AppRunner(self._http_app)
+            
+            # 2. Вызываем setup()
+            await self._http_runner.setup()
+            
+            # 3. Создаем TCPSite с уже настроенным runner
+            port = int(os.environ.get('PORT', 8000))
+            self._http_site = web.TCPSite(
+                self._http_runner,
+                '0.0.0.0',
+                port
+            )
+            
+            # 4. Запускаем site
+            await self._http_site.start()
+            
+            print(f"🌐 [HTTP] Health server запущен на порту {port}")
+            print(f"   Endpoints:")
+            print(f"   • GET  / или /health - Health check")
+            print(f"   • POST /webhook/telegram - Telegram webhook")
+            
+        except Exception as e:
+            print(f"❌ [HTTP] Ошибка запуска сервера: {e}")
+            tb.print_exc()
+            raise
+    
+    async def _stop_http_server(self):
+        """
+        Остановка HTTP сервера
+        
+        ИСПРАВЛЕНО v4.3 (04.11.2025):
+        - Правильная последовательность остановки
+        - Обработка всех возможных состояний
+        """
+        try:
+            print("🌐 [HTTP] Останавливаем health server...")
+            
+            # Останавливаем site
+            if self._http_site:
+                await self._http_site.stop()
+                print("   ✓ Site остановлен")
+            
+            # Очищаем runner
+            if self._http_runner:
+                await self._http_runner.cleanup()
+                print("   ✓ Runner очищен")
+            
+            # Останавливаем и очищаем приложение
+            if self._http_app:
+                await self._http_app.shutdown()
+                await self._http_app.cleanup()
+                print("   ✓ Application очищен")
+            
+            print("   ✓ Health server остановлен")
+        
+        except Exception as e:
+            print(f"⚠️ [HTTP] Ошибка остановки сервера: {e}")
+            tb.print_exc()
+    
     async def run(self):
         """Главный цикл выполнения"""
         
@@ -701,11 +756,8 @@ class IntegratedCryptoMonitor:
         
         self._setup_signal_handlers()
         
-        self._health_server_runner = await start_health_server(
-            self.bot_application,
-            self.resource_monitor,
-            self.rate_limiter
-        )
+        # Запускаем HTTP сервер
+        await self._start_http_server()
         
         try:
             self._tasks = []
@@ -842,6 +894,8 @@ class IntegratedCryptoMonitor:
                     continue
                 
                 consecutive_errors = 0
+                self.stats['news_publications'] += 1
+                self.stats['total_publications'] += 1
                 
                 if not self.resource_monitor.check_memory():
                     print("⚠️ [NEWS] Memory pressure detected, slowing down...")
@@ -896,6 +950,8 @@ class IntegratedCryptoMonitor:
                 )
                 
                 consecutive_errors = 0
+                self.stats['whale_publications'] += 1
+                self.stats['total_publications'] += 1
                 
                 if not self.resource_monitor.check_memory():
                     print("⚠️ [WHALE] Memory pressure detected, slowing down...")
@@ -1100,7 +1156,7 @@ class IntegratedCryptoMonitor:
         """Настройка обработчиков сигналов для graceful shutdown"""
         def signal_handler(signum, frame):
             print(f"\n⚠️ [SIGNAL] Получен сигнал {signal.Signals(signum).name}")
-            asyncio.create_task(self.shutdown())
+            self.shutdown_event.set()
         
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
@@ -1122,17 +1178,7 @@ class IntegratedCryptoMonitor:
         print("="*80 + "\n")
         
         print("⏳ [1/4] Останавливаем HTTP health server...")
-        try:
-            if self._health_server_runner:
-                await asyncio.wait_for(
-                    self._health_server_runner.cleanup(),
-                    timeout=10.0
-                )
-                print("   ✓ Health server остановлен")
-        except asyncio.TimeoutError:
-            print("   ⚠️ Timeout остановки health server")
-        except Exception as e:
-            print(f"   ⚠️ Ошибка остановки health server: {e}")
+        await self._stop_http_server()
         
         print("\n⏳ [2/4] Ждём завершения всех задач...")
         if self._tasks:
