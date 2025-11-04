@@ -765,14 +765,9 @@ class IntegratedScheduler:
                     try:
                         health_report = self.solana_rpc_manager.get_health_report()
                         healthy_endpoints = health_report['summary']['healthy']
-                        
-                        if healthy_endpoints > 0:
-                            logger.info(f"✅ [SOLANA] {healthy_endpoints} healthy endpoints")
-                        else:
-                            logger.warning(f"⚠️ [SOLANA] Нет healthy endpoints")
-                            chains_to_scan = [c for c in chains_to_scan if c != 'solana']
+                        logger.info(f"ℹ️ [SOLANA] Health: {healthy_endpoints} healthy endpoints")
                     except Exception as e:
-                        logger.error(f"❌ [SOLANA] Health check error: {e}")
+                        logger.debug(f"[SOLANA] Health check error: {e}")
                 
                 events = await monitor.fetch_events(start_time, chains=chains_to_scan)
                 self.stats["events_collected"] += len(events)
@@ -867,30 +862,25 @@ class IntegratedScheduler:
     # ========================================================================
     
     def _get_available_chains(self) -> List[str]:
-        """Получить список доступных chains с учетом rate limiting и health"""
+        """Получить список доступных chains - используем все ENABLED_CHAINS
+        
+        ВАЖНО: НЕ отключаем chains временно, даже если есть проблемы с RPC.
+        Solana RPC Manager сам справится с fallback и ретраями.
+        Rate Limiter сам управляет доступностью chains.
+        """
         if not self.rate_limiter:
             return settings.ENABLED_CHAINS.copy()
         
         available_chains = []
         
         for chain in settings.ENABLED_CHAINS:
-            if chain == "solana" and self.solana_rpc_manager:
-                try:
-                    health_report = self.solana_rpc_manager.get_health_report()
-                    if health_report['summary']['healthy'] > 0:
-                        available_chains.append(chain)
-                    else:
-                        logger.warning(f"⏸️ [SOLANA] Нет healthy endpoints, пропускаю")
-                except:
-                    pass
-            elif self.rate_limiter.is_chain_enabled(chain):
+            if self.rate_limiter.is_chain_enabled(chain):
                 available_chains.append(chain)
-        
-        if len(available_chains) < len(settings.ENABLED_CHAINS):
-            disabled = set(settings.ENABLED_CHAINS) - set(available_chains)
-            logger.info(f"⏸️ [CHAINS] Временно отключены: {', '.join(disabled)}")
+            else:
+                logger.debug(f"🔒 [CHAINS] {chain} temporarily rate-limited by Rate Limiter")
         
         return available_chains
+    
     
     async def _handle_monitor_stats(self, monitor):
         """Обработка статистики мониторинга и управление Solana RPC"""
@@ -1009,9 +999,7 @@ class IntegratedScheduler:
                     if self.solana_rpc_manager and "solana" in chains_to_scan:
                         try:
                             health_report = self.solana_rpc_manager.get_health_report()
-                            if health_report['summary']['healthy'] == 0:
-                                logger.warning("⚠️ [SOLANA] Нет healthy endpoints, пропускаю")
-                                chains_to_scan = [c for c in chains_to_scan if c != 'solana']
+                            logger.debug(f"[SOLANA] Health: {health_report['summary']['healthy']} healthy endpoints")
                         except:
                             pass
                     

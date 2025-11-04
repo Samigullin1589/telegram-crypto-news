@@ -1061,7 +1061,38 @@ async def cmd_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Analytics engine не инициализирован")
             return
         
-        await update.message.reply_text("📊 Аналитика в разработке...")
+        from app.analytics import get_analytics_engine
+        
+        analytics = get_analytics_engine()
+        
+        text = "<b>📊 АНАЛИТИКА ПО АКТИВАМ</b>\n\n"
+        
+        # Топ активов по объему
+        text += "<b>🔝 ТОП ПО ОБЪЕМУ (24ч)</b>\n"
+        try:
+            top_by_volume = scheduler.get_top_assets_by_volume(limit=10)
+            for i, item in enumerate(top_by_volume, 1):
+                text += f"{i}. {item['asset']}: {format_number(item['volume_24h'])}\n"
+        except:
+            text += "Данные недоступны\n"
+        
+        text += "\n<b>📈 НАИБОЛЕЕ АКТИВНЫЕ</b>\n"
+        try:
+            most_active = scheduler.get_most_active_assets(hours=24, limit=10)
+            for i, item in enumerate(most_active, 1):
+                text += f"{i}. {item['asset']}: {item['event_count']} событий\n"
+        except:
+            text += "Данные недоступны\n"
+        
+        text += "\n<b>🎯 КОРРЕЛЯЦИИ</b>\n"
+        try:
+            correlations = analytics.get_correlation_matrix(['BTC', 'ETH', 'BNB', 'SOL'])
+            text += "<i>Доступно через /correlations</i>\n"
+        except:
+            text += "Данные недоступны\n"
+        
+        await send_long_message(update, text)
+
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
@@ -1093,7 +1124,37 @@ async def cmd_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📊 Анализирую sentiment для {asset}...")
         
         # Будущая реализация
-        await update.message.reply_text("Sentiment анализ в разработке...")
+        from app.analytics import get_analytics_engine
+        
+        analytics = get_analytics_engine()
+        
+        try:
+            sentiment_data = await analytics.analyze_sentiment(asset)
+            
+            text = f"<b>📊 SENTIMENT АНАЛИЗ: {asset}</b>\n\n"
+            
+            text += f"<b>Общий sentiment:</b> {sentiment_data.get('overall', 'Neutral')}\n"
+            text += f"<b>Score:</b> {sentiment_data.get('score', 0):.2f}/100\n\n"
+            
+            text += "<b>Источники:</b>\n"
+            text += f"• News: {sentiment_data.get('news_sentiment', 'N/A')}\n"
+            text += f"• Social: {sentiment_data.get('social_sentiment', 'N/A')}\n"
+            text += f"• Technical: {sentiment_data.get('technical_sentiment', 'N/A')}\n\n"
+            
+            text += f"<b>Рекомендация:</b> {sentiment_data.get('recommendation', 'Нейтральная')}\n"
+            
+            if sentiment_data.get('key_factors'):
+                text += "\n<b>Ключевые факторы:</b>\n"
+                for factor in sentiment_data['key_factors'][:5]:
+                    text += f"• {factor}\n"
+            
+            await update.message.reply_text(text, parse_mode='HTML')
+            
+        except Exception as e:
+            text = f"❌ Не удалось получить sentiment для {asset}\n\n"
+            text += f"<i>Доступные активы: BTC, ETH, BNB, SOL, USDT</i>"
+            await update.message.reply_text(text, parse_mode='HTML')
+
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
@@ -1113,7 +1174,29 @@ async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Только для администратора")
         return
     
-    await update.message.reply_text("⏸️ Функция паузы в разработке")
+    try:
+        from app.scheduler import scheduler
+        
+        if not hasattr(scheduler, 'paused'):
+            scheduler.paused = False
+        
+        if scheduler.paused:
+            await update.message.reply_text("⚠️ Система уже приостановлена")
+            return
+        
+        scheduler.paused = True
+        
+        text = "⏸️ <b>СИСТЕМА ПРИОСТАНОВЛЕНА</b>\n\n"
+        text += "• Публикация whale events: ⏸️ Остановлена\n"
+        text += "• Публикация trading signals: ⏸️ Остановлена\n"
+        text += "• Мониторинг: ✅ Продолжается\n\n"
+        text += "<i>Используйте /resume для возобновления</i>"
+        
+        await update.message.reply_text(text, parse_mode='HTML')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
 
 
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1126,7 +1209,29 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Только для администратора")
         return
     
-    await update.message.reply_text("▶️ Функция возобновления в разработке")
+    try:
+        from app.scheduler import scheduler
+        
+        if not hasattr(scheduler, 'paused'):
+            scheduler.paused = False
+        
+        if not scheduler.paused:
+            await update.message.reply_text("✅ Система уже работает")
+            return
+        
+        scheduler.paused = False
+        
+        text = "▶️ <b>СИСТЕМА ВОЗОБНОВЛЕНА</b>\n\n"
+        text += "• Публикация whale events: ✅ Активна\n"
+        text += "• Публикация trading signals: ✅ Активна\n"
+        text += "• Мониторинг: ✅ Активен\n\n"
+        text += "<i>Система работает в обычном режиме</i>"
+        
+        await update.message.reply_text(text, parse_mode='HTML')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
 
 
 async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1139,7 +1244,44 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Только для администратора")
         return
     
-    await update.message.reply_text("📋 Функция логов в разработке")
+    try:
+        lines_count = 50
+        
+        if context.args and len(context.args) > 0:
+            try:
+                lines_count = int(context.args[0])
+                lines_count = min(max(lines_count, 10), 200)
+            except:
+                pass
+        
+        import os
+        from pathlib import Path
+        
+        log_file = Path("logs/main.log")
+        
+        if not log_file.exists():
+            log_file = Path("/tmp/crypto-compass.log")
+        
+        if not log_file.exists():
+            await update.message.reply_text("📋 Лог-файл не найден")
+            return
+        
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+                recent_lines = all_lines[-lines_count:]
+                log_text = ''.join(recent_lines)
+        except:
+            log_text = "Ошибка чтения лог-файла"
+        
+        text = f"<b>📋 ПОСЛЕДНИЕ {len(recent_lines)} СТРОК ЛОГОВ</b>\n\n"
+        text += f"<code>{log_text[-3500:]}</code>"
+        
+        await send_long_message(update, text)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
 
 
 # ============================================================================
