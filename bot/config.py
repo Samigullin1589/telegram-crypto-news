@@ -268,8 +268,15 @@ class Config:
         self.FEED_FETCH_TIMEOUT = 30
         self.RATE_LIMIT_DELAY_SECONDS = 60
         
-        mount_path = os.environ.get('RENDER_DISK_MOUNT_PATH', '.')
-        self.DB_PATH = Path(mount_path) / 'news_database.sqlite'
+        mount_path = os.environ.get('RENDER_DISK_MOUNT_PATH', '/var/data')
+        db_dir = Path(mount_path)
+        
+        try:
+            db_dir.mkdir(parents=True, exist_ok=True)
+        except:
+            db_dir = Path('.')
+        
+        self.DB_PATH = db_dir / 'news_database.sqlite'
         self.NEWS_DB_PATH = self.DB_PATH
         self.DB_BACKUP_ENABLED = True
         self.DB_BACKUP_INTERVAL_HOURS = 24

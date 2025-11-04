@@ -1,4 +1,4 @@
-# bot/processor.py - NEWS PROCESSOR v4.0 FULL
+# bot/processor.py v4.1
 
 import asyncio
 import hashlib
@@ -16,24 +16,15 @@ from bs4 import BeautifulSoup
 try:
     import brotli
     BROTLI_AVAILABLE = True
-    print("✅ [NEWS] Brotli compression support enabled")
 except ImportError:
     BROTLI_AVAILABLE = False
-    print("⚠️ [NEWS] Brotli not available - install: pip install brotli brotlipy")
 
 try:
-    from bot.config import (
-        NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP, MIN_CONFIDENCE_SCORE,
-        config
-    )
+    from bot.config import NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP, MIN_CONFIDENCE_SCORE, config
     CONFIG_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ [NEWS] Config import error: {e}")
+except ImportError:
     try:
-        from .config import (
-            NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP, MIN_CONFIDENCE_SCORE,
-            config
-        )
+        from .config import NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP, MIN_CONFIDENCE_SCORE, config
         CONFIG_AVAILABLE = True
     except ImportError:
         CONFIG_AVAILABLE = False
@@ -46,8 +37,7 @@ except ImportError as e:
 try:
     from bot.ai_handler import AIHandler
     AI_HANDLER_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ [NEWS] AIHandler import error: {e}")
+except ImportError:
     try:
         from .ai_handler import AIHandler
         AI_HANDLER_AVAILABLE = True
@@ -58,8 +48,7 @@ except ImportError as e:
 try:
     from bot.content_parser import ContentParser
     CONTENT_PARSER_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ [NEWS] ContentParser import error: {e}")
+except ImportError:
     try:
         from .content_parser import ContentParser
         CONTENT_PARSER_AVAILABLE = True
@@ -70,8 +59,7 @@ except ImportError as e:
 try:
     from bot.database import AsyncDatabaseManager, NewsDatabase
     DATABASE_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ [NEWS] Database import error: {e}")
+except ImportError:
     try:
         from .database import AsyncDatabaseManager, NewsDatabase
         DATABASE_AVAILABLE = True
@@ -83,8 +71,7 @@ except ImportError as e:
 try:
     from bot.telegram_poster import TelegramPoster
     TELEGRAM_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ [NEWS] TelegramPoster import error: {e}")
+except ImportError:
     try:
         from .telegram_poster import TelegramPoster
         TELEGRAM_AVAILABLE = True
@@ -102,6 +89,7 @@ class NewsMetrics:
         self.articles_published = 0
         self.articles_filtered = 0
         self.articles_skipped = 0
+        self.articles_translated = 0
         self.errors = 0
         
         self.fetch_errors_by_source = defaultdict(int)
@@ -130,6 +118,9 @@ class NewsMetrics:
         self.published_by_source[source] += 1
         self.last_publish_time = datetime.now(timezone.utc)
     
+    def record_translated(self):
+        self.articles_translated += 1
+    
     def get_uptime(self) -> float:
         return (datetime.now(timezone.utc) - self.start_time).total_seconds()
     
@@ -157,6 +148,7 @@ class NewsMetrics:
             'articles_published': self.articles_published,
             'articles_filtered': self.articles_filtered,
             'articles_skipped': self.articles_skipped,
+            'articles_translated': self.articles_translated,
             'errors': self.errors,
             'success_rate': self.get_success_rate(),
             'uptime_seconds': self.get_uptime(),
@@ -202,6 +194,9 @@ class DummyAIHandler:
             'topics': []
         }
     
+    async def translate_text(self, text: str, source_lang: str = 'en', target_lang: str = 'ru') -> Optional[str]:
+        return None
+    
     def get_stats(self) -> Dict[str, Any]:
         return {
             'provider': 'dummy',
@@ -220,8 +215,8 @@ class DummyDatabase:
     async def initialize(self):
         pass
     
-    async def save_article(self, article: Dict) -> bool:
-        self._articles.append(article)
+    async def save_article(self, **kwargs) -> bool:
+        self._articles.append(kwargs)
         return True
     
     async def is_link_posted(self, link: str) -> bool:
@@ -254,7 +249,7 @@ class NewsProcessor:
     def __init__(self):
         
         print("\n" + "="*80)
-        print("📰 NEWS PROCESSOR v4.0 - INITIALIZATION")
+        print("📰 NEWS PROCESSOR v4.1 - INITIALIZATION")
         print("="*80 + "\n")
         
         if not CONFIG_AVAILABLE or not NEWS_SOURCES:
@@ -340,16 +335,16 @@ class NewsProcessor:
         self._database_initialized = False
         self._initialized = True
         
-        print("✅ News Processor v4.0 инициализирован")
+        print("✅ News Processor v4.1 инициализирован")
         print(f"   • Sources: {len(NEWS_SOURCES)}")
         print(f"   • Fetch interval: {FETCH_INTERVAL}s")
         print(f"   • Posts per hour cap: {POSTS_PER_HOUR_CAP}")
         print(f"   • Min confidence: {MIN_CONFIDENCE_SCORE}/100")
+        print(f"   • Translation: ✅ Enabled (EN→RU)")
         print(f"   • Brotli support: {'✅' if BROTLI_AVAILABLE else '❌'}")
         print(f"   • AI Handler: {'✅' if AI_HANDLER_AVAILABLE else '⚠️ dummy'}")
         print(f"   • Database: {'✅' if DATABASE_AVAILABLE else '⚠️ dummy'}")
         print(f"   • Telegram: {'✅' if TELEGRAM_AVAILABLE else '⚠️ dummy'}")
-        print(f"   • Content Parser: {'✅' if self.content_parser else '⚠️ unavailable'}")
         print()
     
     @property
@@ -532,7 +527,8 @@ class NewsProcessor:
                 return await self._fetch_source(
                     url=source['url'],
                     name=source['name'],
-                    priority=source.get('priority', 5)
+                    priority=source.get('priority', 5),
+                    language=source.get('language', 'en')
                 )
         
         tasks = [fetch_with_semaphore(source) for source in sorted_sources]
@@ -553,7 +549,8 @@ class NewsProcessor:
         self,
         url: str,
         name: str,
-        priority: int
+        priority: int,
+        language: str = 'en'
     ) -> List[Dict]:
         
         await self._respect_rate_limit(name)
@@ -562,7 +559,7 @@ class NewsProcessor:
         
         for attempt in range(self.max_fetch_retries):
             try:
-                articles = await self._fetch_with_brotli(url, name, attempt)
+                articles = await self._fetch_with_brotli(url, name, language, attempt)
                 
                 if articles is not None:
                     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -587,7 +584,7 @@ class NewsProcessor:
                 
                 if 'brotli' in error_msg.lower() or 'br' in error_msg.lower():
                     try:
-                        articles = await self._fetch_without_compression(url, name)
+                        articles = await self._fetch_without_compression(url, name, language)
                         if articles:
                             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
                             self.metrics.record_fetch(name, len(articles), duration, True)
@@ -619,6 +616,7 @@ class NewsProcessor:
         self,
         url: str,
         name: str,
+        language: str,
         attempt: int
     ) -> Optional[List[Dict]]:
         
@@ -675,9 +673,9 @@ class NewsProcessor:
                 except Exception as e:
                     return None
                 
-                return self._parse_rss(text, name)
+                return self._parse_rss(text, name, language)
     
-    async def _fetch_without_compression(self, url: str, name: str) -> List[Dict]:
+    async def _fetch_without_compression(self, url: str, name: str, language: str) -> List[Dict]:
         
         timeout_obj = aiohttp.ClientTimeout(total=self.fetch_timeout)
         
@@ -700,9 +698,9 @@ class NewsProcessor:
                     return []
                 
                 text = await response.text(encoding='utf-8', errors='ignore')
-                return self._parse_rss(text, name)
+                return self._parse_rss(text, name, language)
     
-    def _parse_rss(self, content: str, source_name: str) -> List[Dict]:
+    def _parse_rss(self, content: str, source_name: str, language: str) -> List[Dict]:
         
         try:
             feed = feedparser.parse(content)
@@ -714,7 +712,7 @@ class NewsProcessor:
             
             for entry in feed.entries:
                 try:
-                    article = self._extract_article(entry, source_name)
+                    article = self._extract_article(entry, source_name, language)
                     
                     if article and self._is_valid_article(article):
                         if not self._is_duplicate(article):
@@ -728,7 +726,7 @@ class NewsProcessor:
         except Exception as e:
             return []
     
-    def _extract_article(self, entry, source: str) -> Optional[Dict]:
+    def _extract_article(self, entry, source: str, language: str) -> Optional[Dict]:
         
         try:
             title = entry.get('title', '').strip()
@@ -797,7 +795,8 @@ class NewsProcessor:
                 'source': source,
                 'source_feed': source,
                 'image_url': image_url,
-                'has_image': bool(image_url)
+                'has_image': bool(image_url),
+                'language': language
             }
         
         except Exception as e:
@@ -880,6 +879,24 @@ class NewsProcessor:
         
         return candidates
     
+    async def _translate_if_needed(self, text: str, language: str) -> str:
+        
+        if language == 'ru':
+            return text
+        
+        if not hasattr(self.ai_handler, 'translate_text'):
+            return text
+        
+        try:
+            translated = await self.ai_handler.translate_text(text, source_lang=language, target_lang='ru')
+            if translated:
+                self.metrics.record_translated()
+                return translated
+        except Exception as e:
+            pass
+        
+        return text
+    
     async def _publish_best(self, candidates: List[Dict]) -> int:
         
         sorted_candidates = sorted(
@@ -910,7 +927,15 @@ class NewsProcessor:
                     self._mark_as_seen(candidate)
                     
                     try:
-                        await self.database.save_article(candidate)
+                        await self.database.save_article(
+                            link=candidate['url'],
+                            normalized_link=candidate['url'],
+                            source_feed=candidate.get('source_feed', candidate.get('source', 'Unknown')),
+                            title=candidate['title'],
+                            has_image=candidate.get('has_image', False),
+                            ai_provider=candidate.get('ai_provider'),
+                            status='success'
+                        )
                     except Exception as db_error:
                         print(f"⚠️ [DB] Failed to save: {db_error}")
                     
@@ -938,6 +963,12 @@ class NewsProcessor:
             summary = article.get('summary') or article.get('description', '')
             source = article.get('source', 'Unknown')
             score = article.get('ai_score', 0)
+            language = article.get('language', 'en')
+            
+            if language != 'ru':
+                title = await self._translate_if_needed(title, language)
+                if summary:
+                    summary = await self._translate_if_needed(summary, language)
             
             analysis = article.get('ai_analysis', {})
             sentiment = analysis.get('sentiment', 'neutral')
@@ -951,15 +982,15 @@ class NewsProcessor:
             }
             sentiment_emoji = sentiment_emoji_map.get(sentiment, '📰')
             
-            message_text = f"{sentiment_emoji} **{title}**\n\n"
+            message_text = f"{sentiment_emoji} {title}\n\n"
             
             if summary:
                 clean_summary = summary[:300].strip()
                 if clean_summary:
                     message_text += f"{clean_summary}...\n\n"
             
-            message_text += f"_Источник: {source}_\n"
-            message_text += f"_Оценка AI: {score}/100_"
+            message_text += f"Источник: {source}\n"
+            message_text += f"Оценка AI: {score}/100"
             
             image_url = article.get('image_url')
             
@@ -1018,7 +1049,7 @@ class NewsProcessor:
     def _print_stats(self):
         
         print("\n" + "="*80)
-        print("📊 NEWS PROCESSOR STATISTICS v4.0")
+        print("📊 NEWS PROCESSOR STATISTICS v4.1")
         print("="*80)
         print(f"Uptime: {self.metrics.get_uptime()/3600:.1f}h")
         print(f"Cycles: {self.metrics.cycles_completed}")
@@ -1026,6 +1057,7 @@ class NewsProcessor:
         print(f"Articles Processed: {self.metrics.articles_processed}")
         print(f"Articles Published: {self.metrics.articles_published}")
         print(f"Articles Filtered: {self.metrics.articles_filtered}")
+        print(f"Articles Translated: {self.metrics.articles_translated}")
         print(f"Success Rate: {self.metrics.get_success_rate():.1f}%")
         print(f"Articles/Hour: {self.metrics.get_articles_per_hour():.1f}")
         print(f"Avg Fetch Time: {self.metrics.get_average_fetch_time():.2f}s")

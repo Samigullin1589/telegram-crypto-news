@@ -1,10 +1,11 @@
 """
-AI HANDLER v3.1 - Enhanced with Graceful Degradation
-Умный обработчик AI с автоматическим переключением провайдеров
+AI HANDLER v3.2 - Enhanced with Translation Support
+Умный обработчик AI с автоматическим переключением провайдеров и переводом
 
 ВОЗМОЖНОСТИ:
 ✅ Gemini API (если доступен)
 ✅ OpenAI API (если доступен)
+✅ Перевод текста (EN→RU, любые языки)
 ✅ Graceful fallback если провайдеры недоступны
 ✅ Статистика и умный выбор провайдера
 ✅ Кэширование ответов
@@ -18,7 +19,6 @@ import time
 from typing import Optional, Dict, Tuple
 from datetime import datetime, timedelta
 
-# Graceful импорт Google Generative AI
 try:
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
@@ -26,7 +26,6 @@ except ImportError:
     GEMINI_AVAILABLE = False
     genai = None
 
-# Graceful импорт OpenAI
 try:
     from openai import OpenAI
     import httpx
@@ -36,58 +35,59 @@ except ImportError:
     OpenAI = None
     httpx = None
 
-# Graceful импорт config
 try:
     from .config import config
     CONFIG_AVAILABLE = True
 except ImportError:
-    CONFIG_AVAILABLE = False
-    # Создаем минимальный fallback config
-    class DummyConfig:
-        GEMINI_API_KEY = ""
-        GEMINI_MODEL = "gemini-pro"
-        OPENAI_API_KEY = ""
-        OPENAI_MODEL = "gpt-3.5-turbo"
-        MAX_ARTICLE_TEXT_LENGTH = 3000
-        AI_MAX_RETRIES = 2
-        AI_TIMEOUT = 30
-        AI_BACKOFF_FACTOR = 2
-        ai_prompt_template = """Создай краткое саммари этой новости для crypto-канала.
+    try:
+        from bot.config import config
+        CONFIG_AVAILABLE = True
+    except ImportError:
+        CONFIG_AVAILABLE = False
         
+        class DummyConfig:
+            GEMINI_API_KEY = ""
+            GEMINI_MODEL = "gemini-pro"
+            OPENAI_API_KEY = ""
+            OPENAI_MODEL = "gpt-3.5-turbo"
+            MAX_ARTICLE_TEXT_LENGTH = 3000
+            AI_MAX_RETRIES = 2
+            AI_TIMEOUT = 30
+            AI_BACKOFF_FACTOR = 2
+            ai_prompt_template = """Создай краткое саммари этой новости для crypto-канала.
+            
 Формат ответа:
 {emoji} **{title}**
 
 [2-3 предложения о ключевых моментах]
 
 #crypto #news"""
-    
-    config = DummyConfig()
+        
+        config = DummyConfig()
 
 
 class AIProviderStats:
-    """Статистика по AI провайдерам для умного выбора"""
     
     def __init__(self):
         self.stats = {
-            'gemini': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None},
-            'openai': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None},
-            'dummy': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None}
+            'gemini': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None, 'translations': 0},
+            'openai': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None, 'translations': 0},
+            'dummy': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None, 'translations': 0}
         }
     
-    def record_success(self, provider: str, elapsed_time: float):
-        """Запись успешного вызова"""
+    def record_success(self, provider: str, elapsed_time: float, is_translation: bool = False):
         if provider in self.stats:
             self.stats[provider]['success'] += 1
             self.stats[provider]['total_time'] += elapsed_time
             self.stats[provider]['last_success'] = datetime.now()
+            if is_translation:
+                self.stats[provider]['translations'] += 1
     
     def record_failure(self, provider: str):
-        """Запись неудачного вызова"""
         if provider in self.stats:
             self.stats[provider]['failures'] += 1
     
     def get_success_rate(self, provider: str) -> float:
-        """Процент успеха провайдера"""
         if provider not in self.stats:
             return 0.0
         
@@ -97,7 +97,6 @@ class AIProviderStats:
         return self.stats[provider]['success'] / total
     
     def get_avg_time(self, provider: str) -> float:
-        """Среднее время ответа"""
         if provider not in self.stats:
             return 0.0
         
@@ -106,22 +105,19 @@ class AIProviderStats:
         return self.stats[provider]['total_time'] / self.stats[provider]['success']
     
     def get_preferred_provider(self) -> str:
-        """Определяет лучший провайдер на основе статистики"""
-        if GEMINI_AVAILABLE:
+        if GEMINI_AVAILABLE and config.GEMINI_API_KEY:
             gemini_score = self.get_success_rate('gemini') * 1.2
             if gemini_score >= 0.7:
                 return 'gemini'
         
-        if OPENAI_AVAILABLE:
+        if OPENAI_AVAILABLE and config.OPENAI_API_KEY:
             openai_score = self.get_success_rate('openai')
             if openai_score >= 0.7:
                 return 'openai'
         
-        # Если ничего не доступно - dummy
         return 'dummy'
     
     def print_summary(self):
-        """Вывод статистики"""
         print("\n📊 [AI STATS] Статистика провайдеров:")
         for provider, data in self.stats.items():
             if data['success'] + data['failures'] == 0:
@@ -130,45 +126,50 @@ class AIProviderStats:
             success_rate = self.get_success_rate(provider) * 100
             avg_time = self.get_avg_time(provider)
             total = data['success'] + data['failures']
+            translations = data['translations']
             print(f"  {provider.upper()}: {data['success']}/{total} успешно ({success_rate:.1f}%), "
-                  f"avg {avg_time:.2f}s")
+                  f"avg {avg_time:.2f}s, переводов: {translations}")
 
 
 class ResponseValidator:
-    """Валидатор ответов от AI"""
     
     @staticmethod
     def validate(text: str) -> Tuple[bool, Optional[str]]:
-        """
-        Проверяет корректность ответа от AI
-        Returns: (is_valid, error_message)
-        """
         if not text or len(text.strip()) < 30:
             return False, "Ответ слишком короткий"
         
-        # Базовая проверка markdown
         for char in ['*', '_', '`']:
             if text.count(char) % 2 != 0:
                 return False, f"Несбалансированные markdown символы: {char}"
         
         return True, None
+    
+    @staticmethod
+    def validate_translation(text: str, original_length: int) -> Tuple[bool, Optional[str]]:
+        if not text or len(text.strip()) < 10:
+            return False, "Перевод слишком короткий"
+        
+        if len(text) < original_length * 0.3:
+            return False, "Перевод подозрительно короткий"
+        
+        if len(text) > original_length * 3:
+            return False, "Перевод подозрительно длинный"
+        
+        return True, None
 
 
 class SimpleCache:
-    """Простой in-memory кэш для ответов AI"""
     
     def __init__(self, ttl_seconds: int = 3600):
         self.cache: Dict[str, Tuple[str, float]] = {}
         self.ttl = ttl_seconds
     
-    def _get_key(self, title: str, text: str) -> str:
-        """Генерация ключа кэша"""
-        content = f"{title}:{text[:500]}"
+    def _get_key(self, *args) -> str:
+        content = ':'.join(str(arg) for arg in args)
         return hashlib.md5(content.encode()).hexdigest()
     
-    def get(self, title: str, text: str) -> Optional[str]:
-        """Получить из кэша"""
-        key = self._get_key(title, text)
+    def get(self, *args) -> Optional[str]:
+        key = self._get_key(*args)
         if key in self.cache:
             value, timestamp = self.cache[key]
             if time.time() - timestamp < self.ttl:
@@ -177,16 +178,19 @@ class SimpleCache:
                 del self.cache[key]
         return None
     
-    def set(self, title: str, text: str, value: str):
-        """Сохранить в кэш"""
-        key = self._get_key(title, text)
+    def set(self, *args):
+        if len(args) < 2:
+            return
+        
+        value = args[-1]
+        key_parts = args[:-1]
+        key = self._get_key(*key_parts)
         self.cache[key] = (value, time.time())
         
-        if len(self.cache) > 100:
+        if len(self.cache) > 200:
             self._cleanup()
     
     def _cleanup(self):
-        """Удаление устаревших записей"""
         current_time = time.time()
         expired_keys = [
             k for k, (_, ts) in self.cache.items()
@@ -197,19 +201,12 @@ class SimpleCache:
 
 
 class AIHandler:
-    """
-    Умный обработчик AI с автоматическим переключением провайдеров,
-    статистикой и кэшированием
-    
-    НОВОЕ v3.1: Graceful degradation если провайдеры недоступны
-    """
     
     def __init__(self):
-        print("\n🤖 [AI] Инициализация AI Handler...")
+        print("\n🤖 [AI] Инициализация AI Handler v3.2...")
         
-        # Инициализация Gemini
         self.gemini_model = None
-        if GEMINI_AVAILABLE and config.GEMINI_API_KEY:
+        if GEMINI_AVAILABLE and hasattr(config, 'GEMINI_API_KEY') and config.GEMINI_API_KEY:
             try:
                 genai.configure(api_key=config.GEMINI_API_KEY)
                 self.gemini_model = genai.GenerativeModel(config.GEMINI_MODEL)
@@ -222,9 +219,8 @@ class AIHandler:
             else:
                 print("   ⚠️ GEMINI_API_KEY не установлен")
         
-        # Инициализация OpenAI
         self.openai_client = None
-        if OPENAI_AVAILABLE and config.OPENAI_API_KEY:
+        if OPENAI_AVAILABLE and hasattr(config, 'OPENAI_API_KEY') and config.OPENAI_API_KEY:
             try:
                 http_client = httpx.Client(
                     timeout=httpx.Timeout(60.0, connect=30.0),
@@ -246,67 +242,251 @@ class AIHandler:
             else:
                 print("   ⚠️ OPENAI_API_KEY не установлен")
         
-        # Вспомогательные компоненты
         self.stats = AIProviderStats()
         self.validator = ResponseValidator()
         self.cache = SimpleCache(ttl_seconds=3600)
         
-        # Rate limiting
         self._last_request_time = 0
         self._min_request_interval = 1.0
         
-        # Определяем режим работы
         if self.gemini_model or self.openai_client:
             print("✅ [AI] Handler инициализирован (AI режим)")
+            print("   • Translation: ✅ Enabled (EN→RU)")
         else:
             print("⚠️ [AI] Handler в dummy режиме (нет доступных провайдеров)")
+            print("   • Translation: ❌ Disabled")
     
     async def analyze_article(self, article: Dict) -> Optional[Dict]:
-        """
-        Анализ статьи (используется в NewsProcessor)
-        
-        Args:
-            article: Dict с полями title, summary, content
-        
-        Returns:
-            Dict с score, sentiment, relevance или None
-        """
         title = article.get('title', '')
-        text = article.get('summary', '') or article.get('content', '')
+        text = article.get('summary', '') or article.get('content', '') or article.get('description', '')
         
         if not title or not text:
             return None
         
-        # Базовый score на основе длины и наличия ключевых слов
         score = 70
         
-        # Проверка ключевых слов (увеличивает score)
         crypto_keywords = ['bitcoin', 'btc', 'ethereum', 'eth', 'crypto', 'blockchain', 
-                          'биткоин', 'эфириум', 'крипто', 'блокчейн']
+                          'биткоин', 'эфириум', 'крипто', 'блокчейн', 'defi', 'nft',
+                          'solana', 'cardano', 'polkadot', 'binance', 'coinbase']
         
         text_lower = (title + ' ' + text).lower()
         keyword_matches = sum(1 for kw in crypto_keywords if kw in text_lower)
         score += min(keyword_matches * 5, 20)
         
-        # Проверка позитивных слов
-        positive_words = ['рост', 'прибыль', 'успех', 'новый рекорд', 'breakthrough', 'gain']
-        negative_words = ['падение', 'потери', 'скам', 'взлом', 'loss', 'hack', 'crash']
+        positive_words = ['рост', 'прибыль', 'успех', 'новый рекорд', 'breakthrough', 'gain', 
+                         'rally', 'surge', 'bullish', 'launch', 'partnership', 'adoption']
+        negative_words = ['падение', 'потери', 'скам', 'взлом', 'loss', 'hack', 'crash',
+                         'scam', 'fraud', 'bearish', 'drop', 'decline', 'ban']
         
         positive_count = sum(1 for w in positive_words if w in text_lower)
         negative_count = sum(1 for w in negative_words if w in text_lower)
         
         if positive_count > negative_count:
             sentiment = 'positive'
+            score += 5
         elif negative_count > positive_count:
             sentiment = 'negative'
         else:
             sentiment = 'neutral'
         
+        if len(title) > 50:
+            score += 3
+        
+        if len(text) > 200:
+            score += 2
+        
         return {
+            'provider': 'analyzer',
             'score': min(score, 95),
             'sentiment': sentiment,
-            'relevance': 'high' if score > 80 else 'medium'
+            'relevance': 'high' if score > 80 else 'medium',
+            'topics': []
         }
+    
+    async def translate_text(self, text: str, source_lang: str = 'en', target_lang: str = 'ru') -> Optional[str]:
+        if not text or len(text.strip()) < 5:
+            return None
+        
+        if source_lang == target_lang:
+            return text
+        
+        cached = self.cache.get('translate', source_lang, target_lang, text[:100])
+        if cached:
+            return cached
+        
+        await self._rate_limit()
+        
+        provider = self.stats.get_preferred_provider()
+        
+        result = await self._try_translation(provider, text, source_lang, target_lang)
+        if result:
+            translated, elapsed = result
+            self.stats.record_success(provider, elapsed, is_translation=True)
+            self.cache.set('translate', source_lang, target_lang, text[:100], translated)
+            return translated
+        
+        if provider == 'gemini' and self.openai_client:
+            fallback = 'openai'
+        elif provider == 'openai' and self.gemini_model:
+            fallback = 'gemini'
+        else:
+            return None
+        
+        if fallback != 'dummy':
+            result = await self._try_translation(fallback, text, source_lang, target_lang)
+            if result:
+                translated, elapsed = result
+                self.stats.record_success(fallback, elapsed, is_translation=True)
+                self.cache.set('translate', source_lang, target_lang, text[:100], translated)
+                return translated
+        
+        return None
+    
+    async def _try_translation(
+        self,
+        provider: str,
+        text: str,
+        source_lang: str,
+        target_lang: str
+    ) -> Optional[Tuple[str, float]]:
+        start_time = time.time()
+        
+        try:
+            if provider == 'gemini' and self.gemini_model:
+                translated = await self._translate_with_gemini(text, source_lang, target_lang)
+            elif provider == 'openai' and self.openai_client:
+                translated = await self._translate_with_openai(text, source_lang, target_lang)
+            else:
+                return None
+            
+            elapsed = time.time() - start_time
+            
+            is_valid, error = self.validator.validate_translation(translated, len(text))
+            if not is_valid:
+                self.stats.record_failure(provider)
+                return None
+            
+            return translated, elapsed
+            
+        except Exception as e:
+            self.stats.record_failure(provider)
+            return None
+    
+    async def _translate_with_gemini(self, text: str, source_lang: str, target_lang: str) -> str:
+        lang_names = {
+            'en': 'English',
+            'ru': 'Russian',
+            'es': 'Spanish',
+            'de': 'German',
+            'fr': 'French',
+            'it': 'Italian',
+            'pt': 'Portuguese',
+            'ja': 'Japanese',
+            'ko': 'Korean',
+            'zh': 'Chinese'
+        }
+        
+        source_name = lang_names.get(source_lang, source_lang)
+        target_name = lang_names.get(target_lang, target_lang)
+        
+        prompt = f"""Translate the following text from {source_name} to {target_name}.
+Return ONLY the translation, without any explanations or comments.
+
+Text to translate:
+{text}
+
+Translation:"""
+        
+        for attempt in range(config.AI_MAX_RETRIES):
+            try:
+                response = await asyncio.wait_for(
+                    self.gemini_model.generate_content_async(prompt),
+                    timeout=config.AI_TIMEOUT
+                )
+                
+                if not response.text:
+                    raise ValueError("Empty response from Gemini")
+                
+                translated = response.text.strip()
+                
+                if translated.startswith('Translation:'):
+                    translated = translated.replace('Translation:', '').strip()
+                
+                return translated
+                
+            except asyncio.TimeoutError:
+                if attempt < config.AI_MAX_RETRIES - 1:
+                    await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
+                else:
+                    raise
+            
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                if any(kw in error_str for kw in ['404', 'not found', 'quota', '429', 'rate limit']):
+                    raise
+                
+                if attempt < config.AI_MAX_RETRIES - 1:
+                    await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
+                else:
+                    raise
+    
+    async def _translate_with_openai(self, text: str, source_lang: str, target_lang: str) -> str:
+        lang_names = {
+            'en': 'English',
+            'ru': 'Russian',
+            'es': 'Spanish',
+            'de': 'German',
+            'fr': 'French',
+            'it': 'Italian',
+            'pt': 'Portuguese',
+            'ja': 'Japanese',
+            'ko': 'Korean',
+            'zh': 'Chinese'
+        }
+        
+        source_name = lang_names.get(source_lang, source_lang)
+        target_name = lang_names.get(target_lang, target_lang)
+        
+        system_prompt = f"You are a professional translator. Translate text from {source_name} to {target_name}. Return ONLY the translation, nothing else."
+        
+        loop = asyncio.get_event_loop()
+        
+        for attempt in range(config.AI_MAX_RETRIES):
+            try:
+                response = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: self.openai_client.chat.completions.create(
+                            model=config.OPENAI_MODEL,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": text}
+                            ],
+                            temperature=0.1,
+                            max_tokens=2000
+                        )
+                    ),
+                    timeout=config.AI_TIMEOUT
+                )
+                
+                translated = response.choices[0].message.content
+                if not translated:
+                    raise ValueError("Empty response from OpenAI")
+                
+                return translated.strip()
+                
+            except asyncio.TimeoutError:
+                if attempt < config.AI_MAX_RETRIES - 1:
+                    await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
+                else:
+                    raise
+            
+            except Exception as e:
+                if attempt < config.AI_MAX_RETRIES - 1:
+                    await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
+                else:
+                    raise
     
     async def get_summary(
         self,
@@ -315,23 +495,15 @@ class AIHandler:
         category: str,
         force_provider: Optional[str] = None
     ) -> Optional[Tuple[str, str]]:
-        """
-        Генерация саммари с умным выбором провайдера
-        
-        Returns: (summary_text, provider_used) or None
-        """
         if not text or len(text.strip()) < 100:
             return None
         
-        # Проверка кэша
-        cached = self.cache.get(title, text)
+        cached = self.cache.get('summary', title, text[:100])
         if cached:
             return cached, 'cache'
         
-        # Rate limiting
         await self._rate_limit()
         
-        # Определяем провайдера
         if force_provider:
             provider = force_provider
         else:
@@ -339,15 +511,13 @@ class AIHandler:
         
         category_emoji = category.split()[-1] if category else '📰'
         
-        # Пробуем основной провайдер
         result = await self._try_provider(provider, title, text, category_emoji)
         if result:
             summary, elapsed = result
-            self.stats.record_success(provider, elapsed)
-            self.cache.set(title, text, summary)
+            self.stats.record_success(provider, elapsed, is_translation=False)
+            self.cache.set('summary', title, text[:100], summary)
             return summary, provider
         
-        # Fallback на альтернативный провайдер
         if provider == 'gemini' and self.openai_client:
             fallback = 'openai'
         elif provider == 'openai' and self.gemini_model:
@@ -359,16 +529,15 @@ class AIHandler:
             result = await self._try_provider(fallback, title, text, category_emoji)
             if result:
                 summary, elapsed = result
-                self.stats.record_success(fallback, elapsed)
-                self.cache.set(title, text, summary)
+                self.stats.record_success(fallback, elapsed, is_translation=False)
+                self.cache.set('summary', title, text[:100], summary)
                 return summary, fallback
         
-        # Последний fallback - dummy режим
         result = await self._try_provider('dummy', title, text, category_emoji)
         if result:
             summary, elapsed = result
-            self.stats.record_success('dummy', elapsed)
-            self.cache.set(title, text, summary)
+            self.stats.record_success('dummy', elapsed, is_translation=False)
+            self.cache.set('summary', title, text[:100], summary)
             return summary, 'dummy'
         
         return None
@@ -380,11 +549,6 @@ class AIHandler:
         text: str,
         emoji: str
     ) -> Optional[Tuple[str, float]]:
-        """
-        Попытка получить ответ от конкретного провайдера
-        
-        Returns: (summary, elapsed_time) or None
-        """
         start_time = time.time()
         
         try:
@@ -399,7 +563,6 @@ class AIHandler:
             
             elapsed = time.time() - start_time
             
-            # Валидация ответа
             is_valid, error = self.validator.validate(summary)
             if not is_valid:
                 self.stats.record_failure(provider)
@@ -412,7 +575,6 @@ class AIHandler:
             return None
     
     async def _call_gemini(self, title: str, text: str, emoji: str) -> str:
-        """Вызов Gemini API"""
         prompt = config.ai_prompt_template.format(emoji=emoji, title=title)
         full_prompt = f"{prompt}\n\nТЕКСТ СТАТЬИ ДЛЯ АНАЛИЗА:\n{text[:config.MAX_ARTICLE_TEXT_LENGTH]}"
         
@@ -446,7 +608,6 @@ class AIHandler:
                     raise
     
     async def _call_openai(self, title: str, text: str, emoji: str) -> str:
-        """Вызов OpenAI API"""
         prompt = config.ai_prompt_template.format(emoji=emoji, title=title)
         user_prompt = f"Заголовок: {title}\n\nПолный текст статьи:\n{text[:config.MAX_ARTICLE_TEXT_LENGTH]}"
         
@@ -489,16 +650,9 @@ class AIHandler:
                     raise
     
     def _call_dummy(self, title: str, text: str, emoji: str) -> str:
-        """
-        Dummy режим - генерация базового summary без AI
-        
-        Используется когда нет доступных AI провайдеров
-        """
-        # Берем первые 2-3 предложения из текста
         sentences = text.split('.')[:3]
         summary_text = '. '.join(s.strip() for s in sentences if s.strip()) + '.'
         
-        # Ограничиваем длину
         if len(summary_text) > 500:
             summary_text = summary_text[:497] + '...'
         
@@ -509,9 +663,6 @@ class AIHandler:
 #crypto #news"""
     
     def _sanitize_markdown(self, text: str) -> str:
-        """
-        Умная санитизация markdown для предотвращения ошибок парсинга
-        """
         if not text:
             return text
         
@@ -537,7 +688,6 @@ class AIHandler:
         return text.strip()
     
     async def _rate_limit(self):
-        """Rate limiting между запросами"""
         elapsed = time.time() - self._last_request_time
         if elapsed < self._min_request_interval:
             wait_time = self._min_request_interval - elapsed
@@ -545,32 +695,61 @@ class AIHandler:
         
         self._last_request_time = time.time()
     
+    def get_stats(self) -> Dict:
+        total_requests = sum(
+            self.stats.stats[p]['success'] + self.stats.stats[p]['failures']
+            for p in ['gemini', 'openai', 'dummy']
+        )
+        
+        successful_requests = sum(
+            self.stats.stats[p]['success']
+            for p in ['gemini', 'openai', 'dummy']
+        )
+        
+        total_translations = sum(
+            self.stats.stats[p]['translations']
+            for p in ['gemini', 'openai', 'dummy']
+        )
+        
+        return {
+            'provider': self.stats.get_preferred_provider(),
+            'total_requests': total_requests,
+            'successful_requests': successful_requests,
+            'failed_requests': total_requests - successful_requests,
+            'success_rate': (successful_requests / total_requests * 100) if total_requests > 0 else 0.0,
+            'translations': total_translations
+        }
+    
     def get_stats_summary(self) -> Dict:
-        """Получить статистику работы"""
         return {
             'gemini': {
                 'available': self.gemini_model is not None,
                 'success_rate': f"{self.stats.get_success_rate('gemini') * 100:.1f}%",
                 'avg_time': f"{self.stats.get_avg_time('gemini'):.2f}s",
-                'total_requests': self.stats.stats['gemini']['success'] + self.stats.stats['gemini']['failures']
+                'total_requests': self.stats.stats['gemini']['success'] + self.stats.stats['gemini']['failures'],
+                'translations': self.stats.stats['gemini']['translations']
             },
             'openai': {
                 'available': self.openai_client is not None,
                 'success_rate': f"{self.stats.get_success_rate('openai') * 100:.1f}%",
                 'avg_time': f"{self.stats.get_avg_time('openai'):.2f}s",
-                'total_requests': self.stats.stats['openai']['success'] + self.stats.stats['openai']['failures']
+                'total_requests': self.stats.stats['openai']['success'] + self.stats.stats['openai']['failures'],
+                'translations': self.stats.stats['openai']['translations']
             },
             'dummy': {
                 'available': True,
                 'success_rate': f"{self.stats.get_success_rate('dummy') * 100:.1f}%",
-                'total_requests': self.stats.stats['dummy']['success'] + self.stats.stats['dummy']['failures']
+                'total_requests': self.stats.stats['dummy']['success'] + self.stats.stats['dummy']['failures'],
+                'translations': self.stats.stats['dummy']['translations']
             },
             'preferred_provider': self.stats.get_preferred_provider(),
             'cache_size': len(self.cache.cache)
         }
     
     def print_stats(self):
-        """Вывод статистики в консоль"""
         self.stats.print_summary()
         print(f"  Cache: {len(self.cache.cache)} записей")
         print(f"  Preferred: {self.stats.get_preferred_provider().upper()}")
+
+
+__all__ = ['AIHandler']
