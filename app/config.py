@@ -1,4 +1,4 @@
-# app/config.py - УНИФИЦИРОВАННАЯ КОНФИГУРАЦИЯ v5.2
+# app/config.py - PRODUCTION-READY CONFIGURATION v4.4
 
 import os
 import sys
@@ -238,10 +238,19 @@ class DatabaseConfig:
     path: str = "data/crypto_monitor.db"
     news_db_path: str = "news_database.sqlite"
     wallet_db_path: str = "data/wallets/tracked_wallets.json"
+    watchlist_file: str = "data/wallets/watchlist.json"
+    history_file: str = "data/history/events.json"
     backup_enabled: bool = True
     backup_interval_hours: int = 24
     max_backups: int = 7
     connection_pool_size: int = 5
+
+
+@dataclass
+class MetricsConfig:
+    enabled: bool = False
+    port: int = 9090
+    sentry_dsn: Optional[str] = None
 
 
 class Config:
@@ -296,6 +305,7 @@ class Config:
                 'arbitrum': os.getenv('ARBITRUM_RPC_URL', 'https://arb1.arbitrum.io/rpc'),
                 'base': os.getenv('BASE_RPC_URL', 'https://mainnet.base.org'),
                 'solana': os.getenv('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com'),
+                'tron': os.getenv('TRON_RPC_URL', 'https://api.trongrid.io'),
                 'optimism': os.getenv('OPTIMISM_RPC_URL', 'https://mainnet.optimism.io'),
                 'avalanche': os.getenv('AVALANCHE_RPC_URL', 'https://api.avax.network/ext/bc/C/rpc'),
             },
@@ -413,10 +423,18 @@ class Config:
             path=os.getenv('DATABASE_PATH', 'data/crypto_monitor.db'),
             news_db_path=os.getenv('NEWS_DB_PATH', os.getenv('DB_PATH', 'news_database.sqlite')),
             wallet_db_path=os.getenv('WALLET_DB_JSON_PATH', 'data/wallets/tracked_wallets.json'),
+            watchlist_file=os.getenv('WATCHLIST_FILE', 'data/wallets/watchlist.json'),
+            history_file=os.getenv('HISTORY_FILE', 'data/history/events.json'),
             backup_enabled=os.getenv('DATABASE_BACKUP_ENABLED', 'true').lower() == 'true',
             backup_interval_hours=int(os.getenv('DATABASE_BACKUP_INTERVAL', '24')),
             max_backups=int(os.getenv('DATABASE_MAX_BACKUPS', '7')),
             connection_pool_size=int(os.getenv('DATABASE_POOL_SIZE', '5'))
+        )
+        
+        self.metrics = MetricsConfig(
+            enabled=os.getenv('ENABLE_METRICS', 'false').lower() == 'true',
+            port=int(os.getenv('METRICS_PORT', '9090')),
+            sentry_dsn=os.getenv('SENTRY_DSN', None)
         )
         
         self.features_enabled = {
@@ -435,6 +453,14 @@ class Config:
         self.data_dir = Path(os.getenv('DATA_DIR', 'data'))
         self.state_file = self.data_dir / os.getenv('STATE_FILE', 'state.json')
         self.wallet_db_path = Path(os.getenv('WALLET_DB_JSON_PATH', 'data/wallets/tracked_wallets.json'))
+        self.watchlist_file = Path(os.getenv('WATCHLIST_FILE', 'data/wallets/watchlist.json'))
+        self.history_file = Path(os.getenv('HISTORY_FILE', 'data/history/events.json'))
+        self.positions_dir = Path(os.getenv('POSITIONS_DIR', 'data/positions'))
+        self.performance_dir = Path(os.getenv('PERFORMANCE_DIR', 'data/performance'))
+        
+        self.webhook_url = os.getenv('WEBHOOK_URL', '')
+        self.render_external_url = os.getenv('RENDER_EXTERNAL_URL', '')
+        self.render_service_name = os.getenv('RENDER_SERVICE_NAME', 'crypto-compass')
         
         self._create_directories()
         
@@ -473,6 +499,8 @@ class Config:
             self.data_dir / 'performance',
             self.data_dir / 'backups',
             self.data_dir / 'cache',
+            self.positions_dir,
+            self.performance_dir,
             Path('logs')
         ]
         
@@ -489,7 +517,7 @@ class Config:
         if self.production.max_memory_mb < 100:
             errors.append("MAX_MEMORY_MB слишком мало (минимум 100MB)")
         
-        if self.production.max_memory_mb > 1024:
+        if self.production.max_memory_mb > 512:
             warnings.append("MAX_MEMORY_MB больше 512MB - может не подойти для Render Free Tier")
         
         if not self.chains.enabled_chains:
@@ -663,6 +691,7 @@ class Config:
             'arbitrum': 'https://arbiscan.io',
             'base': 'https://basescan.org',
             'solana': 'https://solscan.io',
+            'tron': 'https://tronscan.org',
             'optimism': 'https://optimistic.etherscan.io',
             'avalanche': 'https://snowtrace.io',
         }
@@ -763,6 +792,10 @@ DB_PATH = config.database.news_db_path
 DATA_DIR = str(config.data_dir)
 STATE_FILE = str(config.state_file)
 WALLET_DB_JSON_PATH = str(config.wallet_db_path)
+WATCHLIST_FILE = str(config.watchlist_file)
+HISTORY_FILE = str(config.history_file)
+POSITIONS_DIR = str(config.positions_dir)
+PERFORMANCE_DIR = str(config.performance_dir)
 
 LOG_LEVEL = config.log_level
 
@@ -791,6 +824,7 @@ POLYGON_RPC_URL = config.chains.rpc_urls.get('polygon', '')
 ARBITRUM_RPC_URL = config.chains.rpc_urls.get('arbitrum', '')
 BASE_RPC_URL = config.chains.rpc_urls.get('base', '')
 SOLANA_RPC_URL = config.chains.rpc_urls.get('solana', '')
+TRON_RPC_URL = config.chains.rpc_urls.get('tron', '')
 
 SOLANA_RATE_LIMIT_REQUESTS = config.rate_limit.solana_requests
 SOLANA_RATE_LIMIT_WINDOW = config.rate_limit.solana_window_seconds
@@ -800,9 +834,12 @@ HYPERLIQUID_API_URL = config.hyperliquid.api_url
 HYPERLIQUID_MIN_TRADE_USD = config.hyperliquid.min_trade_usd
 HYPERLIQUID_MIN_LIQUIDATION_USD = config.hyperliquid.min_liquidation_usd
 HYPERLIQUID_MIN_WHALE_ACTIVITY_USD = config.hyperliquid.min_whale_activity_usd
+HYPERLIQUID_NOTIFY_WHALE_ACTIVITY = config.hyperliquid.notify_whale_activity
+HYPERLIQUID_NOTIFY_LIQUIDATIONS = config.hyperliquid.notify_liquidations
 
 TRADING_SIGNAL_INTERVAL_HOURS = config.trading.signal_interval_hours
 TRADING_MONITORED_ASSETS = config.trading.monitored_assets
+POSITION_UPDATE_INTERVAL_SECONDS = config.trading.position_update_interval_seconds
 
 SMART_DISCOVERY_INTERVAL_HOURS = config.smart_discovery.interval_hours
 SMART_DISCOVERY_MAX_NEW_WALLETS = config.smart_discovery.max_new_wallets
@@ -813,6 +850,14 @@ VALIDATION_MIN_SCORE_TO_KEEP = config.validation.min_score_to_keep
 PERFORMANCE_SUCCESS_THRESHOLD = config.performance.success_threshold
 
 ADAPTIVE_BASE_MIN_CONFIDENCE = config.adaptive_thresholds.base_min_confidence
+
+WEBHOOK_URL = config.webhook_url
+RENDER_EXTERNAL_URL = config.render_external_url
+RENDER_SERVICE_NAME = config.render_service_name
+
+ENABLE_METRICS = config.metrics.enabled
+METRICS_PORT = config.metrics.port
+SENTRY_DSN = config.metrics.sentry_dsn
 
 
 __all__ = [
@@ -832,6 +877,7 @@ __all__ = [
     'AdaptiveThresholdsConfig',
     'AnalyticsConfig',
     'DatabaseConfig',
+    'MetricsConfig',
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_TOKEN',
     'BOT_TOKEN',
@@ -842,23 +888,85 @@ __all__ = [
     'PORT',
     'HTTP_TIMEOUT',
     'RPC_TIMEOUT',
+    'WEBHOOK_TIMEOUT',
     'MAX_MEMORY_MB',
+    'GC_INTERVAL_SECONDS',
     'MIN_USD',
+    'MIN_USD_THRESHOLD',
+    'WHALE_MIN_VALUE_USD',
     'MIN_CONFIDENCE_SCORE',
     'POSTS_PER_HOUR_CAP',
+    'POLL_SECONDS',
+    'START_FROM_MINUTES_AGO',
     'ENABLED_CHAINS',
+    'CHAINS_ENABLED',
     'WHALE_ENABLED',
     'NEWS_ENABLED',
     'ANALYTICS_ENABLED',
     'TRADING_ENABLED',
     'HYPERLIQUID_ENABLED',
+    'SMART_DISCOVERY_ENABLED',
+    'VALIDATION_ENABLED',
+    'ADAPTIVE_THRESHOLDS_ENABLED',
+    'PERFORMANCE_TRACKING_ENABLED',
     'FETCH_INTERVAL',
+    'NEWS_CHECK_INTERVAL',
     'NEWS_SOURCES',
+    'NEWS_DB_PATH',
+    'DB_PATH',
     'DATA_DIR',
     'STATE_FILE',
     'WALLET_DB_JSON_PATH',
+    'WATCHLIST_FILE',
+    'HISTORY_FILE',
+    'POSITIONS_DIR',
+    'PERFORMANCE_DIR',
     'LOG_LEVEL',
     'HEALTH_CHECK_ENABLED',
+    'HEALTH_CHECK_INTERVAL',
+    'HEALTH_CHECK_MAX_SILENCE',
+    'SEND_STARTUP_NOTIFICATION',
+    'SEND_DAILY_STATS',
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
+    'GEMINI_API_KEY',
+    'COINGECKO_API_KEY',
+    'ALCHEMY_API_KEY',
+    'ETHERSCAN_API_KEY',
+    'BSCSCAN_API_KEY',
+    'POLYGONSCAN_API_KEY',
+    'ARBISCAN_API_KEY',
+    'BASESCAN_API_KEY',
+    'HELIUS_API_KEY',
+    'ETHEREUM_RPC_URL',
+    'BSC_RPC_URL',
+    'POLYGON_RPC_URL',
+    'ARBITRUM_RPC_URL',
+    'BASE_RPC_URL',
+    'SOLANA_RPC_URL',
+    'TRON_RPC_URL',
+    'SOLANA_RATE_LIMIT_REQUESTS',
+    'SOLANA_RATE_LIMIT_WINDOW',
+    'SOLANA_RETRY_ON_429',
+    'HYPERLIQUID_API_URL',
+    'HYPERLIQUID_MIN_TRADE_USD',
+    'HYPERLIQUID_MIN_LIQUIDATION_USD',
+    'HYPERLIQUID_MIN_WHALE_ACTIVITY_USD',
+    'HYPERLIQUID_NOTIFY_WHALE_ACTIVITY',
+    'HYPERLIQUID_NOTIFY_LIQUIDATIONS',
+    'TRADING_SIGNAL_INTERVAL_HOURS',
+    'TRADING_MONITORED_ASSETS',
+    'POSITION_UPDATE_INTERVAL_SECONDS',
+    'SMART_DISCOVERY_INTERVAL_HOURS',
+    'SMART_DISCOVERY_MAX_NEW_WALLETS',
+    'VALIDATION_INTERVAL_DAYS',
+    'VALIDATION_MIN_SCORE_TO_KEEP',
+    'PERFORMANCE_SUCCESS_THRESHOLD',
+    'ADAPTIVE_BASE_MIN_CONFIDENCE',
+    'WEBHOOK_URL',
+    'RENDER_EXTERNAL_URL',
+    'RENDER_SERVICE_NAME',
+    'ENABLE_METRICS',
+    'METRICS_PORT',
+    'SENTRY_DSN',
 ]
