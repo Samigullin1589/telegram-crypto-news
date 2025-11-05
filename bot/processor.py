@@ -1,4 +1,4 @@
-# bot/processor.py v4.1
+# app/news/processor.py - Production-Ready News Processor v4.4
 
 import asyncio
 import hashlib
@@ -19,68 +19,26 @@ try:
 except ImportError:
     BROTLI_AVAILABLE = False
 
-try:
-    from bot.config import NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP, MIN_CONFIDENCE_SCORE, config
-    CONFIG_AVAILABLE = True
-except ImportError:
-    try:
-        from .config import NEWS_SOURCES, FETCH_INTERVAL, POSTS_PER_HOUR_CAP, MIN_CONFIDENCE_SCORE, config
-        CONFIG_AVAILABLE = True
-    except ImportError:
-        CONFIG_AVAILABLE = False
-        NEWS_SOURCES = []
-        FETCH_INTERVAL = 300
-        POSTS_PER_HOUR_CAP = 3
-        MIN_CONFIDENCE_SCORE = 70
-        config = None
+from app.config import (
+    config,
+    NEWS_SOURCES,
+    FETCH_INTERVAL,
+    POSTS_PER_HOUR_CAP,
+    MIN_CONFIDENCE_SCORE,
+    NEWS_ENABLED,
+    OPENAI_API_KEY,
+    ANTHROPIC_API_KEY,
+    GEMINI_API_KEY,
+)
 
-try:
-    from bot.ai_handler import AIHandler
-    AI_HANDLER_AVAILABLE = True
-except ImportError:
-    try:
-        from .ai_handler import AIHandler
-        AI_HANDLER_AVAILABLE = True
-    except ImportError:
-        AI_HANDLER_AVAILABLE = False
-        AIHandler = None
-
-try:
-    from bot.content_parser import ContentParser
-    CONTENT_PARSER_AVAILABLE = True
-except ImportError:
-    try:
-        from .content_parser import ContentParser
-        CONTENT_PARSER_AVAILABLE = True
-    except ImportError:
-        CONTENT_PARSER_AVAILABLE = False
-        ContentParser = None
-
-try:
-    from bot.database import AsyncDatabaseManager, NewsDatabase
-    DATABASE_AVAILABLE = True
-except ImportError:
-    try:
-        from .database import AsyncDatabaseManager, NewsDatabase
-        DATABASE_AVAILABLE = True
-    except ImportError:
-        DATABASE_AVAILABLE = False
-        AsyncDatabaseManager = None
-        NewsDatabase = None
-
-try:
-    from bot.telegram_poster import TelegramPoster
-    TELEGRAM_AVAILABLE = True
-except ImportError:
-    try:
-        from .telegram_poster import TelegramPoster
-        TELEGRAM_AVAILABLE = True
-    except ImportError:
-        TELEGRAM_AVAILABLE = False
-        TelegramPoster = None
+from app.news.ai_handler import AIHandler
+from app.news.content_parser import ContentParser
+from app.news.database import NewsDatabase
+from app.news.telegram_poster import NewsTelegramPoster
 
 
 class NewsMetrics:
+    """Метрики работы новостного процессора"""
     
     def __init__(self):
         self.cycles_completed = 0
@@ -105,6 +63,7 @@ class NewsMetrics:
         self.last_publish_time = None
     
     def record_fetch(self, source: str, count: int, duration: float, success: bool):
+        """Записать результат фетча"""
         if success:
             self.articles_fetched += count
             self.fetch_times.append(duration)
@@ -115,32 +74,39 @@ class NewsMetrics:
             self.errors += 1
     
     def record_published(self, source: str):
+        """Записать публикацию"""
         self.published_by_source[source] += 1
         self.last_publish_time = datetime.now(timezone.utc)
     
     def record_translated(self):
+        """Записать перевод"""
         self.articles_translated += 1
     
     def get_uptime(self) -> float:
+        """Получить время работы в секундах"""
         return (datetime.now(timezone.utc) - self.start_time).total_seconds()
     
     def get_success_rate(self) -> float:
+        """Получить процент успешных публикаций"""
         if self.articles_processed == 0:
             return 0.0
         return (self.articles_published / self.articles_processed) * 100
     
     def get_average_fetch_time(self) -> float:
+        """Получить среднее время фетча"""
         if not self.fetch_times:
             return 0.0
         return sum(self.fetch_times) / len(self.fetch_times)
     
     def get_articles_per_hour(self) -> float:
+        """Получить количество статей в час"""
         uptime_hours = self.get_uptime() / 3600
         if uptime_hours == 0:
             return 0.0
         return self.articles_published / uptime_hours
     
     def to_dict(self) -> Dict[str, Any]:
+        """Экспорт метрик в словарь"""
         return {
             'cycles_completed': self.cycles_completed,
             'articles_fetched': self.articles_fetched,
@@ -160,156 +126,69 @@ class NewsMetrics:
         }
 
 
-class DummyAIHandler:
-    
-    async def analyze_article(self, article: Dict) -> Optional[Dict]:
-        title = article.get('title', '').lower()
-        
-        score = 70
-        sentiment = 'neutral'
-        relevance = 'medium'
-        
-        positive_keywords = ['launch', 'partnership', 'growth', 'increase', 'surge', 'rally', 'bullish', 'adoption', 'breakthrough', 'success']
-        negative_keywords = ['hack', 'scam', 'crash', 'drop', 'loss', 'bearish', 'regulation', 'ban', 'shutdown', 'failure']
-        high_relevance_keywords = ['bitcoin', 'ethereum', 'crypto', 'blockchain', 'defi', 'nft', 'web3']
-        
-        if any(word in title for word in positive_keywords):
-            sentiment = 'positive'
-            score = 80
-        elif any(word in title for word in negative_keywords):
-            sentiment = 'negative'
-            score = 65
-        
-        if any(word in title for word in high_relevance_keywords):
-            relevance = 'high'
-            score += 10
-        
-        score = min(100, score)
-        
-        return {
-            'provider': 'dummy',
-            'score': score,
-            'sentiment': sentiment,
-            'relevance': relevance,
-            'topics': []
-        }
-    
-    async def translate_text(self, text: str, source_lang: str = 'en', target_lang: str = 'ru') -> Optional[str]:
-        return None
-    
-    def get_stats(self) -> Dict[str, Any]:
-        return {
-            'provider': 'dummy',
-            'total_requests': 0,
-            'successful_requests': 0,
-            'failed_requests': 0,
-            'success_rate': 0.0
-        }
-
-
-class DummyDatabase:
-    
-    def __init__(self):
-        self._articles = []
-    
-    async def initialize(self):
-        pass
-    
-    async def save_article(self, **kwargs) -> bool:
-        self._articles.append(kwargs)
-        return True
-    
-    async def is_link_posted(self, link: str) -> bool:
-        return any(a.get('url') == link or a.get('link') == link for a in self._articles)
-    
-    async def get_recent_articles(self, limit: int = 100) -> List[Dict]:
-        return self._articles[-limit:]
-    
-    async def close(self):
-        pass
-
-
-class DummyTelegram:
-    
-    async def post(self, text=None, link=None, image_data=None, **kwargs) -> bool:
-        print(f"📤 [TELEGRAM DUMMY] Would post: {(text or '')[:50]}")
-        return True
-    
-    def get_stats(self) -> Dict[str, Any]:
-        return {
-            'total_posts': 0,
-            'successful_posts': 0,
-            'failed_posts': 0,
-            'success_rate': 0.0
-        }
-
-
 class NewsProcessor:
+    """Production-ready новостной процессор"""
     
     def __init__(self):
+        """Инициализация процессора"""
         
         print("\n" + "="*80)
-        print("📰 NEWS PROCESSOR v4.1 - INITIALIZATION")
+        print("📰 NEWS PROCESSOR v4.4 - PRODUCTION INITIALIZATION")
         print("="*80 + "\n")
         
-        if not CONFIG_AVAILABLE or not NEWS_SOURCES:
-            print("❌ [NEWS] Config not available or empty NEWS_SOURCES")
-            print("   News Processor will be disabled")
+        if not NEWS_ENABLED:
+            print("⚠️ [NEWS] News processing disabled in config")
             self._initialized = False
             return
         
-        if AI_HANDLER_AVAILABLE and AIHandler:
-            try:
-                self.ai_handler = AIHandler()
-                print("✅ AI Handler loaded")
-            except Exception as e:
-                print(f"⚠️ AI Handler failed, using dummy: {e}")
-                self.ai_handler = DummyAIHandler()
-        else:
-            print("⚠️ AI Handler unavailable, using dummy")
-            self.ai_handler = DummyAIHandler()
+        if not NEWS_SOURCES:
+            print("❌ [NEWS] No news sources configured")
+            self._initialized = False
+            return
         
-        if CONTENT_PARSER_AVAILABLE and ContentParser:
-            try:
-                self.content_parser = ContentParser()
-                print("✅ Content Parser loaded")
-            except Exception as e:
-                print(f"⚠️ Content Parser failed: {e}")
-                self.content_parser = None
-        else:
-            print("⚠️ Content Parser unavailable")
+        has_ai_key = bool(OPENAI_API_KEY or ANTHROPIC_API_KEY or GEMINI_API_KEY)
+        if not has_ai_key:
+            print("⚠️ [NEWS] No AI API keys configured")
+        
+        try:
+            self.ai_handler = AIHandler()
+            print("✅ AI Handler initialized")
+        except Exception as e:
+            print(f"❌ AI Handler failed: {e}")
+            traceback.print_exc()
+            self._initialized = False
+            return
+        
+        try:
+            self.content_parser = ContentParser()
+            print("✅ Content Parser initialized")
+        except Exception as e:
+            print(f"⚠️ Content Parser failed: {e}")
             self.content_parser = None
         
-        if DATABASE_AVAILABLE and (AsyncDatabaseManager or NewsDatabase):
-            try:
-                if AsyncDatabaseManager:
-                    self.database = AsyncDatabaseManager()
-                else:
-                    self.database = NewsDatabase()
-                print("✅ Database loaded")
-            except Exception as e:
-                print(f"⚠️ Database failed, using dummy: {e}")
-                self.database = DummyDatabase()
-        else:
-            print("⚠️ Database unavailable, using dummy")
-            self.database = DummyDatabase()
+        try:
+            self.database = NewsDatabase()
+            print("✅ Database initialized")
+        except Exception as e:
+            print(f"❌ Database failed: {e}")
+            traceback.print_exc()
+            self._initialized = False
+            return
         
-        if TELEGRAM_AVAILABLE and TelegramPoster:
-            try:
-                self.telegram = TelegramPoster()
-                print("✅ Telegram Poster loaded")
-            except Exception as e:
-                print(f"⚠️ Telegram failed, using dummy: {e}")
-                self.telegram = DummyTelegram()
-        else:
-            print("⚠️ Telegram unavailable, using dummy")
-            self.telegram = DummyTelegram()
+        try:
+            self.telegram = NewsTelegramPoster()
+            print("✅ Telegram Poster initialized")
+        except Exception as e:
+            print(f"❌ Telegram Poster failed: {e}")
+            traceback.print_exc()
+            self._initialized = False
+            return
         
         self.metrics = NewsMetrics()
         
-        self.fetch_timeout = 30
-        self.max_fetch_retries = 3
-        self.retry_delay_base = 3
+        self.fetch_timeout = config.news.max_retries * 10 if hasattr(config.news, 'max_retries') else 30
+        self.max_fetch_retries = config.news.max_retries if hasattr(config.news, 'max_retries') else 3
+        self.retry_delay_base = config.news.retry_delay_seconds if hasattr(config.news, 'retry_delay_seconds') else 3
         
         self.seen_urls: Set[str] = set()
         self.seen_hashes: Set[str] = set()
@@ -335,35 +214,37 @@ class NewsProcessor:
         self._database_initialized = False
         self._initialized = True
         
-        print("✅ News Processor v4.1 инициализирован")
+        print("✅ News Processor v4.4 initialized")
         print(f"   • Sources: {len(NEWS_SOURCES)}")
         print(f"   • Fetch interval: {FETCH_INTERVAL}s")
         print(f"   • Posts per hour cap: {POSTS_PER_HOUR_CAP}")
         print(f"   • Min confidence: {MIN_CONFIDENCE_SCORE}/100")
         print(f"   • Translation: ✅ Enabled (EN→RU)")
         print(f"   • Brotli support: {'✅' if BROTLI_AVAILABLE else '❌'}")
-        print(f"   • AI Handler: {'✅' if AI_HANDLER_AVAILABLE else '⚠️ dummy'}")
-        print(f"   • Database: {'✅' if DATABASE_AVAILABLE else '⚠️ dummy'}")
-        print(f"   • Telegram: {'✅' if TELEGRAM_AVAILABLE else '⚠️ dummy'}")
+        print(f"   • AI Provider: {config.get_ai_provider() or 'None'}")
+        print(f"   • Database: {config.database.type}")
         print()
     
     @property
     def is_initialized(self) -> bool:
+        """Проверить инициализацию"""
         return getattr(self, '_initialized', False)
     
     async def initialize_database(self):
+        """Инициализировать базу данных"""
         if self._database_initialized:
             return
         
         try:
-            if hasattr(self.database, 'initialize'):
-                await self.database.initialize()
-                print("✅ [NEWS] Database initialized")
+            await self.database.initialize()
+            print("✅ [NEWS] Database initialized")
             self._database_initialized = True
         except Exception as e:
             print(f"⚠️ [NEWS] Database initialization failed: {e}")
+            traceback.print_exc()
     
     async def run_cycle(self):
+        """Выполнить один цикл обработки новостей"""
         
         if not self.is_initialized:
             print("⚠️ [NEWS] Processor not initialized, skipping cycle")
@@ -387,11 +268,11 @@ class NewsProcessor:
         articles = await self._fetch_all_sources()
         
         if not articles:
-            print("👍 [NEWS] Нет новых статей в этом цикле")
+            print("👍 [NEWS] No new articles in this cycle")
             self.metrics.cycles_completed += 1
             return
         
-        print(f"\n📊 [NEWS] Собрано {len(articles)} новых статей")
+        print(f"\n📊 [NEWS] Fetched {len(articles)} new articles")
         
         process_start = datetime.now(timezone.utc)
         candidates = await self._process_articles(articles)
@@ -399,36 +280,38 @@ class NewsProcessor:
         self.metrics.total_process_time += process_duration
         
         if not candidates:
-            print("⚠️ [NEWS] Нет кандидатов для публикации (низкий score)")
+            print("⚠️ [NEWS] No candidates for publication (low score)")
             self.metrics.cycles_completed += 1
             return
         
-        print(f"✅ [NEWS] {len(candidates)} кандидатов прошли фильтры")
+        print(f"✅ [NEWS] {len(candidates)} candidates passed filters")
         
         publish_start = datetime.now(timezone.utc)
         published = await self._publish_best(candidates)
         publish_duration = (datetime.now(timezone.utc) - publish_start).total_seconds()
         self.metrics.total_publish_time += publish_duration
         
-        print(f"📤 [NEWS] Опубликовано: {published}/{len(candidates)}")
+        print(f"📤 [NEWS] Published: {published}/{len(candidates)}")
         
         self.metrics.cycles_completed += 1
         
         cycle_duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
-        print(f"\n⏱️ [NEWS] Цикл завершен за {cycle_duration:.1f}s")
+        print(f"\n⏱️ [NEWS] Cycle completed in {cycle_duration:.1f}s")
         print(f"   Fetch: {self.metrics.total_fetch_time:.1f}s | Process: {process_duration:.1f}s | Publish: {publish_duration:.1f}s\n")
     
     async def process_cycle(self):
+        """Alias для run_cycle для совместимости"""
         await self.run_cycle()
     
     async def run(self):
+        """Запустить главный цикл (standalone mode)"""
         
         if not self.is_initialized:
             print("❌ [NEWS] Processor not initialized, cannot run")
             await asyncio.sleep(300)
             return
         
-        print("🚀 [NEWS] Запуск главного цикла (standalone mode)\n")
+        print("🚀 [NEWS] Starting main loop (standalone mode)\n")
         
         if not self._database_initialized:
             await self.initialize_database()
@@ -439,62 +322,26 @@ class NewsProcessor:
         
         while not self.shutdown_requested:
             try:
-                cycle_start = datetime.now(timezone.utc)
+                await self.run_cycle()
                 
-                print("\n" + "#"*80)
-                print(f"🔄 ЦИКЛ #{self.metrics.cycles_completed + 1} - {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
-                print("#"*80 + "\n")
-                
-                self._reset_hourly_limit_if_needed()
-                
-                articles = await self._fetch_all_sources()
-                
-                if not articles:
-                    print("⚠️ [NEWS] Нет новых статей в этом цикле")
-                    self.metrics.cycles_completed += 1
-                    await asyncio.sleep(FETCH_INTERVAL)
-                    continue
-                
-                print(f"\n📊 [NEWS] Собрано {len(articles)} новых статей")
-                
-                candidates = await self._process_articles(articles)
-                
-                if not candidates:
-                    print("⚠️ [NEWS] Нет кандидатов для публикации")
-                    self.metrics.cycles_completed += 1
-                    await asyncio.sleep(FETCH_INTERVAL)
-                    continue
-                
-                print(f"✅ [NEWS] {len(candidates)} кандидатов прошли фильтры")
-                
-                published = await self._publish_best(candidates)
-                
-                print(f"📤 [NEWS] Опубликовано: {published}/{len(candidates)}")
-                
-                self.metrics.cycles_completed += 1
-                
-                cycle_duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
-                
-                if cycle_duration < FETCH_INTERVAL:
-                    wait_time = FETCH_INTERVAL - cycle_duration
-                    print(f"\n⏳ [NEWS] Пауза {wait_time:.0f}s до следующего цикла\n")
-                    await asyncio.sleep(wait_time)
+                await asyncio.sleep(FETCH_INTERVAL)
             
             except asyncio.CancelledError:
-                print("\n⏹️ [NEWS] Получен сигнал остановки")
+                print("\n⏹️ [NEWS] Received stop signal")
                 break
             
             except Exception as e:
                 self.metrics.errors += 1
-                print(f"\n❌ [NEWS] Критическая ошибка в цикле:")
+                print(f"\n❌ [NEWS] Critical error in cycle:")
                 print(f"   {e}")
                 traceback.print_exc()
                 
                 await asyncio.sleep(60)
     
     async def _initial_baseline(self):
+        """Загрузить начальное состояние (baseline)"""
         
-        print("📊 [BASELINE] Загрузка начального состояния...\n")
+        print("📊 [BASELINE] Loading initial state...\n")
         
         try:
             articles = await self._fetch_all_sources()
@@ -502,14 +349,15 @@ class NewsProcessor:
             for article in articles:
                 self._mark_as_seen(article)
             
-            print(f"✅ Baseline создан: {len(articles)} статей в базе")
+            print(f"✅ Baseline created: {len(articles)} articles in database")
         except Exception as e:
-            print(f"⚠️ [BASELINE] Ошибка: {e}")
+            print(f"⚠️ [BASELINE] Error: {e}")
             traceback.print_exc()
         
         print("="*80 + "\n")
     
     async def _fetch_all_sources(self) -> List[Dict]:
+        """Получить статьи из всех источников"""
         
         sorted_sources = sorted(
             NEWS_SOURCES,
@@ -518,7 +366,7 @@ class NewsProcessor:
         )
         
         for source in sorted_sources[:6]:
-            print(f"📡 [FETCH] {source['name']} (приоритет: {source.get('priority', 5)})")
+            print(f"📡 [FETCH] {source['name']} (priority: {source.get('priority', 5)})")
         
         semaphore = asyncio.Semaphore(5)
         
@@ -552,6 +400,7 @@ class NewsProcessor:
         priority: int,
         language: str = 'en'
     ) -> List[Dict]:
+        """Получить статьи из одного источника"""
         
         await self._respect_rate_limit(name)
         
@@ -566,7 +415,7 @@ class NewsProcessor:
                     self.metrics.record_fetch(name, len(articles), duration, True)
                     
                     if len(articles) > 0:
-                        print(f"✅ [FETCH] {name}: {len(articles)} новых")
+                        print(f"✅ [FETCH] {name}: {len(articles)} new")
                     
                     return articles
             
@@ -619,6 +468,7 @@ class NewsProcessor:
         language: str,
         attempt: int
     ) -> Optional[List[Dict]]:
+        """Получить данные с поддержкой Brotli"""
         
         timeout_obj = aiohttp.ClientTimeout(
             total=self.fetch_timeout,
@@ -676,6 +526,7 @@ class NewsProcessor:
                 return self._parse_rss(text, name, language)
     
     async def _fetch_without_compression(self, url: str, name: str, language: str) -> List[Dict]:
+        """Получить данные без сжатия"""
         
         timeout_obj = aiohttp.ClientTimeout(total=self.fetch_timeout)
         
@@ -701,6 +552,7 @@ class NewsProcessor:
                 return self._parse_rss(text, name, language)
     
     def _parse_rss(self, content: str, source_name: str, language: str) -> List[Dict]:
+        """Распарсить RSS feed"""
         
         try:
             feed = feedparser.parse(content)
@@ -727,6 +579,7 @@ class NewsProcessor:
             return []
     
     def _extract_article(self, entry, source: str, language: str) -> Optional[Dict]:
+        """Извлечь данные статьи из RSS entry"""
         
         try:
             title = entry.get('title', '').strip()
@@ -803,6 +656,7 @@ class NewsProcessor:
             return None
     
     def _is_valid_article(self, article: Dict) -> bool:
+        """Проверить валидность статьи"""
         
         if not article.get('title'):
             return False
@@ -819,6 +673,7 @@ class NewsProcessor:
         return True
     
     def _is_duplicate(self, article: Dict) -> bool:
+        """Проверить на дубликат"""
         
         url = article['url']
         
@@ -835,6 +690,7 @@ class NewsProcessor:
         return False
     
     def _mark_as_seen(self, article: Dict):
+        """Пометить как просмотренное"""
         url = article['url']
         self.seen_urls.add(url)
         
@@ -849,6 +705,7 @@ class NewsProcessor:
             self.seen_hashes = set(list(self.seen_hashes)[to_remove:])
     
     async def _process_articles(self, articles: List[Dict]) -> List[Dict]:
+        """Обработать статьи через AI"""
         
         candidates = []
         
@@ -880,6 +737,7 @@ class NewsProcessor:
         return candidates
     
     async def _translate_if_needed(self, text: str, language: str) -> str:
+        """Перевести если нужно"""
         
         if language == 'ru':
             return text
@@ -898,6 +756,7 @@ class NewsProcessor:
         return text
     
     async def _publish_best(self, candidates: List[Dict]) -> int:
+        """Опубликовать лучшие статьи"""
         
         sorted_candidates = sorted(
             candidates,
@@ -949,13 +808,14 @@ class NewsProcessor:
                     print(f"❌ [FAILED] {title_preview}...")
             
             except Exception as e:
-                print(f"⚠️ [PUBLISH] Ошибка: {e}")
+                print(f"⚠️ [PUBLISH] Error: {e}")
                 traceback.print_exc()
                 continue
         
         return published
     
     async def _publish_article(self, article: Dict) -> bool:
+        """Опубликовать одну статью"""
         
         try:
             title = article['title']
@@ -1008,6 +868,7 @@ class NewsProcessor:
             return False
     
     def _reset_hourly_limit_if_needed(self):
+        """Сбросить почасовой лимит если нужно"""
         now = datetime.now(timezone.utc)
         elapsed = (now - self.hour_start_time).total_seconds()
         
@@ -1016,9 +877,11 @@ class NewsProcessor:
             self.hour_start_time = now
     
     def _get_available_publish_slots(self) -> int:
+        """Получить доступные слоты для публикации"""
         return max(0, POSTS_PER_HOUR_CAP - self.posts_this_hour)
     
     async def _respect_rate_limit(self, source_name: str):
+        """Соблюдать rate limit для источника"""
         
         if source_name in self.last_fetch_times:
             elapsed = (datetime.now(timezone.utc) - self.last_fetch_times[source_name]).total_seconds()
@@ -1029,27 +892,29 @@ class NewsProcessor:
         self.last_fetch_times[source_name] = datetime.now(timezone.utc)
     
     def _get_next_user_agent(self) -> str:
+        """Получить следующий User-Agent"""
         ua = self.user_agents[self.current_ua_index]
         self.current_ua_index = (self.current_ua_index + 1) % len(self.user_agents)
         return ua
     
     async def cleanup(self):
+        """Очистка ресурсов"""
         
         print("\n⏹️ [NEWS] Cleanup processor...")
         self.shutdown_requested = True
         
         try:
-            if hasattr(self.database, 'close'):
-                await self.database.close()
+            await self.database.close()
         except Exception as e:
             print(f"⚠️ [NEWS] Database cleanup error: {e}")
         
         self._print_stats()
     
     def _print_stats(self):
+        """Вывести статистику"""
         
         print("\n" + "="*80)
-        print("📊 NEWS PROCESSOR STATISTICS v4.1")
+        print("📊 NEWS PROCESSOR STATISTICS v4.4")
         print("="*80)
         print(f"Uptime: {self.metrics.get_uptime()/3600:.1f}h")
         print(f"Cycles: {self.metrics.cycles_completed}")
@@ -1083,28 +948,27 @@ class NewsProcessor:
             for source, count in sorted_errors[:5]:
                 print(f"  • {source}: {count} errors")
         
-        if hasattr(self.ai_handler, 'get_stats'):
-            try:
-                ai_stats = self.ai_handler.get_stats()
-                print("\nAI Handler Stats:")
-                print(f"  • Provider: {ai_stats.get('provider', 'unknown')}")
-                print(f"  • Requests: {ai_stats.get('total_requests', 0)}")
-                print(f"  • Success Rate: {ai_stats.get('success_rate', 0):.1f}%")
-            except:
-                pass
+        try:
+            ai_stats = self.ai_handler.get_stats()
+            print("\nAI Handler Stats:")
+            print(f"  • Provider: {ai_stats.get('provider', 'unknown')}")
+            print(f"  • Requests: {ai_stats.get('total_requests', 0)}")
+            print(f"  • Success Rate: {ai_stats.get('success_rate', 0):.1f}%")
+        except:
+            pass
         
-        if hasattr(self.telegram, 'get_stats'):
-            try:
-                tg_stats = self.telegram.get_stats()
-                print("\nTelegram Stats:")
-                print(f"  • Total Posts: {tg_stats.get('total_posts', 0)}")
-                print(f"  • Success Rate: {tg_stats.get('success_rate', 0):.1f}%")
-            except:
-                pass
+        try:
+            tg_stats = self.telegram.get_stats()
+            print("\nTelegram Stats:")
+            print(f"  • Total Posts: {tg_stats.get('total_posts', 0)}")
+            print(f"  • Success Rate: {tg_stats.get('success_rate', 0):.1f}%")
+        except:
+            pass
         
         print("="*80 + "\n")
     
     def get_metrics(self) -> Dict[str, Any]:
+        """Получить метрики"""
         return self.metrics.to_dict()
 
 
