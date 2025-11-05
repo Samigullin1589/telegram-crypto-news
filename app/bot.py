@@ -1,24 +1,26 @@
 """
-TELEGRAM BOT - Complete Integration Layer
+TELEGRAM BOT - Production-Ready Integration Layer
 Команды управления для Whale Monitoring и Trading System
 
-ВОЗМОЖНОСТИ:
+PRODUCTION FEATURES:
 ✅ Whale Monitoring Commands
 ✅ Trading System Commands  
 ✅ Position Management
 ✅ Performance Analytics
 ✅ Manual Signal Generation
-✅ System Control (pause/resume)
+✅ System Control
 ✅ Configuration Management
 ✅ Real-time Status Updates
 ✅ Multi-level Help System
 ✅ Admin Access Control
+✅ Error Recovery
+✅ Rate Limiting
 """
 
 import asyncio
 import traceback
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 import aiohttp
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -38,10 +40,6 @@ from app import (
     TELEGRAM_CHANNEL_ID,
     config
 )
-
-# ============================================================================
-# BOT INITIALIZATION - SINGLETON PATTERN WITH LAZY LOADING
-# ============================================================================
 
 _application = None
 _bot = None
@@ -63,18 +61,9 @@ def get_bot():
         get_application()
     return _bot
 
-
-# ============================================================================
-# MODULE-LEVEL VARIABLES - Создаем переменные для корректного импорта
-# ============================================================================
-
-# Инициализируем переменные модуля сразу при импорте
-# Это необходимо для работы "from app.bot import application"
 application = get_application()
 bot = get_bot()
 
-
-# Определяем что можно импортировать из модуля
 __all__ = [
     'application',
     'bot', 
@@ -105,10 +94,6 @@ __all__ = [
 ]
 
 
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-
 def is_admin(user_id: int) -> bool:
     """Проверка прав администратора"""
     try:
@@ -128,7 +113,6 @@ async def send_long_message(update: Update, text: str, parse_mode: str = 'HTML')
         await update.message.reply_text(text, parse_mode=parse_mode)
         return
     
-    # Разбиваем на части
     parts = []
     current_part = ""
     
@@ -142,7 +126,6 @@ async def send_long_message(update: Update, text: str, parse_mode: str = 'HTML')
     if current_part:
         parts.append(current_part)
     
-    # Отправляем по частям
     for i, part in enumerate(parts):
         if i == 0:
             await update.message.reply_text(f"{part}\n\n<i>... продолжение {i+1}/{len(parts)}</i>", parse_mode=parse_mode)
@@ -174,10 +157,6 @@ def format_number(num: float, decimals: int = 2) -> str:
     else:
         return f"${num:,.{decimals}f}"
 
-
-# ============================================================================
-# GENERAL COMMANDS
-# ============================================================================
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -316,10 +295,6 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='HTML', reply_markup=reply_markup)
 
 
-# ============================================================================
-# WHALE MONITORING COMMANDS
-# ============================================================================
-
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Команда /status
@@ -335,11 +310,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "<b>📊 СТАТУС СИСТЕМЫ</b>\n"
         text += f"<i>{now.strftime('%Y-%m-%d %H:%M:%S')} UTC</i>\n\n"
         
-        # Uptime
         uptime = (now - stats['start_time']).total_seconds()
         text += f"⏱️ <b>Uptime:</b> {format_duration(uptime)}\n\n"
         
-        # Whale Monitoring
         text += "<b>🐋 WHALE MONITORING</b>\n"
         text += f"• События собрано: {stats['events_collected']}\n"
         text += f"• Прошло фильтры: {stats['events_qualified']}\n"
@@ -350,7 +323,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             accuracy = (stats['events_successful'] / total) * 100
             text += f"• Точность: {accuracy:.1f}% ({stats['events_successful']}/{total})\n"
         
-        # Trading System
         if scheduler.trading_enabled:
             text += f"\n<b>📈 TRADING SYSTEM</b>\n"
             text += f"• Сигналов сгенерировано: {stats.get('trading_signals_generated', 0)}\n"
@@ -370,7 +342,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"\n<b>📈 TRADING SYSTEM</b>\n"
             text += f"• Status: ❌ Отключен\n"
         
-        # Adaptive System
         if scheduler.adaptive_thresholds:
             adaptive_stats = scheduler.adaptive_thresholds.get_stats()
             text += f"\n<b>🧠 АДАПТИВНАЯ СИСТЕМА</b>\n"
@@ -379,7 +350,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if adaptive_stats['signals_tracked'] > 0:
                 text += f"• Точность: {adaptive_stats['accuracy']:.1%}\n"
         
-        # Wallet Database
         if scheduler.wallet_db:
             active_wallets = len(scheduler.wallet_db.get_active_wallets())
             total_wallets = len(scheduler.wallet_db.wallets)
@@ -389,7 +359,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"• Найдено: {stats['wallets_discovered']}\n"
             text += f"• Удалено: {stats['wallets_removed']}\n"
         
-        # Multi-Chain
         if scheduler.chains_enabled:
             chains_events = stats.get('chains_events', {})
             if chains_events:
@@ -397,12 +366,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for chain, count in sorted(chains_events.items(), key=lambda x: x[1], reverse=True)[:5]:
                     text += f"• {chain}: {count} событий\n"
         
-        # Analytics
         if scheduler.analytics_enabled:
             text += f"\n<b>📊 ANALYTICS</b>\n"
             text += f"• Вызовов: {stats.get('analytics_calls', 0)}\n"
         
-        # System Health
         text += f"\n<b>💚 HEALTH</b>\n"
         
         if stats['last_cycle_time']:
@@ -444,13 +411,11 @@ async def cmd_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📊 Нет активных кошельков")
             return
         
-        # Сортируем по score
         sorted_wallets = sorted(active_wallets, key=lambda w: w.get('score', 50), reverse=True)
         
         text = f"<b>💰 ОТСЛЕЖИВАЕМЫЕ КОШЕЛЬКИ</b>\n\n"
         text += f"Всего активных: {len(active_wallets)}\n\n"
         
-        # Показываем топ-20
         for i, wallet in enumerate(sorted_wallets[:20], 1):
             score = wallet.get('score', 50)
             roi_30d = wallet.get('roi_30d', 0)
@@ -487,12 +452,10 @@ async def cmd_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         from app.scheduler import scheduler
         
-        # Получаем последние N событий из истории
         recent_count = 10
         
         text = f"<b>🐋 ПОСЛЕДНИЕ КРУПНЫЕ ПЕРЕМЕЩЕНИЯ</b>\n\n"
         
-        # Пока что показываем статистику из очереди публикации
         if scheduler.publication_queue:
             text += f"В очереди публикации: {len(scheduler.publication_queue)}\n\n"
             
@@ -557,10 +520,6 @@ async def cmd_discover(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
 
 
-# ============================================================================
-# TRADING SYSTEM COMMANDS
-# ============================================================================
-
 async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Команда /positions
@@ -603,7 +562,6 @@ async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tp_dist = abs((p.take_profit - p.current_price) / p.current_price * 100)
                 text += f"Take-Profit: ${p.take_profit:,.2f} ({tp_dist:.1f}% away)\n"
             
-            # Duration
             if hasattr(p, 'opened_at'):
                 duration = (datetime.utcnow() - p.opened_at).total_seconds()
                 text += f"Duration: {format_duration(duration)}\n"
@@ -611,14 +569,12 @@ async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"ID: <code>{p.position_id}</code>\n"
             text += "\n"
         
-        # Summary
         summary = scheduler.signal_generator.positions.get_summary()
         text += f"<b>📊 ИТОГО</b>\n"
         text += f"Позиций: {summary['total_open']}\n"
         text += f"Капитал: {format_number(summary['total_amount_usd'])}\n"
         text += f"Unrealized P&L: {format_number(summary['total_unrealized_pnl_usd'])}\n"
         
-        # Performance snapshot
         if summary['total_amount_usd'] > 0:
             roi = (summary['total_unrealized_pnl_usd'] / summary['total_amount_usd']) * 100
             text += f"ROI: {roi:+.2f}%\n"
@@ -649,25 +605,21 @@ async def cmd_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Trading system отключен")
             return
         
-        # Парсим период
         period_days = 30
         if context.args and len(context.args) > 0:
             try:
                 period_days = int(context.args[0])
-                period_days = max(1, min(365, period_days))  # 1-365 дней
+                period_days = max(1, min(365, period_days))
             except ValueError:
                 await update.message.reply_text("❌ Неверный формат. Используйте: /performance [days]")
                 return
         
         await update.message.reply_text(f"📊 Рассчитываю статистику за {period_days} дней...")
         
-        # Получаем метрики
         metrics = await scheduler.signal_generator.performance.calculate_metrics(period_days=period_days)
         
-        # Форматируем
         summary = scheduler.signal_generator.performance.format_summary(metrics)
         
-        # Добавляем заголовок
         text = f"<b>📊 ПРОИЗВОДИТЕЛЬНОСТЬ TRADING SYSTEM</b>\n"
         text += f"<i>Период: {period_days} дней</i>\n\n"
         text += f"<pre>{summary}</pre>\n\n"
@@ -697,7 +649,6 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Trading system отключен")
             return
         
-        # Проверяем аргументы
         if not context.args or len(context.args) < 1:
             await update.message.reply_text(
                 "❌ Укажите актив\n\n"
@@ -710,14 +661,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🔄 Генерация сигнала для {asset}...")
         
         async with aiohttp.ClientSession() as session:
-            # Получаем данные
             price_data = await scheduler._fetch_ohlcv(asset, session)
             
             if price_data is None or len(price_data) < 50:
                 await update.message.reply_text(f"❌ Недостаточно данных для {asset}")
                 return
             
-            # Генерируем сигнал
             signal = await scheduler.signal_generator.generate_signal(
                 asset=asset,
                 price_data=price_data,
@@ -728,10 +677,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ Не удалось сгенерировать сигнал для {asset}")
                 return
             
-            # Форматируем
             msg = scheduler.signal_generator.format_signal_message(signal)
             
-            # Отправляем
             await send_long_message(update, msg)
         
     except Exception as e:
@@ -756,7 +703,6 @@ async def cmd_close_position(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text("❌ Trading system отключен")
             return
         
-        # Проверяем аргументы
         if not context.args or len(context.args) < 1:
             await update.message.reply_text(
                 "❌ Укажите ID позиции\n\n"
@@ -767,19 +713,16 @@ async def cmd_close_position(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         position_id = context.args[0]
         
-        # Получаем позицию
         position = scheduler.signal_generator.positions.get_position(position_id)
         
         if not position:
             await update.message.reply_text(f"❌ Позиция {position_id} не найдена")
             return
         
-        # Получаем текущую цену
         exit_price = position.current_price or position.entry_price
         
         await update.message.reply_text(f"🔄 Закрываю позицию {position.asset}...")
         
-        # Закрываем
         closed = await scheduler.signal_generator.positions.close_position(
             position_id,
             exit_price,
@@ -823,7 +766,6 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Trading system отключен")
             return
         
-        # Парсим период
         period_days = 7
         if context.args and len(context.args) > 0:
             try:
@@ -832,10 +774,8 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 pass
         
-        # Получаем закрытые позиции
         closed_positions = await scheduler.signal_generator.positions.get_closed_positions(limit=100)
         
-        # Фильтруем по периоду
         cutoff = datetime.utcnow() - timedelta(days=period_days)
         recent_trades = [p for p in closed_positions if p.closed_at >= cutoff]
         
@@ -845,7 +785,6 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text = f"<b>📜 ИСТОРИЯ СДЕЛОК ({period_days}д)</b>\n\n"
         
-        # Статистика
         total_pnl = sum(p.realized_pnl_usd for p in recent_trades)
         winning = [p for p in recent_trades if p.realized_pnl_usd > 0]
         
@@ -853,7 +792,6 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"<b>Прибыльных:</b> {len(winning)} ({len(winning)/len(recent_trades)*100:.1f}%)\n"
         text += f"<b>Total P&L:</b> {format_number(total_pnl)}\n\n"
         
-        # Последние 10 сделок
         text += "<b>Последние сделки:</b>\n\n"
         
         for i, trade in enumerate(recent_trades[:10], 1):
@@ -875,10 +813,6 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
 
 
-# ============================================================================
-# CONFIGURATION COMMANDS
-# ============================================================================
-
 async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Команда /config
@@ -891,48 +825,48 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         from app.scheduler import scheduler
+        from app import settings
         
         text = "<b>⚙️ КОНФИГУРАЦИЯ СИСТЕМЫ</b>\n\n"
         
-        # General
         text += "<b>🔧 GENERAL</b>\n"
-        text += f"Assets Mode: {getattr(config, "ASSETS", "All")}\n"
+        assets_mode = getattr(config, 'ASSETS', 'All')
+        text += f"Assets Mode: {assets_mode}\n"
         text += f"Posts per Hour: {config.whale.posts_per_hour_cap}\n"
         text += f"Poll Interval: {config.whale.poll_seconds}s\n"
-        text += f"Images: {'✅' if getattr(config.news, "image_download_enabled", True) else '❌'}\n\n"
+        images_enabled = getattr(config.news, 'image_download_enabled', True)
+        text += f"Images: {'✅' if images_enabled else '❌'}\n\n"
         
-        # Whale Monitoring
         text += "<b>🐋 WHALE MONITORING</b>\n"
         text += f"Smart Discovery: {'✅' if config.smart_discovery.enabled else '❌'}\n"
         text += f"Adaptive Thresholds: {'✅' if config.adaptive_thresholds.enabled else '❌'}\n"
         text += f"Performance Tracking: {'✅' if config.performance.tracking_enabled else '❌'}\n"
         text += f"Validation: {'✅' if config.validation.enabled else '❌'}\n\n"
         
-        # Trading System
         if scheduler.trading_enabled:
             text += "<b>📈 TRADING SYSTEM</b>\n"
-            text += f"Status: ✅ Enabled\n"
-            text += f"Signal Interval: {getattr(settings, 'TRADING_SIGNAL_INTERVAL_HOURS', 1)}h\n"
-            text += f"Position Update: {getattr(settings, 'POSITION_UPDATE_INTERVAL_SECONDS', 60)}s\n"
+            text += "Status: ✅ Enabled\n"
+            signal_interval = getattr(settings, 'TRADING_SIGNAL_INTERVAL_HOURS', 1)
+            text += f"Signal Interval: {signal_interval}h\n"
+            position_update = getattr(settings, 'POSITION_UPDATE_INTERVAL_SECONDS', 60)
+            text += f"Position Update: {position_update}s\n"
             
             monitored = getattr(settings, 'TRADING_MONITORED_ASSETS', [])
             text += f"Monitored Assets: {len(monitored)}\n"
         else:
             text += "<b>📈 TRADING SYSTEM</b>\n"
-            text += f"Status: ❌ Disabled\n"
+            text += "Status: ❌ Disabled\n"
         
         text += "\n"
         
-        # Multi-Chain
         if scheduler.chains_enabled:
-            text += f"<b>🌐 MULTI-CHAIN</b>\n"
-            text += f"Status: ✅ Enabled\n"
+            text += "<b>🌐 MULTI-CHAIN</b>\n"
+            text += "Status: ✅ Enabled\n"
             text += f"Chains: {', '.join(scheduler.supported_chains)}\n\n"
         
-        # Analytics
         if scheduler.analytics_enabled:
-            text += f"<b>📊 ANALYTICS</b>\n"
-            text += f"Status: ✅ Enabled\n\n"
+            text += "<b>📊 ANALYTICS</b>\n"
+            text += "Status: ✅ Enabled\n\n"
         
         await send_long_message(update, text)
         
@@ -992,7 +926,6 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Adaptive system не инициализирована")
             return
         
-        # Получаем данные BTC
         async with aiohttp.ClientSession() as session:
             url = "https://api.coingecko.com/api/v3/simple/price"
             params = {
@@ -1024,10 +957,11 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"<b>Bitcoin (7d):</b> {btc_7d:+.2f}%\n"
         text += f"<b>Bitcoin (24h):</b> {btc_24h:+.2f}%\n\n"
         
-        # Критерии
         text += "<b>Критерии:</b>\n"
-        text += f"• Bull: >+{getattr(config.adaptive_thresholds, "max_threshold", 70)}% (7d)\n"
-        text += f"• Bear: <{getattr(config.adaptive_thresholds, "min_threshold", 30)}% (7d)\n"
+        max_threshold = getattr(config.adaptive_thresholds, 'max_threshold', 70)
+        min_threshold = getattr(config.adaptive_thresholds, 'min_threshold', 30)
+        text += f"• Bull: >+{max_threshold}% (7d)\n"
+        text += f"• Bear: <{min_threshold}% (7d)\n"
         text += f"• Sideways: между ними\n"
         
         await update.message.reply_text(text, parse_mode='HTML')
@@ -1036,10 +970,6 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {e}")
         traceback.print_exc()
 
-
-# ============================================================================
-# ANALYTICS COMMANDS
-# ============================================================================
 
 async def cmd_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1064,7 +994,6 @@ async def cmd_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text = "<b>📊 АНАЛИТИКА ПО АКТИВАМ</b>\n\n"
         
-        # Топ активов по объему
         text += "<b>🔝 ТОП ПО ОБЪЕМУ (24ч)</b>\n"
         try:
             top_by_volume = scheduler.get_top_assets_by_volume(limit=10)
@@ -1120,7 +1049,6 @@ async def cmd_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"📊 Анализирую sentiment для {asset}...")
         
-        # Будущая реализация
         from app.analytics import get_analytics_engine
         
         analytics = get_analytics_engine()
@@ -1149,17 +1077,13 @@ async def cmd_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             text = f"❌ Не удалось получить sentiment для {asset}\n\n"
-            text += f"<i>Доступные активы: BTC, ETH, BNB, SOL, USDT</i>"
+            text += "<i>Доступные активы: BTC, ETH, BNB, SOL, USDT</i>"
             await update.message.reply_text(text, parse_mode='HTML')
 
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
-
-# ============================================================================
-# CONTROL COMMANDS
-# ============================================================================
 
 async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1195,7 +1119,6 @@ async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
 
-
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Команда /resume
@@ -1228,7 +1151,6 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
-
 
 
 async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1280,11 +1202,6 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
 
-
-# ============================================================================
-# ADMIN PANEL
-# ============================================================================
-
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Команда /admin
@@ -1324,10 +1241,6 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='HTML', reply_markup=reply_markup)
 
 
-# ============================================================================
-# CALLBACK HANDLERS
-# ============================================================================
-
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик inline кнопок"""
     
@@ -1336,7 +1249,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
-    # Создаём фейковый update для переиспользования команд
     fake_update = Update(update.update_id)
     fake_update._message = query.message
     fake_update._effective_user = query.from_user
@@ -1388,21 +1300,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
 
 
-# ============================================================================
-# ERROR HANDLER
-# ============================================================================
-
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Глобальный обработчик ошибок"""
     
     print(f"❌ [BOT] Exception while handling update {update}:")
     traceback.print_exc()
     
-    # Логируем ошибку
     if context.error:
         print(f"Error: {context.error}")
     
-    # Пытаемся уведомить пользователя
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
@@ -1412,10 +1318,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-
-# ============================================================================
-# HANDLER REGISTRATION
-# ============================================================================
 
 def register_handlers():
     """Регистрация всех обработчиков команд"""
@@ -1428,45 +1330,36 @@ def register_handlers():
     
     app = get_application()
     
-    # General commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("menu", cmd_menu))
     
-    # Whale monitoring
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("wallets", cmd_wallets))
     app.add_handler(CommandHandler("whales", cmd_whales))
     app.add_handler(CommandHandler("discover", cmd_discover))
     
-    # Trading system
     app.add_handler(CommandHandler("positions", cmd_positions))
     app.add_handler(CommandHandler("performance", cmd_performance))
     app.add_handler(CommandHandler("signal", cmd_signal))
     app.add_handler(CommandHandler("close", cmd_close_position))
     app.add_handler(CommandHandler("trades", cmd_trades))
     
-    # Configuration
     app.add_handler(CommandHandler("config", cmd_config))
     app.add_handler(CommandHandler("thresholds", cmd_thresholds))
     app.add_handler(CommandHandler("regime", cmd_regime))
     
-    # Analytics
     app.add_handler(CommandHandler("analytics", cmd_analytics))
     app.add_handler(CommandHandler("sentiment", cmd_sentiment))
     
-    # Control
     app.add_handler(CommandHandler("pause", cmd_pause))
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("logs", cmd_logs))
     
-    # Admin
     app.add_handler(CommandHandler("admin", cmd_admin))
     
-    # Callback handlers
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    # Error handler
     app.add_error_handler(error_handler)
     
     _handlers_registered = True
@@ -1481,10 +1374,6 @@ def register_handlers():
     print("   • Admin: 1 command")
 
 
-# ============================================================================
-# MAIN FUNCTION (для тестирования)
-# ============================================================================
-
 async def main():
     """Главная функция для standalone запуска бота"""
     
@@ -1492,12 +1381,10 @@ async def main():
     print("🤖 TELEGRAM BOT - STANDALONE MODE")
     print("="*80 + "\n")
     
-    # Регистрируем handlers
     register_handlers()
     
     app = get_application()
     
-    # Инициализируем и запускаем
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
@@ -1505,7 +1392,6 @@ async def main():
     print("✅ Bot is running...")
     print("Press Ctrl+C to stop\n")
     
-    # Ждём завершения
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
