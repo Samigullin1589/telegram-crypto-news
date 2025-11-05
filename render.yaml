@@ -1,50 +1,28 @@
-# render.yaml - ИСПРАВЛЕНО (04.11.2025)
-# Production-ready конфигурация для Render.com
-
 services:
-  # ========================================================================
-  # WEB SERVICE - Main Application
-  # ========================================================================
   - type: web
     name: crypto-compass
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    runtime: python
     
-    # Автодеплой при push в main
-    autoDeploy: true
-    
-    # Health check configuration
-    healthCheckPath: /health
-    
-    # Plan (можно изменить на standard/pro)
     plan: starter
-    
-    # Region (Frankfurt для EU, можно изменить)
     region: frankfurt
     
-    # ========================================================================
-    # КРИТИЧЕСКИЕ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
-    # ========================================================================
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python main.py
+    
+    autoDeploy: true
+    
+    healthCheckPath: /health
+    
     envVars:
-      # ----------------------------------------------------------------
-      # TELEGRAM BOT (REQUIRED - sync: false означает секретные)
-      # ----------------------------------------------------------------
       - key: TELEGRAM_BOT_TOKEN
         sync: false
-        # Получить: @BotFather в Telegram
       
       - key: TELEGRAM_CHANNEL_ID
         sync: false
-        # Формат: @channel_name или -100xxxxxxxxxx
       
       - key: ADMIN_CHAT_ID
         sync: false
-        # Ваш Telegram user ID
       
-      # ----------------------------------------------------------------
-      # RENDER CONFIGURATION (автоматически)
-      # ----------------------------------------------------------------
       - key: PORT
         value: "8000"
       
@@ -54,9 +32,6 @@ services:
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
       
-      # ----------------------------------------------------------------
-      # HTTP & TIMEOUT SETTINGS
-      # ----------------------------------------------------------------
       - key: HTTP_TIMEOUT
         value: "30"
       
@@ -66,20 +41,12 @@ services:
       - key: WEBHOOK_TIMEOUT
         value: "10"
       
-      # ----------------------------------------------------------------
-      # MEMORY MANAGEMENT (Render Free Tier = 512MB)
-      # ----------------------------------------------------------------
       - key: MAX_MEMORY_MB
         value: "450"
-        # Оставляем 62MB для system overhead
       
       - key: GC_INTERVAL_SECONDS
         value: "300"
-        # Garbage collection каждые 5 минут
       
-      # ----------------------------------------------------------------
-      # SYSTEM FEATURES
-      # ----------------------------------------------------------------
       - key: WHALE_ENABLED
         value: "true"
       
@@ -98,9 +65,6 @@ services:
       - key: HYPERLIQUID_ENABLED
         value: "true"
       
-      # ----------------------------------------------------------------
-      # MONITORING & HEALTH
-      # ----------------------------------------------------------------
       - key: HEALTH_CHECK_ENABLED
         value: "true"
       
@@ -116,9 +80,6 @@ services:
       - key: SEND_DAILY_STATS
         value: "true"
       
-      # ----------------------------------------------------------------
-      # RATE LIMITING & PERFORMANCE
-      # ----------------------------------------------------------------
       - key: POSTS_PER_HOUR_CAP
         value: "5"
       
@@ -131,9 +92,6 @@ services:
       - key: POLL_SECONDS
         value: "120"
       
-      # ----------------------------------------------------------------
-      # WHALE DETECTION
-      # ----------------------------------------------------------------
       - key: WHALE_MIN_VALUE_USD
         value: "50000"
       
@@ -146,20 +104,14 @@ services:
       - key: START_FROM_MINUTES_AGO
         value: "60"
       
-      # ----------------------------------------------------------------
-      # ENABLED CHAINS
-      # ----------------------------------------------------------------
       - key: ENABLED_CHAINS
         value: "ethereum,bsc,polygon,arbitrum,base,solana"
       
-      # ----------------------------------------------------------------
-      # RPC ENDPOINTS (бесплатные публичные)
-      # ----------------------------------------------------------------
       - key: ETHEREUM_RPC_URL
         value: "https://eth.llamarpc.com"
       
       - key: BSC_RPC_URL
-        value: "https://bsc-dataseed.binance.org"
+        value: "https://bsc-dataseed1.binance.org"
       
       - key: POLYGON_RPC_URL
         value: "https://polygon-rpc.com"
@@ -173,20 +125,14 @@ services:
       - key: SOLANA_RPC_URL
         value: "https://api.mainnet-beta.solana.com"
       
-      # ----------------------------------------------------------------
-      # API KEYS (опциональные, но рекомендуемые)
-      # ----------------------------------------------------------------
       - key: ETHERSCAN_API_KEY
         sync: false
-        # Получить: https://etherscan.io/apis
       
       - key: BSCSCAN_API_KEY
         sync: false
-        # Получить: https://bscscan.com/apis
       
       - key: POLYGONSCAN_API_KEY
         sync: false
-        # Получить: https://polygonscan.com/apis
       
       - key: ARBISCAN_API_KEY
         sync: false
@@ -196,26 +142,16 @@ services:
       
       - key: HELIUS_API_KEY
         sync: false
-        # Рекомендуется для Solana: https://helius.dev
       
       - key: COINGECKO_API_KEY
         sync: false
-        # Опционально для цен: https://coingecko.com/api
       
-      # ----------------------------------------------------------------
-      # AI KEYS (для новостей)
-      # ----------------------------------------------------------------
       - key: OPENAI_API_KEY
         sync: false
-        # Опционально для AI summaries
       
       - key: ANTHROPIC_API_KEY
         sync: false
-        # Альтернатива OpenAI
       
-      # ----------------------------------------------------------------
-      # HYPERLIQUID EXCHANGE
-      # ----------------------------------------------------------------
       - key: HYPERLIQUID_API_URL
         value: "https://api.hyperliquid.xyz"
       
@@ -234,18 +170,12 @@ services:
       - key: HYPERLIQUID_NOTIFY_LIQUIDATIONS
         value: "true"
       
-      # ----------------------------------------------------------------
-      # TRADING SYSTEM
-      # ----------------------------------------------------------------
       - key: TRADING_SIGNAL_INTERVAL_HOURS
         value: "1"
       
       - key: TRADING_MONITORED_ASSETS
         value: "BTC,ETH,SOL,BNB,XRP,ADA,AVAX,DOT,MATIC,LINK"
       
-      # ----------------------------------------------------------------
-      # SMART DISCOVERY
-      # ----------------------------------------------------------------
       - key: SMART_DISCOVERY_ENABLED
         value: "true"
       
@@ -255,9 +185,6 @@ services:
       - key: SMART_DISCOVERY_MAX_NEW_WALLETS
         value: "10"
       
-      # ----------------------------------------------------------------
-      # VALIDATION
-      # ----------------------------------------------------------------
       - key: VALIDATION_ENABLED
         value: "true"
       
@@ -267,27 +194,18 @@ services:
       - key: VALIDATION_MIN_SCORE_TO_KEEP
         value: "30"
       
-      # ----------------------------------------------------------------
-      # ADAPTIVE THRESHOLDS
-      # ----------------------------------------------------------------
       - key: ADAPTIVE_THRESHOLDS_ENABLED
         value: "true"
       
       - key: ADAPTIVE_BASE_MIN_CONFIDENCE
         value: "40"
       
-      # ----------------------------------------------------------------
-      # PERFORMANCE TRACKING
-      # ----------------------------------------------------------------
       - key: PERFORMANCE_TRACKING_ENABLED
         value: "true"
       
       - key: PERFORMANCE_SUCCESS_THRESHOLD
         value: "0.05"
       
-      # ----------------------------------------------------------------
-      # SOLANA RATE LIMITING (КРИТИЧНО!)
-      # ----------------------------------------------------------------
       - key: SOLANA_RATE_LIMIT_REQUESTS
         value: "50"
       
@@ -297,59 +215,20 @@ services:
       - key: SOLANA_RETRY_ON_429
         value: "1"
       
-      # ----------------------------------------------------------------
-      # PATHS (для Render Disk)
-      # ----------------------------------------------------------------
       - key: WALLET_DB_JSON_PATH
         value: "data/wallets/tracked_wallets.json"
       
       - key: STATE_FILE
         value: "data/state.json"
-
-# ============================================================================
-# DATABASES (опционально - для будущего использования)
-# ============================================================================
-databases:
-  # Пример PostgreSQL (если понадобится)
-  # - name: crypto-compass-db
-  #   databaseName: crypto_compass
-  #   user: crypto_compass_user
-  #   plan: starter
-  #   region: frankfurt
-
-# ============================================================================
-# NOTES
-# ============================================================================
-# 
-# SETUP INSTRUCTIONS:
-# 1. Fork this repository
-# 2. Создать сервис на Render.com
-# 3. Подключить GitHub repo
-# 4. Добавить секретные переменные через Render UI:
-#    - TELEGRAM_BOT_TOKEN
-#    - TELEGRAM_CHANNEL_ID
-#    - ADMIN_CHAT_ID
-#    - API keys (опционально)
-# 5. Deploy!
-#
-# WEBHOOK URL:
-# Автоматически будет: https://crypto-compass.onrender.com/webhook/telegram
-# Если изменили service name, обновите в коде
-#
-# PERSISTENT STORAGE:
-# Если нужно сохранять данные между деплоями:
-# 1. Добавить Render Disk в UI
-# 2. Mount path: /app/data
-# 3. Обновить DB_PATH в database.py
-#
-# MONITORING:
-# - Health: https://crypto-compass.onrender.com/health
-# - Logs: Render Dashboard → Logs
-#
-# SCALING:
-# Free tier имеет ограничения:
-# - 512MB RAM
-# - Sleeps after 15 min inactivity
-# - 750 hours/month
-#
-# Для production рекомендуется plan: starter или выше
+      
+      - key: LOG_LEVEL
+        value: "INFO"
+      
+      - key: SENTRY_DSN
+        sync: false
+      
+      - key: ENABLE_METRICS
+        value: "true"
+      
+      - key: METRICS_PORT
+        value: "9090"
