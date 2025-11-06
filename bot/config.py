@@ -1,4 +1,4 @@
-# bot/config.py - BOT CONFIG v4.0 FULL
+# bot/config.py - BOT CONFIG v4.1 - PRODUCTION READY
 
 import os
 from pathlib import Path
@@ -44,7 +44,7 @@ class Config:
             return
         
         print("\n" + "="*80)
-        print("⚙️  BOT CONFIG v4.0 - INITIALIZATION")
+        print("⚙️  BOT CONFIG v4.1 - INITIALIZATION")
         print("="*80 + "\n")
         
         self.TELEGRAM_BOT_TOKEN = self._get_required_env('TELEGRAM_BOT_TOKEN')
@@ -268,27 +268,7 @@ class Config:
         self.FEED_FETCH_TIMEOUT = 30
         self.RATE_LIMIT_DELAY_SECONDS = 60
         
-        mount_path = os.environ.get('RENDER_DISK_MOUNT_PATH', '/var/data')
-        db_dir = Path(mount_path)
-        
-        try:
-            db_dir.mkdir(parents=True, exist_ok=True)
-        except:
-            db_dir = Path('.')
-        
-        self.DB_PATH = db_dir / 'news_database.sqlite'
-        self.NEWS_DB_PATH = self.DB_PATH
-        self.DB_BACKUP_ENABLED = True
-        self.DB_BACKUP_INTERVAL_HOURS = 24
-        self.DB_MAX_AGE_DAYS = 90
-        
-        self.DATA_DIR = Path(mount_path) / 'data'
-        self.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        
-        self.STATE_FILE = self.DATA_DIR / 'state.json'
-        self.WALLET_DB_JSON_PATH = self.DATA_DIR / 'wallets.json'
-        self.CACHE_DIR = self.DATA_DIR / 'cache'
-        self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self._setup_paths()
         
         self.MIN_IMAGE_WIDTH = int(os.getenv('MIN_IMAGE_WIDTH', '400'))
         self.MIN_IMAGE_HEIGHT = int(os.getenv('MIN_IMAGE_HEIGHT', '200'))
@@ -328,7 +308,7 @@ class Config:
         self.VERBOSE_LOGGING = os.getenv('VERBOSE_LOGGING', 'false').lower() == 'true'
         self.DEBUG_MODE = os.getenv('DEBUG', 'false').lower() == 'true'
         self.LOG_FILE_ENABLED = os.getenv('LOG_FILE_ENABLED', 'false').lower() == 'true'
-        self.LOG_FILE_PATH = Path(mount_path) / 'logs' / 'bot.log'
+        self.LOG_FILE_PATH = self.DATA_DIR / 'logs' / 'bot.log'
         
         if self.LOG_FILE_ENABLED:
             self.LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -439,6 +419,37 @@ class Config:
         self._initialized = True
         self._validate_config()
         self._print_summary()
+    
+    def _setup_paths(self):
+        """Настройка путей к данным с fallback логикой"""
+        base_dir = Path.cwd()
+        
+        data_root = Path('data')
+        data_root.mkdir(parents=True, exist_ok=True)
+        
+        self.DATA_DIR = data_root
+        
+        self.DB_PATH = self.DATA_DIR / 'news_database.sqlite'
+        self.NEWS_DB_PATH = self.DB_PATH
+        self.DB_BACKUP_ENABLED = True
+        self.DB_BACKUP_INTERVAL_HOURS = 24
+        self.DB_MAX_AGE_DAYS = 90
+        
+        self.STATE_FILE = self.DATA_DIR / 'state.json'
+        self.WALLET_DB_JSON_PATH = self.DATA_DIR / 'wallets.json'
+        
+        self.CACHE_DIR = self.DATA_DIR / 'cache'
+        self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        
+        (self.DATA_DIR / 'history').mkdir(parents=True, exist_ok=True)
+        (self.DATA_DIR / 'learning').mkdir(parents=True, exist_ok=True)
+        (self.DATA_DIR / 'wallets').mkdir(parents=True, exist_ok=True)
+        (self.DATA_DIR / 'positions').mkdir(parents=True, exist_ok=True)
+        (self.DATA_DIR / 'performance').mkdir(parents=True, exist_ok=True)
+        (self.DATA_DIR / 'backups').mkdir(parents=True, exist_ok=True)
+        
+        print(f"✅ [PATHS] Data directory: {self.DATA_DIR.absolute()}")
+        print(f"✅ [PATHS] Database: {self.DB_PATH.absolute()}")
     
     def _get_required_env(self, key: str) -> str:
         value = os.getenv(key)
