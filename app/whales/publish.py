@@ -1,24 +1,11 @@
+# app/whales/publish.py
 """
 WHALE PUBLISHER v3.0
 Unified publishing system for whale events and trading signals
-
-ВОЗМОЖНОСТИ:
-✅ Whale Event Publishing
-✅ Trading Signal Publishing
-✅ Alert Publishing
-✅ HTML Formatting (более надёжный чем Markdown)
-✅ Advanced Error Handling
-✅ Rate Limiting Awareness
-✅ Rich Formatting with Emojis
-✅ Inline Keyboards
-✅ Chart Integration
-✅ News Integration
-✅ Analytics Integration
-✅ Multiple Fallback Strategies
 """
 
 import asyncio
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional
 from datetime import datetime, timezone
 from pathlib import Path
 import traceback
@@ -27,7 +14,7 @@ import telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError, BadRequest, TimedOut, NetworkError
 
-from app import settings
+from app.config import config
 from app.whales.normalize import WhaleEvent
 
 
@@ -62,39 +49,23 @@ class PublishingMetrics:
 
 
 class WhalePublisher:
-    """
-    Универсальный издатель для всех типов контента
-    
-    Поддерживает:
-    - Whale events (крупные перемещения)
-    - Trading signals (торговые сигналы)
-    - Alerts (системные уведомления)
-    - Analytics reports (аналитические отчёты)
-    """
+    """Универсальный издатель для всех типов контента"""
     
     def __init__(self):
         """Инициализация publisher"""
         
-        # Telegram bot
-        self.bot = telegram.Bot(token=settings.TELEGRAM_TOKEN)
-        self.chat_id = settings.CHAT_ID
+        self.bot = telegram.Bot(token=config.telegram.bot_token)
+        self.chat_id = config.telegram.channel_id
         
-        # Metrics
         self.metrics = PublishingMetrics()
         
-        # Rate limiting awareness
         self.last_publish = None
-        self.min_interval = 2.0  # Минимум 2 секунды между публикациями
+        self.min_interval = 2.0
         
-        # Retry settings
         self.max_retries = 3
         self.retry_delay = 5
         
         print("📢 [PUBLISHER] Инициализирован")
-    
-    # ========================================================================
-    # WHALE EVENT PUBLISHING
-    # ========================================================================
     
     async def publish_whale_event(
         self,
@@ -104,31 +75,14 @@ class WhalePublisher:
         news: List[Dict],
         chart_path: Optional[str] = None
     ) -> bool:
-        """
-        Публикация события кита в канал
-        
-        Args:
-            event: Событие перемещения
-            verdict: Вердикт (bullish/bearish/neutral)
-            confidence: Уверенность 0-100
-            news: Список релевантных новостей
-            chart_path: Путь к графику (опционально)
-        
-        Returns:
-            bool: True если успешно опубликовано
-        """
+        """Публикация события кита в канал"""
         
         try:
-            # Rate limiting
             await self._respect_rate_limit()
             
-            # Форматируем сообщение
             message = self._format_whale_message(event, verdict, confidence, news)
-            
-            # Создаём клавиатуру
             keyboard = self._create_whale_keyboard(event, news)
             
-            # Публикуем
             success = await self._publish_with_retry(
                 message=message,
                 keyboard=keyboard,
@@ -156,13 +110,8 @@ class WhalePublisher:
         confidence: int,
         news: List[Dict]
     ) -> str:
-        """
-        Форматирует сообщение о whale событии в HTML
+        """Форматирует сообщение о whale событии в HTML"""
         
-        HTML более надёжен чем Markdown и поддерживает больше возможностей
-        """
-        
-        # Эмодзи для вердикта
         verdict_emoji = {
             "bullish": "🟢",
             "bearish": "🔴",
@@ -171,13 +120,11 @@ class WhalePublisher:
         
         emoji = verdict_emoji.get(verdict, "⚪")
         
-        # Заголовок
         lines = [
             f"{emoji} <b>КРУПНЫЙ ПЕРЕВОД: {event.asset}</b>",
             ""
         ]
         
-        # Основная информация
         lines.append("<b>💰 ФАКТ:</b>")
         lines.append(
             f"• Сумма: <code>{event.amount_native:,.2f} {event.asset}</code> "
@@ -187,7 +134,6 @@ class WhalePublisher:
         lines.append(f"• Время: {event.tx_time_utc.strftime('%Y-%m-%d %H:%M UTC')}")
         lines.append("")
         
-        # Контекст рынка
         lines.append("<b>📊 КОНТЕКСТ РЫНКА:</b>")
         
         if event.market:
@@ -210,7 +156,6 @@ class WhalePublisher:
         
         lines.append("")
         
-        # Фаза и кластер
         lines.append("<b>🔍 АНАЛИЗ:</b>")
         lines.append(f"• Фаза: {self._format_phase(event)}")
         
@@ -221,19 +166,17 @@ class WhalePublisher:
             )
             if event.cluster.total_amount_native:
                 lines.append(
-                    f"• Общая сумма кластера: "
+                    f"• Общая сумма: "
                     f"{event.cluster.total_amount_native:,.2f} {event.asset}"
                 )
         
         lines.append("")
         
-        # Историческая справка
         if event.history_hint and event.history_hint.d1h is not None:
             lines.append("<b>📜 ИСТОРИЯ:</b>")
             lines.append(f"• В прошлый раз: {self._format_history(event.history_hint)}")
             lines.append("")
         
-        # Analytics (если доступны)
         if hasattr(event, 'analytics') and event.analytics:
             lines.append("<b>🧠 ANALYTICS:</b>")
             
@@ -252,14 +195,12 @@ class WhalePublisher:
             
             lines.append("")
         
-        # Торговый план
         lines.append("<b>📈 ТОРГОВЫЙ ПЛАН:</b>")
         trade_plan = self._generate_trade_plan(event, verdict)
         for plan_line in trade_plan:
             lines.append(f"• {plan_line}")
         lines.append("")
         
-        # Вердикт
         verdict_map = {
             "bullish": "🐂 Бычий",
             "bearish": "🐻 Медвежий",
@@ -273,7 +214,6 @@ class WhalePublisher:
         lines.append(f"<b>Горизонт:</b> 4-8 часов")
         lines.append("")
         
-        # Новости
         if news:
             lines.append("<b>📰 РЕЛЕВАНТНЫЕ НОВОСТИ:</b>")
             for i, n in enumerate(news[:3], 1):
@@ -281,7 +221,6 @@ class WhalePublisher:
                 lines.append(f"{i}. {title}...")
             lines.append("")
         
-        # Дисклеймер
         lines.append("─" * 40)
         lines.append("")
         lines.append("<b>⚠️ ДИСКЛЕЙМЕР:</b>")
@@ -289,8 +228,7 @@ class WhalePublisher:
             "<i>Это НЕ финансовая рекомендация. Информация предоставляется "
             "исключительно в образовательных целях. Возможна внутренняя "
             "консолидация, bridge-перевод или реорганизация. Всегда проводите "
-            "собственное исследование (DYOR) и консультируйтесь с финансовым "
-            "советником перед принятием инвестиционных решений.</i>"
+            "собственное исследование (DYOR).</i>"
         )
         
         return "\n".join(lines)
@@ -309,7 +247,6 @@ class WhalePublisher:
         
         base_direction = direction_map.get(event.direction, "Перемещение")
         
-        # Добавляем детали из labels
         to_labels = event.labels.get("to", [])
         if to_labels:
             best_label = max(to_labels, key=lambda l: l.confidence)
@@ -322,10 +259,10 @@ class WhalePublisher:
         """Форматирует фазу движения"""
         
         phase_map = {
-            "activation": "🔥 Активация (первое движение)",
+            "activation": "🔥 Активация",
             "transfer_cluster": "📊 Кластер переводов",
             "deposit_confirmed": "✅ Подтверждённый депозит",
-            "execution": "⚡ Исполнение на рынке",
+            "execution": "⚡ Исполнение",
             "accumulation": "📈 Аккумуляция",
             "distribution": "📉 Распределение"
         }
@@ -363,24 +300,24 @@ class WhalePublisher:
         
         if verdict == "bearish":
             plan.extend([
-                "<b>Вход:</b> Продажа при пробое поддержки (M5-M15)",
-                "<b>Stop-Loss:</b> Выше локального максимума + спред",
+                "<b>Вход:</b> Продажа при пробое поддержки",
+                "<b>Stop-Loss:</b> Выше локального максимума",
                 "<b>Take-Profit:</b> Следующий уровень поддержки",
-                "<b>Инвалидация:</b> Возврат выше VWAP(M5)"
+                "<b>Инвалидация:</b> Возврат выше VWAP"
             ])
         
         elif verdict == "bullish":
             plan.extend([
-                "<b>Вход:</b> Покупка при удержании уровня (M5-M15)",
-                "<b>Stop-Loss:</b> Ниже локального минимума + спред",
+                "<b>Вход:</b> Покупка при удержании уровня",
+                "<b>Stop-Loss:</b> Ниже локального минимума",
                 "<b>Take-Profit:</b> Следующий уровень сопротивления",
                 "<b>Инвалидация:</b> Пробой локального минимума"
             ])
         
         else:
             plan.extend([
-                "<b>Стратегия:</b> Наблюдение, дожидаемся подтверждения",
-                "<b>Условие входа:</b> Подтверждение направления на объёме",
+                "<b>Стратегия:</b> Наблюдение",
+                "<b>Условие входа:</b> Подтверждение направления",
                 "<b>Инвалидация:</b> Отсутствие движения 2-4 часа"
             ])
         
@@ -395,7 +332,6 @@ class WhalePublisher:
         
         buttons = []
         
-        # Первый ряд: ссылки на транзакцию и адреса
         row1 = []
         
         if event.links.get("tx"):
@@ -410,7 +346,6 @@ class WhalePublisher:
         if row1:
             buttons.append(row1)
         
-        # Второй ряд: новости
         if news:
             row2 = []
             for i, n in enumerate(news[:2], 1):
@@ -418,19 +353,16 @@ class WhalePublisher:
                 row2.append(InlineKeyboardButton(title, url=n["url"]))
             buttons.append(row2)
         
-        # Третий ряд: график TradingView
         tv_symbol = self._get_tradingview_symbol(event.asset, event.chain)
         buttons.append([
             InlineKeyboardButton(
-                "📊 График на TradingView",
+                "📊 График TradingView",
                 url=f"https://www.tradingview.com/chart/?symbol={tv_symbol}"
             )
         ])
         
-        # Четвёртый ряд: дополнительные ссылки
         row4 = []
         
-        # CoinGecko
         coingecko_id = self._get_coingecko_id(event.asset)
         if coingecko_id:
             row4.append(InlineKeyboardButton(
@@ -438,7 +370,6 @@ class WhalePublisher:
                 url=f"https://www.coingecko.com/en/coins/{coingecko_id}"
             ))
         
-        # CoinMarketCap
         row4.append(InlineKeyboardButton(
             "💹 CMC",
             url=f"https://coinmarketcap.com/currencies/{event.asset.lower()}/"
@@ -449,31 +380,16 @@ class WhalePublisher:
         
         return InlineKeyboardMarkup(buttons)
     
-    # ========================================================================
-    # TRADING SIGNAL PUBLISHING
-    # ========================================================================
-    
     async def publish_trading_signal(
         self,
         message: str,
         parse_mode: str = 'HTML'
     ) -> bool:
-        """
-        Публикация торгового сигнала
-        
-        Args:
-            message: Отформатированное сообщение (уже содержит все детали)
-            parse_mode: Режим парсинга ('HTML' или 'Markdown')
-        
-        Returns:
-            bool: True если успешно опубликовано
-        """
+        """Публикация торгового сигнала"""
         
         try:
-            # Rate limiting
             await self._respect_rate_limit()
             
-            # Публикуем
             success = await self._publish_with_retry(
                 message=message,
                 keyboard=None,
@@ -483,20 +399,14 @@ class WhalePublisher:
             
             if success:
                 print(f"✅ [PUBLISH] Trading Signal")
-            else:
-                print(f"❌ [PUBLISH] Failed: Trading Signal")
             
             return success
         
         except Exception as e:
-            print(f"❌ [PUBLISH] Ошибка публикации trading signal: {e}")
+            print(f"❌ [PUBLISH] Ошибка: {e}")
             traceback.print_exc()
             self.metrics.record_attempt(False, "trading_signal_error")
             return False
-    
-    # ========================================================================
-    # GENERIC PUBLISHING
-    # ========================================================================
     
     async def publish_message(
         self,
@@ -505,18 +415,7 @@ class WhalePublisher:
         keyboard: Optional[InlineKeyboardMarkup] = None,
         disable_preview: bool = True
     ) -> bool:
-        """
-        Универсальная публикация сообщения
-        
-        Args:
-            message: Текст сообщения
-            parse_mode: Режим парсинга
-            keyboard: Inline клавиатура (опционально)
-            disable_preview: Отключить превью ссылок
-        
-        Returns:
-            bool: True если успешно
-        """
+        """Универсальная публикация сообщения"""
         
         try:
             await self._respect_rate_limit()
@@ -534,10 +433,6 @@ class WhalePublisher:
             self.metrics.record_attempt(False, "generic_error")
             return False
     
-    # ========================================================================
-    # INTERNAL HELPERS
-    # ========================================================================
-    
     async def _publish_with_retry(
         self,
         message: str,
@@ -546,21 +441,11 @@ class WhalePublisher:
         parse_mode: str = 'HTML',
         disable_preview: bool = True
     ) -> bool:
-        """
-        Публикация с retry логикой и fallback стратегиями
-        
-        Стратегии fallback:
-        1. Попытка с заданным parse_mode
-        2. Попытка без parse_mode (plain text)
-        3. Попытка без клавиатуры
-        4. Сокращённое сообщение
-        """
+        """Публикация с retry логикой"""
         
         for attempt in range(self.max_retries):
             try:
-                # Попытка публикации
                 if chart_path and Path(chart_path).exists():
-                    # С изображением
                     with open(chart_path, 'rb') as photo:
                         await self.bot.send_photo(
                             chat_id=self.chat_id,
@@ -570,7 +455,6 @@ class WhalePublisher:
                             reply_markup=keyboard
                         )
                 else:
-                    # Только текст
                     await self.bot.send_message(
                         chat_id=self.chat_id,
                         text=message,
@@ -579,18 +463,15 @@ class WhalePublisher:
                         reply_markup=keyboard
                     )
                 
-                # Успех
                 self.metrics.record_attempt(True)
                 return True
             
             except BadRequest as e:
                 error_msg = str(e).lower()
                 
-                # Проблема с форматированием
                 if 'parse' in error_msg or 'entities' in error_msg:
-                    print(f"⚠️ [PUBLISH] Ошибка форматирования, попытка без parse_mode...")
+                    print(f"⚠️ [PUBLISH] Ошибка форматирования, без parse_mode...")
                     
-                    # Убираем HTML теги
                     message_plain = self._strip_html(message)
                     
                     try:
@@ -616,10 +497,9 @@ class WhalePublisher:
                         return True
                     
                     except Exception as e2:
-                        print(f"⚠️ [PUBLISH] Plain text также не удался: {e2}")
+                        print(f"⚠️ [PUBLISH] Plain text не удался: {e2}")
                 
-                # Слишком длинное сообщение
-                elif 'too long' in error_msg or 'message is too long' in error_msg:
+                elif 'too long' in error_msg:
                     print(f"⚠️ [PUBLISH] Сообщение слишком длинное, сокращаем...")
                     message = self._truncate_message(message, 4000)
                     continue
@@ -635,7 +515,7 @@ class WhalePublisher:
                 continue
             
             except NetworkError as e:
-                print(f"⚠️ [PUBLISH] Network error: {e}, попытка {attempt + 1}/{self.max_retries}...")
+                print(f"⚠️ [PUBLISH] Network error, попытка {attempt + 1}/{self.max_retries}...")
                 await asyncio.sleep(self.retry_delay * (attempt + 1))
                 continue
             
@@ -650,13 +530,12 @@ class WhalePublisher:
                 self.metrics.record_attempt(False, "unexpected_error")
                 return False
         
-        # Все попытки исчерпаны
-        print(f"❌ [PUBLISH] Не удалось опубликовать после {self.max_retries} попыток")
+        print(f"❌ [PUBLISH] Не удалось после {self.max_retries} попыток")
         self.metrics.record_attempt(False, "max_retries_exceeded")
         return False
     
     async def _respect_rate_limit(self):
-        """Соблюдение rate limit между публикациями"""
+        """Соблюдение rate limit"""
         
         if self.last_publish:
             elapsed = (datetime.now(timezone.utc) - self.last_publish).total_seconds()
@@ -672,10 +551,8 @@ class WhalePublisher:
         
         import re
         
-        # Удаляем HTML теги
         text = re.sub(r'<[^>]+>', '', text)
         
-        # Декодируем HTML entities
         text = text.replace('&lt;', '<')
         text = text.replace('&gt;', '>')
         text = text.replace('&amp;', '&')
@@ -685,15 +562,13 @@ class WhalePublisher:
         return text
     
     def _truncate_message(self, message: str, max_length: int) -> str:
-        """Сокращает сообщение до заданной длины"""
+        """Сокращает сообщение"""
         
         if len(message) <= max_length:
             return message
         
-        # Обрезаем с запасом для "..."
         truncated = message[:max_length - 50]
         
-        # Находим последний перевод строки
         last_newline = truncated.rfind('\n')
         if last_newline > 0:
             truncated = truncated[:last_newline]
@@ -705,7 +580,6 @@ class WhalePublisher:
     def _get_tradingview_symbol(self, asset: str, chain: str) -> str:
         """Получает символ для TradingView"""
         
-        # Для большинства активов используем Binance
         if chain in ['ethereum', 'bsc', 'polygon']:
             return f"BINANCE:{asset}USDT"
         elif chain == 'solana':
@@ -714,9 +588,8 @@ class WhalePublisher:
             return f"BINANCE:{asset}USDT"
     
     def _get_coingecko_id(self, asset: str) -> Optional[str]:
-        """Получает CoinGecko ID для актива"""
+        """Получает CoinGecko ID"""
         
-        # Маппинг популярных активов
         mapping = {
             "BTC": "bitcoin",
             "ETH": "ethereum",
@@ -738,12 +611,8 @@ class WhalePublisher:
         
         return mapping.get(asset, asset.lower())
     
-    # ========================================================================
-    # METRICS & STATS
-    # ========================================================================
-    
     def get_stats(self) -> Dict:
-        """Получение статистики публикаций"""
+        """Получение статистики"""
         
         return {
             "total_attempts": self.metrics.total_attempts,
@@ -763,15 +632,8 @@ class WhalePublisher:
         print("\n" + "="*80)
         print("📊 PUBLISHER STATISTICS")
         print("="*80)
-        print(f"Total Attempts: {stats['total_attempts']}")
+        print(f"Total: {stats['total_attempts']}")
         print(f"Successful: {stats['successful']}")
         print(f"Failed: {stats['failed']}")
         print(f"Success Rate: {stats['success_rate']:.1f}%")
-        print(f"Markdown Fallbacks: {stats['markdown_fallbacks']}")
-        
-        if stats['errors_by_type']:
-            print("\nErrors by Type:")
-            for error_type, count in stats['errors_by_type'].items():
-                print(f"  • {error_type}: {count}")
-        
         print("="*80 + "\n")
