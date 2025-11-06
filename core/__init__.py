@@ -1,24 +1,18 @@
+# core/__init__.py
 """
-Core module for Integrated Crypto Monitor v4.5
-
-Production-grade core components:
-- ChainRateLimiter: Adaptive rate limiting for blockchain RPC endpoints
-- ResourceMonitor: System resource monitoring and management
-- SystemHealthMonitor: Health tracking for all subsystems
-- HTTPServer: Health check and webhook HTTP server
+Core system components
 """
 
-__version__ = '4.5.0'
-__author__ = 'Crypto Compass Team'
-
-from .rate_limiter import ChainRateLimiter
-from .resource_monitor import ResourceMonitor
-from .health_monitor import SystemHealthMonitor
-from .http_server import HTTPServer
+from core.monitor import IntegratedCryptoMonitor
+from core.startup import StartupValidator
+from core.rate_limiter import ChainRateLimiter
+from core.resource_monitor import ResourceMonitor
+from core.health_monitor import SystemHealthMonitor
 
 __all__ = [
+    'IntegratedCryptoMonitor',
+    'StartupValidator',
     'ChainRateLimiter',
     'ResourceMonitor',
-    'SystemHealthMonitor',
-    'HTTPServer',
+    'SystemHealthMonitor'
 ]
