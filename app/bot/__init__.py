@@ -16,7 +16,7 @@ def get_application() -> Application:
     global _application, _bot
     
     if _application is None:
-        token = config.telegram.bot_token
+        token = config.telegram.token
         _application = Application.builder().token(token).build()
         _bot = _application.bot
         print("✅ [BOT] Telegram bot initialized")
