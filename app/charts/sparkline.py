@@ -1,4 +1,9 @@
 # app/charts/sparkline.py
+"""
+Sparkline Chart Renderer
+Renders price charts using matplotlib and CCXT
+"""
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -6,13 +11,36 @@ from datetime import datetime
 from typing import Optional, List
 import ccxt
 import asyncio
-from app import settings
+
+from app.config import config
+
 
 class SparklineRenderer:
     """Рендерер графиков (matplotlib + CCXT)"""
     
     def __init__(self):
-        self.exchange_preference = settings.EXCHANGE_PREFERENCE
+        self.exchange_preference = self._get_exchange_preference()
+        self.chart_theme = self._get_chart_theme()
+    
+    def _get_exchange_preference(self) -> List[str]:
+        """Получает список предпочитаемых бирж"""
+        try:
+            if hasattr(config, 'EXCHANGE_PREFERENCE'):
+                return config.EXCHANGE_PREFERENCE
+        except:
+            pass
+        
+        return ['binance', 'okx', 'bybit', 'coinbase', 'kraken']
+    
+    def _get_chart_theme(self) -> str:
+        """Получает тему графика"""
+        try:
+            if hasattr(config, 'CHART_THEME'):
+                return config.CHART_THEME
+        except:
+            pass
+        
+        return 'dark'
     
     async def render(self, asset: str, tx_time: datetime, output_path: str) -> bool:
         """Создаёт график с 30s timeout"""
@@ -42,7 +70,7 @@ class SparklineRenderer:
             
             fig, ax = plt.subplots(figsize=(10, 4))
             
-            if settings.CHART_THEME == 'dark':
+            if self.chart_theme == 'dark':
                 fig.patch.set_facecolor('#1e1e1e')
                 ax.set_facecolor('#2d2d2d')
                 text_color = '#ffffff'
@@ -90,7 +118,7 @@ class SparklineRenderer:
         """Получает OHLCV через CCXT"""
         symbol = f"{asset}/USDT"
         timeframe = '5m'
-        limit = 288  # 24 часа
+        limit = 288
         
         for exchange_id in self.exchange_preference:
             try:
