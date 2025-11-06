@@ -3,6 +3,7 @@
 Главный движок Discovery Engine
 """
 
+import os
 import aiohttp
 import asyncio
 from typing import Dict, List, Set, Optional
