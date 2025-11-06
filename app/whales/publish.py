@@ -54,7 +54,7 @@ class WhalePublisher:
     def __init__(self):
         """Инициализация publisher"""
         
-        self.bot = telegram.Bot(token=config.telegram.bot_token)
+        self.bot = telegram.Bot(token=config.telegram.token)
         self.chat_id = config.telegram.channel_id
         
         self.metrics = PublishingMetrics()
