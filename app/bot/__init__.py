@@ -32,6 +32,11 @@ def get_bot():
     return _bot
 
 
+def handlers_registered() -> bool:
+    """Проверяет зарегистрированы ли handlers"""
+    return _handlers_registered
+
+
 def register_all_handlers():
     """Регистрация всех обработчиков"""
     global _handlers_registered
@@ -50,4 +55,11 @@ def register_all_handlers():
 application = get_application()
 bot = get_bot()
 
-__all__ = ['application', 'bot', 'get_application', 'get_bot', 'register_all_handlers']
+__all__ = [
+    'application',
+    'bot',
+    'get_application',
+    'get_bot',
+    'register_all_handlers',
+    'handlers_registered'
+]
