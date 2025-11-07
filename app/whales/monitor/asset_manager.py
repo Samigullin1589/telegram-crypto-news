@@ -1,6 +1,6 @@
 # app/whales/monitor/asset_manager.py
 """
-Dynamic Asset Manager v1.0
+Dynamic Asset Manager v1.1
 Auto-updates top crypto assets from CoinGecko
 """
 
@@ -63,7 +63,9 @@ class AssetManager:
                     
                     print(f"✅ [ASSETS] Обновлено: {len(self.top_assets)} активов")
                 else:
-                    print(f"⚠️ [ASSETS] Не удалось обновить, используем кэш")
+                    print(f"⚠️ [ASSETS] Не удалось обновить, используем дефолт")
+                    if not self.top_assets:
+                        self.top_assets = self.default_assets.copy()
         
         except Exception as e:
             print(f"❌ [ASSETS] Ошибка обновления: {e}")
@@ -83,18 +85,20 @@ class AssetManager:
             params = {
                 'vs_currency': 'usd',
                 'order': 'market_cap_desc',
-                'per_page': min(top_n, 250),
-                'page': 1,
-                'sparkline': False,
+                'per_page': str(min(top_n, 250)),
+                'page': '1',
+                'sparkline': 'false',
                 'locale': 'en'
             }
             
             async with session.get(url, params=params, timeout=30) as response:
                 if response.status == 429:
+                    print(f"⏱️ [ASSETS] Rate limit, жду 60s...")
                     await asyncio.sleep(60)
                     return []
                 
                 if response.status != 200:
+                    print(f"⚠️ [ASSETS] HTTP {response.status}")
                     return []
                 
                 data = await response.json()
