@@ -1,6 +1,7 @@
 # app/whales/monitor/evm_provider.py
 """
-EVM Chain Provider (Ethereum, BSC, Base, Arbitrum, Polygon)
+EVM Chain Provider v2.0 (Ethereum, BSC, Base, Arbitrum, Polygon)
+Optimized for production with better error handling
 """
 
 import asyncio
@@ -29,12 +30,26 @@ class EVMProvider:
             "polygon": "https://polygon-rpc.com"
         }
         
+        self.fallback_rpc = {
+            "ethereum": "https://rpc.ankr.com/eth",
+            "bsc": "https://rpc.ankr.com/bsc",
+            "base": "https://base.blockpi.network/v1/rpc/public",
+            "arbitrum": "https://rpc.ankr.com/arbitrum",
+            "polygon": "https://rpc.ankr.com/polygon"
+        }
+        
         self.chain_configs = {
             "ethereum": {"native": "ETH", "decimals": 18, "block_time": 12},
             "bsc": {"native": "BNB", "decimals": 18, "block_time": 3},
             "base": {"native": "ETH", "decimals": 18, "block_time": 2},
             "arbitrum": {"native": "ETH", "decimals": 18, "block_time": 0.25},
             "polygon": {"native": "MATIC", "decimals": 18, "block_time": 2}
+        }
+        
+        self.fallback_prices = {
+            "ETH": 2500,
+            "BNB": 400,
+            "MATIC": 0.8
         }
     
     async def fetch_events(
@@ -71,16 +86,18 @@ class EVMProvider:
             chain_config = self.chain_configs[chain]
             block_time = chain_config["block_time"]
             blocks_to_scan = int((time_window_minutes * 60) / block_time)
-            blocks_to_scan = min(blocks_to_scan, 100)
+            blocks_to_scan = min(blocks_to_scan, 50)
             
             start_block = max(latest_block - blocks_to_scan, 0)
             
-            for block_num in range(start_block, latest_block, 10):
-                batch_size = min(10, latest_block - block_num)
+            batch_size = 5
+            
+            for block_num in range(start_block, latest_block, batch_size):
+                actual_batch = min(batch_size, latest_block - block_num)
                 
                 block_tasks = [
                     self._get_block_with_txs(chain, block_num + i)
-                    for i in range(batch_size)
+                    for i in range(actual_batch)
                 ]
                 
                 blocks = await asyncio.gather(*block_tasks, return_exceptions=True)
@@ -102,7 +119,7 @@ class EVMProvider:
                             events.append(event)
                             self.tx_cache.add(tx_hash)
                 
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
         
         except Exception as e:
             print(f"❌ [EVM] Ошибка {chain}: {e}")
@@ -110,66 +127,99 @@ class EVMProvider:
         return events
     
     async def _get_latest_block(self, chain: str) -> Optional[int]:
-        """Получает номер последнего блока"""
+        """Получает номер последнего блока с fallback"""
         
-        try:
-            rpc_url = self.rpc_endpoints[chain]
-            
-            rpc_payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_blockNumber",
-                "params": [],
-                "id": 1
-            }
-            
-            headers = {"Content-Type": "application/json"}
-            
-            async with self.session.post(rpc_url, json=rpc_payload, headers=headers) as response:
-                response.raise_for_status()
-                data = await response.json()
-                
-                if "error" in data:
-                    return None
-                
-                result = data.get("result", "0x0")
-                if isinstance(result, str) and result.startswith("0x"):
-                    return int(result, 16)
-                
-                return None
+        rpc_urls = [
+            self.rpc_endpoints[chain],
+            self.fallback_rpc.get(chain)
+        ]
         
-        except Exception:
-            return None
+        for rpc_url in rpc_urls:
+            if not rpc_url:
+                continue
+            
+            try:
+                rpc_payload = {
+                    "jsonrpc": "2.0",
+                    "method": "eth_blockNumber",
+                    "params": [],
+                    "id": 1
+                }
+                
+                headers = {"Content-Type": "application/json"}
+                
+                async with self.session.post(
+                    rpc_url,
+                    json=rpc_payload,
+                    headers=headers,
+                    timeout=15
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    
+                    if "error" in data:
+                        continue
+                    
+                    result = data.get("result", "0x0")
+                    if isinstance(result, str) and result.startswith("0x"):
+                        return int(result, 16)
+            
+            except asyncio.TimeoutError:
+                print(f"⏱️ [EVM] {chain} timeout on {rpc_url}")
+                continue
+            
+            except Exception:
+                continue
+        
+        return None
     
     async def _get_block_with_txs(
         self,
         chain: str,
         block_num: int
     ) -> Optional[Dict]:
-        """Получает блок с транзакциями"""
+        """Получает блок с транзакциями (оптимизировано)"""
         
-        try:
-            rpc_url = self.rpc_endpoints[chain]
-            
-            rpc_payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_getBlockByNumber",
-                "params": [hex(block_num), True],
-                "id": 1
-            }
-            
-            headers = {"Content-Type": "application/json"}
-            
-            async with self.session.post(rpc_url, json=rpc_payload, headers=headers, timeout=10) as response:
-                response.raise_for_status()
-                data = await response.json()
-                
-                if "error" in data:
-                    return None
-                
-                return data.get("result")
+        rpc_urls = [
+            self.rpc_endpoints[chain],
+            self.fallback_rpc.get(chain)
+        ]
         
-        except Exception:
-            return None
+        for rpc_url in rpc_urls:
+            if not rpc_url:
+                continue
+            
+            try:
+                rpc_payload = {
+                    "jsonrpc": "2.0",
+                    "method": "eth_getBlockByNumber",
+                    "params": [hex(block_num), True],
+                    "id": 1
+                }
+                
+                headers = {"Content-Type": "application/json"}
+                
+                async with self.session.post(
+                    rpc_url,
+                    json=rpc_payload,
+                    headers=headers,
+                    timeout=20
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    
+                    if "error" in data:
+                        continue
+                    
+                    return data.get("result")
+            
+            except asyncio.TimeoutError:
+                continue
+            
+            except Exception:
+                continue
+        
+        return None
     
     async def _parse_native_transaction(
         self,
@@ -186,7 +236,14 @@ class EVMProvider:
                 return None
             
             value_hex = tx.get("value", "0x0")
-            value_wei = int(value_hex, 16)
+            
+            if not isinstance(value_hex, str):
+                return None
+            
+            try:
+                value_wei = int(value_hex, 16)
+            except (ValueError, TypeError):
+                return None
             
             if value_wei == 0:
                 return None
@@ -197,23 +254,23 @@ class EVMProvider:
             
             amount = value_wei / (10 ** decimals)
             
-            fallback_prices = {
-                "ETH": 2500,
-                "BNB": 400,
-                "MATIC": 0.8
-            }
-            
-            price = fallback_prices.get(native_token, 2000)
+            price = self.fallback_prices.get(native_token, 2000)
             amount_usd = amount * price
             
             min_threshold = getattr(config.whale, 'min_usd_threshold', 50000)
             if amount_usd < min_threshold:
                 return None
             
-            timestamp_hex = tx.get("timestamp")
-            if timestamp_hex:
-                timestamp = int(timestamp_hex, 16)
-                tx_time = datetime.fromtimestamp(timestamp)
+            block_time_unix = tx.get("timestamp")
+            if block_time_unix:
+                try:
+                    if isinstance(block_time_unix, str):
+                        timestamp = int(block_time_unix, 16)
+                    else:
+                        timestamp = int(block_time_unix)
+                    tx_time = datetime.fromtimestamp(timestamp)
+                except (ValueError, TypeError, OSError):
+                    tx_time = datetime.utcnow()
             else:
                 tx_time = datetime.utcnow()
             
@@ -238,5 +295,5 @@ class EVMProvider:
             
             return event
         
-        except Exception:
+        except Exception as e:
             return None

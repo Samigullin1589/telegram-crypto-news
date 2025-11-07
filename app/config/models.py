@@ -69,7 +69,7 @@ class ChainConfig:
 @dataclass
 class WhaleConfig:
     """Whale detection configuration"""
-    min_usd_threshold: float = 50000.0
+    min_usd_threshold: float = 10000.0
     min_confidence_score: int = 6
     posts_per_hour_cap: int = 5
     poll_seconds: int = 120
@@ -129,8 +129,8 @@ class NewsConfig:
             'category': 'news'
         },
         {
-            'name': 'CryptoSlate',
-            'url': 'https://cryptoslate.com/feed/',
+            'name': 'Crypto Briefing',
+            'url': 'https://cryptobriefing.com/feed/',
             'category': 'news'
         },
         {
@@ -156,6 +156,31 @@ class NewsConfig:
         {
             'name': 'CryptoNews',
             'url': 'https://cryptonews.com/news/feed/',
+            'category': 'news'
+        },
+        {
+            'name': 'CryptoPotato',
+            'url': 'https://cryptopotato.com/feed/',
+            'category': 'news'
+        },
+        {
+            'name': 'Blockworks',
+            'url': 'https://blockworks.co/feed',
+            'category': 'news'
+        },
+        {
+            'name': 'CoinGape',
+            'url': 'https://coingape.com/feed/',
+            'category': 'news'
+        },
+        {
+            'name': 'AMBCrypto',
+            'url': 'https://ambcrypto.com/feed/',
+            'category': 'news'
+        },
+        {
+            'name': 'Crypto Daily',
+            'url': 'https://cryptodaily.co.uk/feed',
             'category': 'news'
         }
     ])
