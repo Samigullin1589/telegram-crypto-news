@@ -1,6 +1,7 @@
-# app/whales/monitor.py
+# app/whales/monitor/__init__.py
 """
-Blockchain Monitor - Backwards Compatibility Wrapper
+Blockchain Monitor v5.0
+Modular multi-chain monitoring system
 """
 
 from app.whales.monitor.core import BlockchainMonitor
