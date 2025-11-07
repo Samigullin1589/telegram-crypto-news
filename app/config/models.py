@@ -94,9 +94,15 @@ class TradingConfig:
     enabled: bool = True
     signal_interval_hours: int = 1
     monitored_assets: List[str] = field(default_factory=lambda: [
-        'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'MATIC', 'LINK'
+        'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'MATIC', 'LINK',
+        'UNI', 'ATOM', 'LTC', 'BCH', 'NEAR', 'ICP', 'APT', 'ARB', 'OP', 'FTM',
+        'ALGO', 'VET', 'FIL', 'HBAR', 'ETC', 'AAVE', 'GRT', 'SAND', 'MANA', 'AXS',
+        'XLM', 'XMR', 'THETA', 'EOS', 'MKR', 'STX', 'RUNE', 'INJ', 'LDO', 'QNT',
+        'CRV', 'COMP', 'SNX', 'YFI', 'SUSHI', 'BAL', 'ZRX', '1INCH', 'ENJ', 'CHZ'
     ])
     position_update_interval_seconds: int = 60
+    auto_update_assets: bool = True
+    asset_update_interval_hours: int = 24
 
 
 @dataclass
