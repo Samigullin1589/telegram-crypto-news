@@ -1,87 +1,166 @@
-# app/config/env_loader.py
 """
-Environment variables loader
+Environment Loader
+Загрузка переменных окружения из .env файла
+
+Этот модуль отвечает ТОЛЬКО за загрузку переменных окружения.
+Никакой дополнительной логики здесь быть не должно.
 """
 
 import os
-from typing import List, Dict, Set, Optional
-from dotenv import load_dotenv
+import logging
+from pathlib import Path
+from typing import Optional
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 
-class EnvironmentLoader:
-    """Загрузка конфигурации из переменных окружения"""
+def find_env_file() -> Optional[Path]:
+    """
+    Поиск .env файла в проекте
     
-    @staticmethod
-    def get_required_env(*keys: str) -> str:
-        """Получает обязательную переменную окружения"""
-        for key in keys:
-            value = os.getenv(key)
-            if value:
-                return value
-        raise ValueError(f'Требуется одна из переменных окружения: {", ".join(keys)}')
+    Ищет файл в следующих местах (по порядку):
+    1. Текущая директория
+    2. Родительская директория (для запуска из поддиректорий)
+    3. Корень проекта (2 уровня вверх)
     
-    @staticmethod
-    def get_env(key: str, default: str = '') -> str:
-        """Получает переменную окружения с дефолтом"""
-        return os.getenv(key, default)
+    Returns:
+        Path к .env файлу или None если не найден
+    """
+    # Текущая директория
+    current_dir = Path.cwd()
     
-    @staticmethod
-    def get_int_env(key: str, default: int) -> int:
-        """Получает int переменную окружения"""
+    # Возможные расположения .env файла
+    possible_locations = [
+        current_dir / '.env',
+        current_dir.parent / '.env',
+        current_dir.parent.parent / '.env',
+    ]
+    
+    for env_path in possible_locations:
+        if env_path.exists() and env_path.is_file():
+            logger.debug(f"Найден .env файл: {env_path}")
+            return env_path
+    
+    logger.debug(".env файл не найден")
+    return None
+
+
+def load_environment() -> bool:
+    """
+    Загрузка переменных окружения из .env файла
+    
+    Использует python-dotenv если доступен, иначе загружает вручную.
+    
+    Returns:
+        True если файл успешно загружен, False иначе
+    """
+    env_file = find_env_file()
+    
+    if not env_file:
+        logger.info("Файл .env не найден, используются переменные окружения системы")
+        return False
+    
+    try:
+        # Попытка использовать python-dotenv
         try:
-            return int(os.getenv(key, str(default)))
-        except (ValueError, TypeError):
-            return default
+            from dotenv import load_dotenv
+            success = load_dotenv(env_file, override=False)
+            if success:
+                logger.info(f"✓ Переменные окружения загружены из {env_file}")
+                return True
+            else:
+                logger.warning(f"load_dotenv вернул False для {env_file}")
+                return False
+                
+        except ImportError:
+            # Если dotenv не установлен, загружаем вручную
+            logger.debug("python-dotenv не установлен, загрузка вручную")
+            return _load_env_manually(env_file)
+            
+    except Exception as e:
+        logger.error(f"Ошибка загрузки .env файла: {e}", exc_info=True)
+        return False
+
+
+def _load_env_manually(env_file: Path) -> bool:
+    """
+    Ручная загрузка .env файла
     
-    @staticmethod
-    def get_float_env(key: str, default: float) -> float:
-        """Получает float переменную окружения"""
-        try:
-            return float(os.getenv(key, str(default)))
-        except (ValueError, TypeError):
-            return default
+    Используется как fallback если python-dotenv не установлен.
     
-    @staticmethod
-    def get_bool_env(key: str, default: bool = False) -> bool:
-        """Получает bool переменную окружения"""
-        value = os.getenv(key, '').lower()
-        if not value:
-            return default
-        return value in ('true', '1', 'yes', 'on')
-    
-    @staticmethod
-    def get_list_env(key: str, default: Optional[List[str]] = None, separator: str = ',') -> List[str]:
-        """Получает список из переменной окружения"""
-        if default is None:
-            default = []
+    Args:
+        env_file: Path к .env файлу
         
-        value = os.getenv(key, '')
-        if not value:
-            return default
+    Returns:
+        True если успешно загружено
+    """
+    try:
+        with open(env_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
         
-        return [item.strip() for item in value.split(separator) if item.strip()]
+        loaded_count = 0
+        
+        for line_num, line in enumerate(lines, 1):
+            # Убираем пробелы
+            line = line.strip()
+            
+            # Пропускаем пустые строки и комментарии
+            if not line or line.startswith('#'):
+                continue
+            
+            # Парсим строку KEY=VALUE
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                # Убираем кавычки если есть
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                
+                # Устанавливаем переменную только если её еще нет
+                if key and key not in os.environ:
+                    os.environ[key] = value
+                    loaded_count += 1
+                    logger.debug(f"Загружена переменная: {key}")
+        
+        logger.info(f"✓ Вручную загружено {loaded_count} переменных из {env_file}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка ручной загрузки .env: {e}", exc_info=True)
+        return False
+
+
+def get_env_info() -> dict:
+    """
+    Получение информации о загруженных переменных окружения
     
-    @staticmethod
-    def get_set_env(key: str, default: Optional[Set[str]] = None, separator: str = ',') -> Set[str]:
-        """Получает set из переменной окружения"""
-        if default is None:
-            default = set()
-        
-        value = os.getenv(key, '')
-        if not value:
-            return default
-        
-        return {item.strip() for item in value.split(separator) if item.strip()}
+    Returns:
+        Словарь с информацией о переменных
+    """
+    env_file = find_env_file()
     
-    @staticmethod
-    def get_dict_env(key_prefix: str, keys: List[str]) -> Dict[str, str]:
-        """Получает словарь из переменных окружения с префиксом"""
-        result = {}
-        for key in keys:
-            env_key = f'{key_prefix}_{key}'.upper()
-            value = os.getenv(env_key, '')
-            if value:
-                result[key] = value
-        return result
+    # Подсчет переменных по префиксам
+    prefixes = ['TELEGRAM_', 'API_', 'ENABLED_', 'WHALE_', 'NEWS_']
+    counts = {}
+    
+    for prefix in prefixes:
+        count = sum(1 for key in os.environ.keys() if key.startswith(prefix))
+        if count > 0:
+            counts[prefix.rstrip('_')] = count
+    
+    return {
+        'env_file_path': str(env_file) if env_file else None,
+        'env_file_exists': env_file is not None,
+        'total_env_vars': len(os.environ),
+        'crypto_bot_vars': counts,
+    }
+
+
+# Автоматическая загрузка при импорте модуля
+if __name__ != '__main__':
+    # Загружаем только если это не прямой запуск модуля
+    load_environment()

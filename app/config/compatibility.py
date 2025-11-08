@@ -1,156 +1,297 @@
-# app/config/compatibility.py
 """
-Compatibility Module
-Обеспечивает обратную совместимость старых имен переменных
+Compatibility Layer
+Обратная совместимость со старым кодом
+
+Этот модуль добавляет алиасы старых имен переменных к новой структуре
+конфигурации, позволяя старому коду работать без изменений.
+
+ВАЖНО: Этот модуль НЕ импортирует Config напрямую, чтобы избежать
+циклических зависимостей. Вместо этого функция setup_compatibility_properties
+принимает экземпляр config как параметр.
 """
 
+import logging
+from typing import TYPE_CHECKING
 
-def setup_compatibility_properties(config_instance):
+if TYPE_CHECKING:
+    from . import Config
+
+logger = logging.getLogger(__name__)
+
+
+def setup_compatibility_properties(config_instance: 'Config') -> None:
     """
     Настройка свойств для обратной совместимости
     
+    Добавляет алиасы старых имен переменных к экземпляру конфигурации.
+    Это позволяет старому коду обращаться к параметрам через старые имена:
+    
+    Примеры:
+        config.TELEGRAM_BOT_TOKEN вместо config.telegram.bot_token
+        config.ENABLED_CHAINS вместо config.blockchain.enabled_chains
+        config.WHALE_ENABLED вместо config.features.whale_enabled
+    
     Args:
-        config_instance: Экземпляр Config класса
+        config_instance: Экземпляр Config для настройки
+        
+    Raises:
+        Exception: При критических ошибках настройки совместимости
     """
-    config = config_instance
+    try:
+        logger.debug("Настройка свойств обратной совместимости...")
+        
+        # ====================================================================
+        # TELEGRAM - Алиасы для настроек Telegram бота
+        # ====================================================================
+        
+        # Bot token (несколько вариантов для совместимости)
+        config_instance.TELEGRAM_BOT_TOKEN = config_instance.telegram.bot_token
+        config_instance.TELEGRAM_TOKEN = config_instance.telegram.bot_token
+        config_instance.BOT_TOKEN = config_instance.telegram.bot_token
+        
+        # Channel and admin
+        config_instance.TELEGRAM_CHANNEL_ID = config_instance.telegram.channel_id
+        config_instance.CHAT_ID = config_instance.telegram.channel_id
+        config_instance.CHANNEL_ID = config_instance.telegram.channel_id
+        config_instance.ADMIN_CHAT_ID = config_instance.telegram.admin_chat_id
+        
+        # ====================================================================
+        # API KEYS - AI PROVIDERS
+        # ====================================================================
+        
+        config_instance.GEMINI_API_KEY = config_instance.api.gemini_api_key
+        config_instance.OPENAI_API_KEY = config_instance.api.openai_api_key
+        config_instance.ANTHROPIC_API_KEY = config_instance.api.anthropic_api_key
+        
+        # ====================================================================
+        # API KEYS - BLOCKCHAIN SCANNERS
+        # ====================================================================
+        
+        config_instance.ETHERSCAN_API_KEY = config_instance.api.etherscan_api_key
+        config_instance.BSCSCAN_API_KEY = config_instance.api.bscscan_api_key
+        config_instance.POLYGONSCAN_API_KEY = config_instance.api.polygonscan_api_key
+        config_instance.ARBISCAN_API_KEY = config_instance.api.arbiscan_api_key
+        config_instance.BASESCAN_API_KEY = config_instance.api.basescan_api_key
+        config_instance.SNOWTRACE_API_KEY = config_instance.api.snowtrace_api_key
+        config_instance.OPTIMISM_ETHERSCAN_API_KEY = config_instance.api.optimism_etherscan_api_key
+        config_instance.FTMSCAN_API_KEY = config_instance.api.ftmscan_api_key
+        config_instance.HELIUS_API_KEY = config_instance.api.helius_api_key
+        config_instance.SOLSCAN_API_KEY = config_instance.api.solscan_api_key
+        
+        # ====================================================================
+        # API KEYS - OTHER SERVICES
+        # ====================================================================
+        
+        config_instance.COINGECKO_API_KEY = config_instance.api.coingecko_api_key
+        config_instance.ALCHEMY_API_KEY = config_instance.api.alchemy_api_key
+        config_instance.COINMARKETCAP_API_KEY = config_instance.api.coinmarketcap_api_key
+        config_instance.CRYPTOPANIC_API_KEY = config_instance.api.cryptopanic_api_key
+        config_instance.NEWSAPI_KEY = config_instance.api.newsapi_key
+        config_instance.DEXSCREENER_API_KEY = config_instance.api.dexscreener_api_key
+        config_instance.BIRDEYE_API_KEY = config_instance.api.birdeye_api_key
+        
+        # ====================================================================
+        # BLOCKCHAIN - Настройки блокчейнов
+        # ====================================================================
+        
+        config_instance.ENABLED_CHAINS = config_instance.blockchain.enabled_chains
+        config_instance.MIN_USD = config_instance.blockchain.min_usd
+        
+        # ====================================================================
+        # FEATURES - Функциональные модули
+        # ====================================================================
+        
+        config_instance.WHALE_ENABLED = config_instance.features.whale_enabled
+        config_instance.NEWS_ENABLED = config_instance.features.news_enabled
+        config_instance.ANALYTICS_ENABLED = config_instance.features.analytics_enabled
+        config_instance.TRADING_ENABLED = config_instance.features.trading_enabled
+        config_instance.HYPERLIQUID_ENABLED = config_instance.features.hyperliquid_enabled
+        
+        # ====================================================================
+        # PATHS - Пути к файлам
+        # ====================================================================
+        
+        config_instance.DB_PATH = config_instance.paths.db_path
+        config_instance.NEWS_DB_PATH = config_instance.paths.news_db_path
+        config_instance.DATA_DIR = config_instance.paths.data_dir
+        config_instance.STATE_FILE = config_instance.paths.state_file
+        
+        # Wallet DB path (если существует)
+        if hasattr(config_instance.paths, 'wallet_db_json_path'):
+            config_instance.WALLET_DB_JSON_PATH = config_instance.paths.wallet_db_json_path
+        
+        # ====================================================================
+        # RSS FEEDS - Источники новостей
+        # ====================================================================
+        
+        config_instance.RSS_FEEDS = config_instance.feeds.feeds
+        config_instance.NEWS_SOURCES = config_instance.feeds.feeds
+        
+        # ====================================================================
+        # SYSTEM - Системные настройки
+        # ====================================================================
+        
+        config_instance.LOG_LEVEL = config_instance.base.LOG_LEVEL
+        config_instance.PORT = config_instance.base.PORT
+        config_instance.ENVIRONMENT = config_instance.base.ENVIRONMENT
+        config_instance.DEBUG_MODE = config_instance.base.DEBUG_MODE
+        config_instance.HEALTH_CHECK_ENABLED = config_instance.base.HEALTH_CHECK_ENABLED
+        
+        # Timeouts (если существуют)
+        if hasattr(config_instance.base, 'HTTP_TIMEOUT'):
+            config_instance.HTTP_TIMEOUT = config_instance.base.HTTP_TIMEOUT
+        if hasattr(config_instance.base, 'RPC_TIMEOUT'):
+            config_instance.RPC_TIMEOUT = config_instance.base.RPC_TIMEOUT
+        if hasattr(config_instance.base, 'WEBHOOK_TIMEOUT'):
+            config_instance.WEBHOOK_TIMEOUT = config_instance.base.WEBHOOK_TIMEOUT
+        
+        # Memory limits (если существуют)
+        if hasattr(config_instance.base, 'MAX_MEMORY_MB'):
+            config_instance.MAX_MEMORY_MB = config_instance.base.MAX_MEMORY_MB
+        
+        # ====================================================================
+        # NEWS SETTINGS - Настройки новостного модуля
+        # ====================================================================
+        
+        if hasattr(config_instance.features, 'news_fetch_interval'):
+            config_instance.FETCH_INTERVAL = config_instance.features.news_fetch_interval
+            config_instance.NEWS_CHECK_INTERVAL = config_instance.features.news_fetch_interval
+        
+        if hasattr(config_instance.features, 'news_posts_per_hour'):
+            config_instance.POSTS_PER_HOUR_CAP = config_instance.features.news_posts_per_hour
+        
+        if hasattr(config_instance.features, 'min_confidence_score'):
+            config_instance.MIN_CONFIDENCE_SCORE = config_instance.features.min_confidence_score
+        
+        # ====================================================================
+        # TIMING - Временные константы
+        # ====================================================================
+        
+        config_instance.POST_DELAY_SECONDS = 10
+        config_instance.IDLE_DELAY_SECONDS = 300
+        
+        # ====================================================================
+        # IMAGES - Настройки изображений
+        # ====================================================================
+        
+        config_instance.MIN_IMAGE_WIDTH = 400
+        config_instance.MIN_IMAGE_HEIGHT = 300
+        
+        # ====================================================================
+        # HTTP HEADERS - Стандартные заголовки
+        # ====================================================================
+        
+        config_instance.COMMON_HEADERS = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+        
+        # ====================================================================
+        # DATABASE - Настройки БД
+        # ====================================================================
+        
+        if hasattr(config_instance.database, 'pool_size'):
+            config_instance.DB_POOL_SIZE = config_instance.database.pool_size
+        
+        if hasattr(config_instance.database, 'max_overflow'):
+            config_instance.DB_MAX_OVERFLOW = config_instance.database.max_overflow
+        
+        # ====================================================================
+        # RATE LIMITING - Ограничения скорости
+        # ====================================================================
+        
+        if hasattr(config_instance.rate_limiting, 'max_requests_per_minute'):
+            config_instance.MAX_REQUESTS_PER_MINUTE = config_instance.rate_limiting.max_requests_per_minute
+        
+        if hasattr(config_instance.rate_limiting, 'solana_requests_per_second'):
+            config_instance.SOLANA_REQUESTS_PER_SECOND = config_instance.rate_limiting.solana_requests_per_second
+        
+        logger.debug("✓ Свойства обратной совместимости настроены успешно")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при настройке обратной совместимости: {e}", exc_info=True)
+        # Не поднимаем исключение - совместимость не критична
+        logger.warning("Некоторые старые имена переменных могут быть недоступны")
+
+
+def get_config_value(config_instance: 'Config', key: str, default=None):
+    """
+    Универсальный геттер для получения значений конфигурации
     
-    config.TELEGRAM_BOT_TOKEN = config.telegram.bot_token
-    config.TELEGRAM_CHANNEL_ID = config.telegram.channel_id
-    config.ADMIN_CHAT_ID = config.telegram.admin_chat_id
+    Пытается получить значение из конфигурации используя различные
+    способы доступа (атрибут, метод, ключ словаря).
     
-    config.GEMINI_API_KEY = config.api.gemini_api_key
-    config.OPENAI_API_KEY = config.api.openai_api_key
-    config.ANTHROPIC_API_KEY = config.api.anthropic_api_key
+    Args:
+        config_instance: Экземпляр Config
+        key: Ключ конфигурации (может быть точечным: 'telegram.bot_token')
+        default: Значение по умолчанию если ключ не найден
+        
+    Returns:
+        Значение конфигурации или default
+        
+    Examples:
+        >>> get_config_value(config, 'TELEGRAM_BOT_TOKEN')
+        '123456789:ABC...'
+        >>> get_config_value(config, 'telegram.bot_token')
+        '123456789:ABC...'
+        >>> get_config_value(config, 'UNKNOWN_KEY', 'default_value')
+        'default_value'
+    """
+    try:
+        # Простой атрибут
+        if hasattr(config_instance, key):
+            return getattr(config_instance, key, default)
+        
+        # Точечная нотация (например: 'telegram.bot_token')
+        if '.' in key:
+            parts = key.split('.')
+            obj = config_instance
+            for part in parts:
+                if hasattr(obj, part):
+                    obj = getattr(obj, part)
+                else:
+                    return default
+            return obj
+        
+        return default
+        
+    except Exception as e:
+        logger.debug(f"Не удалось получить значение для ключа '{key}': {e}")
+        return default
+
+
+def validate_compatibility(config_instance: 'Config') -> bool:
+    """
+    Проверка что свойства совместимости настроены корректно
     
-    config.GEMINI_MODEL = config.api.gemini_model
-    config.OPENAI_MODEL = config.api.openai_model
-    config.ANTHROPIC_MODEL = config.api.anthropic_model
+    Args:
+        config_instance: Экземпляр Config для проверки
+        
+    Returns:
+        True если все критичные свойства доступны
+    """
+    critical_properties = [
+        'TELEGRAM_BOT_TOKEN',
+        'TELEGRAM_CHANNEL_ID',
+        'ENABLED_CHAINS',
+        'WHALE_ENABLED',
+        'NEWS_ENABLED',
+    ]
     
-    config.AI_MAX_RETRIES = config.api.ai_max_retries
-    config.AI_BACKOFF_FACTOR = config.api.ai_backoff_factor
-    config.AI_TIMEOUT = config.api.ai_timeout
-    config.AI_MAX_TOKENS = config.api.ai_max_tokens
-    config.AI_TEMPERATURE = config.api.ai_temperature
+    missing = []
+    for prop in critical_properties:
+        if not hasattr(config_instance, prop):
+            missing.append(prop)
     
-    config.ETHERSCAN_API_KEY = config.api.etherscan_api_key
-    config.BSCSCAN_API_KEY = config.api.bscscan_api_key
-    config.POLYGONSCAN_API_KEY = config.api.polygonscan_api_key
-    config.ARBISCAN_API_KEY = config.api.arbiscan_api_key
-    config.BASESCAN_API_KEY = config.api.basescan_api_key
-    config.SNOWTRACE_API_KEY = config.api.snowtrace_api_key
-    config.OPTIMISM_ETHERSCAN_API_KEY = config.api.optimism_etherscan_api_key
-    config.FTMSCAN_API_KEY = config.api.ftmscan_api_key
+    if missing:
+        logger.warning(
+            f"Отсутствуют критичные свойства совместимости: {', '.join(missing)}"
+        )
+        return False
     
-    config.HELIUS_API_KEY = config.api.helius_api_key
-    config.SOLSCAN_API_KEY = config.api.solscan_api_key
-    
-    config.COINGECKO_API_KEY = config.api.coingecko_api_key
-    config.ALCHEMY_API_KEY = config.api.alchemy_api_key
-    config.COINMARKETCAP_API_KEY = config.api.coinmarketcap_api_key
-    config.CRYPTOPANIC_API_KEY = config.api.cryptopanic_api_key
-    config.NEWSAPI_KEY = config.api.newsapi_key
-    config.DEXSCREENER_API_KEY = config.api.dexscreener_api_key
-    config.BIRDEYE_API_KEY = config.api.birdeye_api_key
-    
-    config.RSS_FEEDS = config.feeds.feeds
-    config.FETCH_INTERVAL = config.features.fetch_interval
-    config.POSTS_PER_HOUR_CAP = config.features.posts_per_hour_cap
-    config.MIN_CONFIDENCE_SCORE = config.features.min_confidence_score
-    config.NEWS_CHECK_INTERVAL = config.features.news_check_interval
-    
-    config.WHALE_THRESHOLDS = config.blockchain.whale_thresholds
-    config.ENABLED_CHAINS = config.blockchain.enabled_chains
-    config.MIN_USD = config.blockchain.min_usd
-    
-    config.WHALE_ENABLED = config.features.whale_enabled
-    config.NEWS_ENABLED = config.features.news_enabled
-    config.ANALYTICS_ENABLED = config.features.analytics_enabled
-    config.TRADING_ENABLED = config.features.trading_enabled
-    config.HYPERLIQUID_ENABLED = config.features.hyperliquid_enabled
-    
-    config.POST_DELAY_SECONDS = config.features.post_delay_seconds
-    config.IDLE_DELAY_SECONDS = config.features.idle_delay_seconds
-    config.FEED_FETCH_TIMEOUT = config.features.feed_fetch_timeout
-    config.RATE_LIMIT_DELAY_SECONDS = config.features.rate_limit_delay_seconds
-    
-    config.DATA_DIR = config.paths.data_dir
-    config.DB_PATH = config.paths.db_path
-    config.NEWS_DB_PATH = config.paths.news_db_path
-    config.STATE_FILE = config.paths.state_file
-    config.WALLET_DB_JSON_PATH = config.paths.wallet_db_json_path
-    config.CACHE_DIR = config.paths.cache_dir
-    
-    config.DB_BACKUP_ENABLED = config.database.db_backup_enabled
-    config.DB_BACKUP_INTERVAL_HOURS = config.database.db_backup_interval_hours
-    config.DB_MAX_AGE_DAYS = config.database.db_max_age_days
-    
-    config.MIN_IMAGE_WIDTH = config.features.min_image_width
-    config.MIN_IMAGE_HEIGHT = config.features.min_image_height
-    config.MAX_IMAGE_SIZE_MB = config.features.max_image_size_mb
-    config.IMAGE_CHECK_TIMEOUT = config.features.image_check_timeout
-    config.IMAGE_PARTIAL_READ_BYTES = config.features.image_partial_read_bytes
-    config.IMAGE_QUALITY = config.features.image_quality
-    config.IMAGE_COMPRESSION_ENABLED = config.features.image_compression_enabled
-    
-    config.COMMON_HEADERS = config.base.COMMON_HEADERS
-    
-    config.SESSION_TIMEOUT_TOTAL = config.base.SESSION_TIMEOUT_TOTAL
-    config.SESSION_TIMEOUT_CONNECT = config.base.SESSION_TIMEOUT_CONNECT
-    config.SESSION_MAX_RETRIES = config.base.SESSION_MAX_RETRIES
-    config.SESSION_RETRY_DELAY = config.base.SESSION_RETRY_DELAY
-    config.CONNECTION_POOL_SIZE = config.base.CONNECTION_POOL_SIZE
-    config.CONNECTION_POOL_MAX_SIZE = config.base.CONNECTION_POOL_MAX_SIZE
-    
-    config.MAX_ARTICLE_TEXT_LENGTH = config.features.max_article_text_length
-    config.MAX_SUMMARY_LENGTH = config.features.max_summary_length
-    config.MAX_SUMMARY_RETRIES = config.features.max_summary_retries
-    config.SUMMARY_ENABLED = config.features.summary_enabled
-    
-    config.LOG_LEVEL = config.base.LOG_LEVEL
-    config.VERBOSE_LOGGING = config.base.VERBOSE_LOGGING
-    config.DEBUG_MODE = config.base.DEBUG_MODE
-    config.LOG_FILE_ENABLED = config.base.LOG_FILE_ENABLED
-    config.LOG_FILE_PATH = config.paths.log_file_path
-    
-    config.RATE_LIMIT_ENABLED = config.rate_limiting.rate_limit_enabled
-    config.MAX_REQUESTS_PER_MINUTE = config.rate_limiting.max_requests_per_minute
-    config.MAX_API_CALLS_PER_SECOND = config.rate_limiting.max_api_calls_per_second
-    config.RATE_LIMIT_BURST = config.rate_limiting.rate_limit_burst
-    
-    config.CACHE_ENABLED = config.database.cache_enabled
-    config.CACHE_TTL_SECONDS = config.database.cache_ttl_seconds
-    config.CACHE_MAX_SIZE_MB = config.database.cache_max_size_mb
-    
-    config.RETRY_ENABLED = config.rate_limiting.retry_enabled
-    config.RETRY_MAX_ATTEMPTS = config.rate_limiting.retry_max_attempts
-    config.RETRY_INITIAL_DELAY = config.rate_limiting.retry_initial_delay
-    config.RETRY_MAX_DELAY = config.rate_limiting.retry_max_delay
-    config.RETRY_EXPONENTIAL_BASE = config.rate_limiting.retry_exponential_base
-    
-    config.HEALTH_CHECK_ENABLED = config.base.HEALTH_CHECK_ENABLED
-    config.HEALTH_CHECK_INTERVAL = config.base.HEALTH_CHECK_INTERVAL
-    config.HEALTH_CHECK_TIMEOUT = config.base.HEALTH_CHECK_TIMEOUT
-    
-    config.METRICS_ENABLED = config.base.METRICS_ENABLED
-    config.METRICS_INTERVAL = config.base.METRICS_INTERVAL
-    
-    config.PORT = config.base.PORT
-    config.HTTP_TIMEOUT = config.base.HTTP_TIMEOUT
-    config.RPC_TIMEOUT = config.base.RPC_TIMEOUT
-    config.WEBHOOK_TIMEOUT = config.base.WEBHOOK_TIMEOUT
-    
-    config.MAX_MEMORY_MB = config.base.MAX_MEMORY_MB
-    config.GC_INTERVAL_SECONDS = config.base.GC_INTERVAL_SECONDS
-    
-    config.NOTIFICATION_CHANNELS = config.telegram.notification_channels
-    
-    config.TELEGRAM_MAX_MESSAGE_LENGTH = config.telegram.max_message_length
-    config.TELEGRAM_MAX_CAPTION_LENGTH = config.telegram.max_caption_length
-    config.TELEGRAM_RETRY_AFTER_DELAY = config.telegram.retry_after_delay
-    config.TELEGRAM_RATE_LIMIT_DELAY = config.telegram.rate_limit_delay
-    
-    config.BLOCKCHAIN_EXPLORERS = config.blockchain.blockchain_explorers
-    config.CHAIN_NATIVE_SYMBOLS = config.blockchain.chain_native_symbols
-    config.CHAIN_NAMES = config.blockchain.chain_names
-    config.CHAIN_COLORS = config.blockchain.chain_colors
-    config.CHAIN_EMOJIS = config.blockchain.chain_emojis
+    return True

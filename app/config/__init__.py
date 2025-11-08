@@ -1,28 +1,40 @@
 """
-Configuration Package
-Главный модуль конфигурации с правильной архитектурой без циклических импортов
+Configuration Package v3.0
+Модульная система конфигурации с правильной архитектурой
+
+Этот пакет предоставляет централизованное управление конфигурацией
+всего приложения через паттерн Singleton и композицию модулей.
+
+Основные компоненты:
+- Config: Главный класс конфигурации (Singleton)
+- Субмодули: api, base, blockchain, database, features, feeds, paths, rate_limiting, telegram
+- Валидаторы: Модульная система валидации
+- Printer: Красивый вывод конфигурации
+
+Использование:
+    from app.config import config
+    
+    # Доступ к настройкам
+    bot_token = config.telegram.bot_token
+    enabled_chains = config.blockchain.enabled_chains
+    
+    # Проверка наличия модулей
+    if config.features.whale_enabled:
+        ...
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
-
 # ============================================================================
-# ШАГИ ИНИЦИАЛИЗАЦИИ (в правильном порядке):
-# 1. Импорт всех субмодулей конфигурации
-# 2. Создание класса Config
-# 3. Создание экземпляра config
-# 4. Настройка свойств совместимости
-# 5. Экспорт констант для обратной совместимости
+# ФАЗА 1: ИМПОРТ ВСЕХ СУБМОДУЛЕЙ
 # ============================================================================
+# Важно: импортируем все субмодули ДО создания главного класса Config
+# чтобы избежать циклических зависимостей
 
-
-# ============================================================================
-# ШАГ 1: Импорт субмодулей (БЕЗ циклических зависимостей)
-# ============================================================================
-
+from .env_loader import load_environment
 from .base_config import BaseConfig
 from .paths_config import PathsConfig
 from .api_config import APIConfig
@@ -35,119 +47,209 @@ from .rate_limiting_config import RateLimitingConfig
 from .config_validator import ConfigValidator
 from .config_printer import ConfigPrinter
 
+# ============================================================================
+# ФАЗА 2: ЗАГРУЗКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
+# ============================================================================
+# Загружаем .env файл перед инициализацией конфигурации
+
+try:
+    load_environment()
+    logger.debug("Переменные окружения загружены")
+except Exception as e:
+    logger.warning(f"Не удалось загрузить .env файл: {e}")
 
 # ============================================================================
-# ШАГ 2: Определение главного класса Config
+# ФАЗА 3: ОПРЕДЕЛЕНИЕ ГЛАВНОГО КЛАССА CONFIG
 # ============================================================================
+
 
 class Config:
     """
-    Главный класс конфигурации
+    Главный класс конфигурации системы
     
-    Объединяет все модули конфигурации и предоставляет единый интерфейс.
-    Реализует паттерн Singleton для обеспечения единственного экземпляра.
+    Реализует паттерн Singleton для обеспечения единственного
+    экземпляра конфигурации во всем приложении.
     
-    Архитектура:
-    - Композиция субмодулей конфигурации
-    - Единая точка доступа к настройкам
-    - Валидация при инициализации
-    - Обратная совместимость через свойства
+    Использует композицию субмодулей для организации настроек:
+    - base: Базовые настройки окружения
+    - paths: Пути к файлам и директориям
+    - api: API ключи для внешних сервисов
+    - telegram: Настройки Telegram бота
+    - feeds: Конфигурация RSS фидов
+    - blockchain: Настройки блокчейнов и whale мониторинга
+    - features: Флаги включения/отключения модулей
+    - database: Настройки базы данных
+    - rate_limiting: Настройки ограничения скорости запросов
+    
+    Attributes:
+        base: BaseConfig - базовые настройки
+        paths: PathsConfig - пути к файлам
+        api: APIConfig - API ключи
+        telegram: TelegramConfig - Telegram настройки
+        feeds: FeedsConfig - RSS фиды
+        blockchain: BlockchainConfig - блокчейны
+        features: FeaturesConfig - функциональные модули
+        database: DatabaseConfig - база данных
+        rate_limiting: RateLimitingConfig - rate limiting
+        validator: ConfigValidator - валидатор конфигурации
+        printer: ConfigPrinter - принтер конфигурации
     """
     
     _instance: Optional['Config'] = None
     _initialized: bool = False
     
     def __new__(cls) -> 'Config':
-        """Singleton pattern implementation"""
+        """
+        Реализация паттерна Singleton
+        
+        Гарантирует что в системе существует только один
+        экземпляр конфигурации.
+        
+        Returns:
+            Единственный экземпляр Config
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            logger.debug("Создан новый экземпляр Config (Singleton)")
         return cls._instance
     
     def __init__(self):
-        """Инициализация главной конфигурации"""
+        """
+        Инициализация конфигурации
+        
+        Выполняется только один раз благодаря флагу _initialized.
+        Инициализирует все субмодули, выполняет валидацию и
+        выводит информацию о конфигурации.
+        """
+        # Защита от повторной инициализации
         if self._initialized:
+            logger.debug("Config уже инициализирован, пропускаем повторную инициализацию")
             return
         
-        self._initialize_configuration_modules()
-        self._initialize_helpers()
-        self._print_initialization_info()
+        logger.info("=" * 80)
+        logger.info("🚀 Инициализация Configuration System v3.0")
+        logger.info("=" * 80)
         
-        self._initialized = True
+        try:
+            # Инициализация всех субмодулей
+            self._initialize_modules()
+            
+            # Инициализация вспомогательных инструментов
+            self._initialize_helpers()
+            
+            # Валидация и вывод информации
+            self._validate_and_print()
+            
+            # Установка флага успешной инициализации
+            self._initialized = True
+            
+            logger.info("✅ Конфигурация успешно инициализирована")
+            
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка инициализации конфигурации: {e}", exc_info=True)
+            raise RuntimeError(f"Не удалось инициализировать конфигурацию: {e}") from e
     
-    # ========================================================================
-    # Инициализация
-    # ========================================================================
-    
-    def _initialize_configuration_modules(self) -> None:
+    def _initialize_modules(self) -> None:
         """
-        Инициализация всех модулей конфигурации в правильном порядке
+        Инициализация всех конфигурационных модулей
         
-        Порядок важен:
-        1. Базовая конфигурация (окружение, DEBUG режим)
-        2. Пути (зависит от базовой конфигурации)
-        3. API ключи
-        4. Telegram настройки
-        5. RSS фиды
-        6. Блокчейн конфигурация
-        7. Функциональные флаги
-        8. База данных (зависит от путей)
-        9. Rate limiting
+        Порядок инициализации важен:
+        1. base - базовые настройки (нужны для логирования)
+        2. paths - пути к файлам (нужны для database)
+        3. api - API ключи
+        4. telegram - настройки бота
+        5. feeds - RSS источники
+        6. blockchain - настройки блокчейнов
+        7. features - флаги модулей
+        8. database - БД (использует paths)
+        9. rate_limiting - ограничения
         """
-        logger.info("📦 Инициализация модулей конфигурации...")
+        logger.debug("Инициализация конфигурационных модулей...")
         
-        # Базовая конфигурация окружения
+        # Базовые настройки - первыми
         self.base = BaseConfig()
+        logger.debug("✓ BaseConfig инициализирован")
         
-        # Пути к файлам и директориям
+        # Пути - нужны для database
         self.paths = PathsConfig()
+        logger.debug("✓ PathsConfig инициализирован")
         
-        # API ключи и эндпоинты
+        # API ключи
         self.api = APIConfig()
+        logger.debug("✓ APIConfig инициализирован")
         
-        # Telegram конфигурация
+        # Telegram
         self.telegram = TelegramConfig()
+        logger.debug("✓ TelegramConfig инициализирован")
         
-        # RSS фиды и источники новостей
+        # RSS фиды
         self.feeds = FeedsConfig()
+        logger.debug("✓ FeedsConfig инициализирован")
         
-        # Блокчейн сети и их параметры
+        # Блокчейны
         self.blockchain = BlockchainConfig()
+        logger.debug("✓ BlockchainConfig инициализирован")
         
-        # Функциональные флаги (включение/отключение модулей)
+        # Функциональные модули
         self.features = FeaturesConfig()
+        logger.debug("✓ FeaturesConfig инициализирован")
         
-        # База данных (зависит от paths)
+        # База данных (требует paths)
         self.database = DatabaseConfig(self.paths.db_path)
+        logger.debug("✓ DatabaseConfig инициализирован")
         
-        # Rate limiting для API запросов
+        # Rate limiting
         self.rate_limiting = RateLimitingConfig()
+        logger.debug("✓ RateLimitingConfig инициализирован")
         
-        logger.info("✅ Все модули конфигурации инициализированы")
+        logger.debug("Все модули успешно инициализированы")
     
     def _initialize_helpers(self) -> None:
-        """Инициализация вспомогательных классов"""
+        """
+        Инициализация вспомогательных классов
+        
+        Создает экземпляры валидатора и принтера,
+        которые используют главную конфигурацию.
+        """
+        logger.debug("Инициализация вспомогательных инструментов...")
+        
+        # Валидатор конфигурации
         self.validator = ConfigValidator(self)
+        logger.debug("✓ ConfigValidator инициализирован")
+        
+        # Принтер конфигурации
         self.printer = ConfigPrinter(self)
+        logger.debug("✓ ConfigPrinter инициализирован")
     
-    def _print_initialization_info(self) -> None:
-        """Вывод информации об инициализации"""
-        # Заголовок
-        self.printer.print_initialization_header()
+    def _validate_and_print(self) -> None:
+        """
+        Валидация конфигурации и вывод информации
         
-        # Валидация
-        validation_results = self.validator.validate()
-        
-        # Вывод результатов валидации
-        if validation_results:
-            print("\n📋 Результаты валидации:")
-            for result in validation_results:
-                print(f"   {result}")
-        
-        # Сводка конфигурации
-        self.printer.print_configuration_summary()
+        Выполняет полную валидацию всех параметров конфигурации
+        и выводит красиво отформатированную информацию.
+        """
+        try:
+            # Заголовок инициализации
+            self.printer.print_initialization_header()
+            
+            # Валидация конфигурации
+            validation_results = self.validator.validate()
+            
+            # Вывод результатов валидации (если есть)
+            if validation_results:
+                print("\n📋 Результаты валидации конфигурации:")
+                for result in validation_results:
+                    print(f"   {result}")
+            
+            # Краткая сводка конфигурации
+            self.printer.print_configuration_summary()
+            
+        except Exception as e:
+            logger.error(f"Ошибка во время валидации/вывода: {e}", exc_info=True)
+            # Не останавливаем инициализацию из-за ошибок вывода
     
     # ========================================================================
-    # API ключи и сканеры
+    # API МЕТОДЫ - Удобный доступ к API функционалу
     # ========================================================================
     
     def has_scanner_api_key(self, chain: str) -> bool:
@@ -155,10 +257,10 @@ class Config:
         Проверка наличия API ключа для blockchain scanner
         
         Args:
-            chain: Название блокчейна (ethereum, bsc, polygon, etc.)
-        
+            chain: Название блокчейна
+            
         Returns:
-            True если ключ есть
+            True если API ключ настроен
         """
         return self.api.has_scanner_key(chain)
     
@@ -168,24 +270,20 @@ class Config:
         
         Args:
             chain: Название блокчейна
-        
+            
         Returns:
             API ключ или пустая строка
         """
         return self.api.get_scanner_key(chain)
     
-    def get_missing_scanner_keys(self) -> list:
+    def get_missing_scanner_keys(self) -> List[str]:
         """
         Получение списка блокчейнов без API ключей
         
         Returns:
-            Список названий блокчейнов
+            Список названий блокчейнов без scanner ключей
         """
         return self.api.get_missing_scanner_keys(self.blockchain.enabled_chains)
-    
-    # ========================================================================
-    # Проверка наличия API ключей
-    # ========================================================================
     
     def has_coingecko(self) -> bool:
         """Проверка наличия CoinGecko API ключа"""
@@ -200,7 +298,7 @@ class Config:
         return bool(self.api.coinmarketcap_api_key)
     
     def has_ai_provider(self) -> bool:
-        """Проверка наличия хотя бы одного AI провайдера"""
+        """Проверка наличия AI провайдера"""
         return self.api.has_ai_provider()
     
     def get_ai_provider(self) -> str:
@@ -208,34 +306,24 @@ class Config:
         return self.api.get_ai_provider()
     
     # ========================================================================
-    # Методы для работы с блокчейнами
+    # BLOCKCHAIN МЕТОДЫ - Удобный доступ к blockchain функционалу
     # ========================================================================
     
     def get_chain_explorer_url(
-        self, 
-        chain: str, 
-        address: Optional[str] = None, 
+        self,
+        chain: str,
+        address: Optional[str] = None,
         tx_hash: Optional[str] = None
     ) -> str:
-        """
-        Получение URL blockchain explorer
-        
-        Args:
-            chain: Название блокчейна
-            address: Адрес кошелька (опционально)
-            tx_hash: Хеш транзакции (опционально)
-        
-        Returns:
-            URL эксплорера
-        """
+        """Получение URL blockchain explorer"""
         return self.blockchain.get_explorer_url(chain, address, tx_hash)
     
     def get_chain_symbol(self, chain: str) -> str:
-        """Получение символа нативной валюты блокчейна"""
+        """Получение символа нативной валюты"""
         return self.blockchain.get_chain_symbol(chain)
     
     def get_chain_name(self, chain: str) -> str:
-        """Получение читаемого имени блокчейна"""
+        """Получение полного имени блокчейна"""
         return self.blockchain.get_chain_name(chain)
     
     def get_chain_emoji(self, chain: str) -> str:
@@ -251,12 +339,7 @@ class Config:
         return self.blockchain.is_chain_enabled(chain)
     
     def get_whale_threshold(self, chain: str) -> Dict[str, float]:
-        """
-        Получение порогов для whale транзакций
-        
-        Returns:
-            Dict с ключами 'whale' и 'mega_whale'
-        """
+        """Получение порогов для whale транзакций"""
         return self.blockchain.get_whale_threshold(chain)
     
     def is_whale_transaction(self, chain: str, usd_value: float) -> bool:
@@ -268,10 +351,10 @@ class Config:
         return self.blockchain.is_mega_whale_transaction(chain, usd_value)
     
     # ========================================================================
-    # Методы для работы с RSS фидами
+    # RSS FEEDS МЕТОДЫ
     # ========================================================================
     
-    def get_sorted_feeds(self) -> list:
+    def get_sorted_feeds(self) -> List[tuple]:
         """Получение отсортированных по приоритету фидов"""
         return self.feeds.get_sorted_feeds()
     
@@ -280,7 +363,7 @@ class Config:
         return self.feeds.get_feed_by_name(name)
     
     def get_feed_config(self, name: str) -> Optional[FeedConfig]:
-        """Получение конфигурации фида (алиас для get_feed_by_name)"""
+        """Алиас для get_feed_by_name"""
         return self.feeds.get_feed_by_name(name)
     
     def get_all_feeds(self) -> Dict[str, FeedConfig]:
@@ -300,7 +383,7 @@ class Config:
         self.feeds.disable_feed(name)
     
     # ========================================================================
-    # Проверка функциональных модулей
+    # FEATURES МЕТОДЫ
     # ========================================================================
     
     def is_feature_enabled(self, feature_name: str) -> bool:
@@ -309,7 +392,7 @@ class Config:
         
         Args:
             feature_name: Название модуля (whale, news, analytics, trading, hyperliquid)
-        
+            
         Returns:
             True если модуль включен
         """
@@ -324,20 +407,16 @@ class Config:
     
     @property
     def features_enabled(self) -> Dict[str, bool]:
-        """Получение статуса всех функциональных модулей"""
+        """Получение статуса всех модулей"""
         return self.features.get_enabled_features()
     
     # ========================================================================
-    # AI Template
+    # AI TEMPLATE
     # ========================================================================
     
     @property
     def ai_prompt_template(self) -> str:
-        """
-        Шаблон промпта для AI обработки новостей
-        
-        Используется для генерации структурированных постов в Telegram
-        """
+        """Шаблон промпта для AI обработки новостей"""
         return """
 Ты — ведущий аналитик издания 'Bloomberg Crypto'. Твоя задача — проанализировать текст новости и подготовить профессиональный, структурированный пост для Telegram-канала 'Crypto Compass'.
 
@@ -356,146 +435,84 @@ class Config:
 """
     
     # ========================================================================
-    # Сериализация
+    # СЕРИАЛИЗАЦИЯ
     # ========================================================================
     
     def to_dict(self) -> Dict[str, Any]:
         """
         Конвертация конфигурации в словарь
         
-        Полезно для отладки, логирования и экспорта конфигурации
+        Преобразует всю конфигурацию в словарь для
+        сериализации или отладки.
         
         Returns:
-            Словарь со всеми настройками
+            Словарь со всеми параметрами конфигурации
         """
-        return {
-            'base': self.base.to_dict(),
-            'paths': self.paths.to_dict(),
-            'api': self.api.to_dict(),
-            'telegram': self.telegram.to_dict(),
-            'feeds': self.feeds.to_dict(),
-            'blockchain': self.blockchain.to_dict(),
-            'features': self.features.to_dict(),
-            'database': self.database.to_dict(),
-            'rate_limiting': self.rate_limiting.to_dict()
-        }
+        try:
+            return {
+                'base': self.base.to_dict(),
+                'paths': self.paths.to_dict(),
+                'api': self.api.to_dict(),
+                'telegram': self.telegram.to_dict(),
+                'feeds': self.feeds.to_dict(),
+                'blockchain': self.blockchain.to_dict(),
+                'features': self.features.to_dict(),
+                'database': self.database.to_dict(),
+                'rate_limiting': self.rate_limiting.to_dict()
+            }
+        except Exception as e:
+            logger.error(f"Ошибка сериализации конфигурации: {e}")
+            return {}
+    
+    def __repr__(self) -> str:
+        """Строковое представление конфигурации"""
+        return (
+            f"Config("
+            f"env={self.base.ENVIRONMENT}, "
+            f"chains={len(self.blockchain.enabled_chains)}, "
+            f"feeds={len(self.feeds.get_enabled_feeds())}, "
+            f"features={sum(1 for v in self.features_enabled.values() if v)}"
+            f")"
+        )
 
 
 # ============================================================================
-# ШАГ 3: Создание единственного экземпляра конфигурации
+# ФАЗА 4: СОЗДАНИЕ ГЛОБАЛЬНОГО ЭКЗЕМПЛЯРА
 # ============================================================================
 
 config = Config()
 
-
 # ============================================================================
-# ШАГ 4: Настройка свойств для обратной совместимости
+# ФАЗА 5: ОБРАТНАЯ СОВМЕСТИМОСТЬ
 # ============================================================================
+# Настройка алиасов для старого кода
 
 from .compatibility import setup_compatibility_properties
-setup_compatibility_properties(config)
 
-
-# ============================================================================
-# ШАГ 5: Экспорт констант для обратной совместимости
-# ============================================================================
-
-# Импортируем все константы из exports модуля
-from .exports import (
-    # Telegram
-    TELEGRAM_BOT_TOKEN,
-    TELEGRAM_TOKEN,
-    BOT_TOKEN,
-    TELEGRAM_CHANNEL_ID,
-    CHAT_ID,
-    CHANNEL_ID,
-    ADMIN_CHAT_ID,
-    
-    # AI Providers
-    GEMINI_API_KEY,
-    OPENAI_API_KEY,
-    ANTHROPIC_API_KEY,
-    
-    # Blockchain Scanners
-    ETHERSCAN_API_KEY,
-    BSCSCAN_API_KEY,
-    POLYGONSCAN_API_KEY,
-    ARBISCAN_API_KEY,
-    BASESCAN_API_KEY,
-    SNOWTRACE_API_KEY,
-    OPTIMISM_ETHERSCAN_API_KEY,
-    FTMSCAN_API_KEY,
-    HELIUS_API_KEY,
-    SOLSCAN_API_KEY,
-    
-    # Other APIs
-    COINGECKO_API_KEY,
-    ALCHEMY_API_KEY,
-    COINMARKETCAP_API_KEY,
-    CRYPTOPANIC_API_KEY,
-    NEWSAPI_KEY,
-    DEXSCREENER_API_KEY,
-    BIRDEYE_API_KEY,
-    
-    # RSS and News
-    RSS_FEEDS,
-    NEWS_SOURCES,
-    FETCH_INTERVAL,
-    NEWS_CHECK_INTERVAL,
-    POSTS_PER_HOUR_CAP,
-    MIN_CONFIDENCE_SCORE,
-    
-    # Timing
-    POST_DELAY_SECONDS,
-    IDLE_DELAY_SECONDS,
-    
-    # Paths
-    DB_PATH,
-    NEWS_DB_PATH,
-    DATA_DIR,
-    STATE_FILE,
-    WALLET_DB_JSON_PATH,
-    
-    # Images
-    MIN_IMAGE_WIDTH,
-    MIN_IMAGE_HEIGHT,
-    
-    # HTTP
-    COMMON_HEADERS,
-    
-    # Blockchain
-    ENABLED_CHAINS,
-    MIN_USD,
-    
-    # Features
-    WHALE_ENABLED,
-    NEWS_ENABLED,
-    ANALYTICS_ENABLED,
-    TRADING_ENABLED,
-    HYPERLIQUID_ENABLED,
-    
-    # System
-    LOG_LEVEL,
-    HEALTH_CHECK_ENABLED,
-    PORT,
-    HTTP_TIMEOUT,
-    RPC_TIMEOUT,
-    WEBHOOK_TIMEOUT,
-    MAX_MEMORY_MB,
-)
-
+try:
+    setup_compatibility_properties(config)
+    logger.debug("Свойства обратной совместимости настроены")
+except Exception as e:
+    logger.warning(f"Не удалось настроить обратную совместимость: {e}")
 
 # ============================================================================
-# Экспорт всех публичных элементов
+# ФАЗА 6: ЭКСПОРТ КОНСТАНТ
+# ============================================================================
+
+try:
+    from .exports import *
+    logger.debug("Константы экспортированы")
+except ImportError as e:
+    logger.warning(f"Не удалось импортировать exports: {e}")
+
+# ============================================================================
+# ЭКСПОРТ
 # ============================================================================
 
 __all__ = [
-    # Главные классы
     'config',
     'Config',
     'FeedConfig',
-    
-    # Субмодули конфигурации
     'BaseConfig',
     'PathsConfig',
     'APIConfig',
@@ -507,86 +524,10 @@ __all__ = [
     'RateLimitingConfig',
     'ConfigValidator',
     'ConfigPrinter',
-    
-    # Константы для обратной совместимости
-    # Telegram
-    'TELEGRAM_BOT_TOKEN',
-    'TELEGRAM_TOKEN',
-    'BOT_TOKEN',
-    'TELEGRAM_CHANNEL_ID',
-    'CHAT_ID',
-    'CHANNEL_ID',
-    'ADMIN_CHAT_ID',
-    
-    # AI Providers
-    'GEMINI_API_KEY',
-    'OPENAI_API_KEY',
-    'ANTHROPIC_API_KEY',
-    
-    # Blockchain Scanners
-    'ETHERSCAN_API_KEY',
-    'BSCSCAN_API_KEY',
-    'POLYGONSCAN_API_KEY',
-    'ARBISCAN_API_KEY',
-    'BASESCAN_API_KEY',
-    'SNOWTRACE_API_KEY',
-    'OPTIMISM_ETHERSCAN_API_KEY',
-    'FTMSCAN_API_KEY',
-    'HELIUS_API_KEY',
-    'SOLSCAN_API_KEY',
-    
-    # Other APIs
-    'COINGECKO_API_KEY',
-    'ALCHEMY_API_KEY',
-    'COINMARKETCAP_API_KEY',
-    'CRYPTOPANIC_API_KEY',
-    'NEWSAPI_KEY',
-    'DEXSCREENER_API_KEY',
-    'BIRDEYE_API_KEY',
-    
-    # RSS and News
-    'RSS_FEEDS',
-    'NEWS_SOURCES',
-    'FETCH_INTERVAL',
-    'NEWS_CHECK_INTERVAL',
-    'POSTS_PER_HOUR_CAP',
-    'MIN_CONFIDENCE_SCORE',
-    
-    # Timing
-    'POST_DELAY_SECONDS',
-    'IDLE_DELAY_SECONDS',
-    
-    # Paths
-    'DB_PATH',
-    'NEWS_DB_PATH',
-    'DATA_DIR',
-    'STATE_FILE',
-    'WALLET_DB_JSON_PATH',
-    
-    # Images
-    'MIN_IMAGE_WIDTH',
-    'MIN_IMAGE_HEIGHT',
-    
-    # HTTP
-    'COMMON_HEADERS',
-    
-    # Blockchain
-    'ENABLED_CHAINS',
-    'MIN_USD',
-    
-    # Features
-    'WHALE_ENABLED',
-    'NEWS_ENABLED',
-    'ANALYTICS_ENABLED',
-    'TRADING_ENABLED',
-    'HYPERLIQUID_ENABLED',
-    
-    # System
-    'LOG_LEVEL',
-    'HEALTH_CHECK_ENABLED',
-    'PORT',
-    'HTTP_TIMEOUT',
-    'RPC_TIMEOUT',
-    'WEBHOOK_TIMEOUT',
-    'MAX_MEMORY_MB',
 ]
+
+__version__ = '3.0.0'
+
+logger.info("=" * 80)
+logger.info("✅ Configuration Package готов к использованию")
+logger.info("=" * 80)

@@ -1,26 +1,36 @@
 """
 Base Configuration Module
 Базовые настройки приложения и окружения
+
+ВАЖНО: Этот модуль НЕ загружает .env файл напрямую.
+Загрузка происходит в env_loader.py ДО инициализации конфигурации.
 """
 
 import os
+import logging
 from typing import Dict, Any
-from pathlib import Path
-from dotenv import load_dotenv
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 class BaseConfig:
     """
     Базовая конфигурация приложения
-    Содержит общие настройки окружения и режимов работы
+    
+    Содержит общие настройки окружения, режимов работы,
+    таймаутов, управления памятью и метрик.
+    
+    Все значения читаются из переменных окружения с
+    разумными значениями по умолчанию.
     """
     
     def __init__(self):
         """Инициализация базовых настроек"""
         
-        # Debug и Logging
+        # ====================================================================
+        # DEBUG И LOGGING
+        # ====================================================================
+        
         self.DEBUG_MODE = self._get_bool_env('DEBUG', False)
         self.DEBUG = self.DEBUG_MODE  # Алиас для совместимости
         self.VERBOSE_LOGGING = self._get_bool_env('VERBOSE_LOGGING', False)
@@ -31,46 +41,73 @@ class BaseConfig:
         self.LOG_FILE_MAX_SIZE_MB = self._get_int_env('LOG_FILE_MAX_SIZE_MB', 50)
         self.LOG_FILE_BACKUP_COUNT = self._get_int_env('LOG_FILE_BACKUP_COUNT', 5)
         
-        # Application
+        # ====================================================================
+        # APPLICATION
+        # ====================================================================
+        
         self.ENVIRONMENT = os.getenv('ENVIRONMENT', 'production')
         self.APP_NAME = os.getenv('APP_NAME', 'CryptoCompass')
-        self.APP_VERSION = os.getenv('APP_VERSION', '4.2.0')
+        self.APP_VERSION = os.getenv('APP_VERSION', '3.0.0')
         
-        # Server
+        # ====================================================================
+        # SERVER
+        # ====================================================================
+        
         self.PORT = self._get_int_env('PORT', 8000)
         self.HOST = os.getenv('HOST', '0.0.0.0')
         
-        # Timeouts
+        # ====================================================================
+        # TIMEOUTS
+        # ====================================================================
+        
         self.HTTP_TIMEOUT = self._get_int_env('HTTP_TIMEOUT', 30)
         self.RPC_TIMEOUT = self._get_int_env('RPC_TIMEOUT', 15)
         self.WEBHOOK_TIMEOUT = self._get_int_env('WEBHOOK_TIMEOUT', 10)
         
-        # Session Settings
+        # ====================================================================
+        # SESSION SETTINGS
+        # ====================================================================
+        
         self.SESSION_TIMEOUT_TOTAL = self._get_int_env('SESSION_TIMEOUT_TOTAL', 300)
         self.SESSION_TIMEOUT_CONNECT = self._get_int_env('SESSION_TIMEOUT_CONNECT', 30)
         self.SESSION_MAX_RETRIES = self._get_int_env('SESSION_MAX_RETRIES', 3)
         self.SESSION_RETRY_DELAY = self._get_int_env('SESSION_RETRY_DELAY', 5)
         
-        # Connection Pool
+        # ====================================================================
+        # CONNECTION POOL
+        # ====================================================================
+        
         self.CONNECTION_POOL_SIZE = self._get_int_env('CONNECTION_POOL_SIZE', 100)
         self.CONNECTION_POOL_MAX_SIZE = self._get_int_env('CONNECTION_POOL_MAX_SIZE', 200)
         
-        # Memory Management
+        # ====================================================================
+        # MEMORY MANAGEMENT
+        # ====================================================================
+        
         self.MAX_MEMORY_MB = self._get_int_env('MAX_MEMORY_MB', 450)
         self.GC_INTERVAL_SECONDS = self._get_int_env('GC_INTERVAL_SECONDS', 300)
-        self.GC_THRESHOLD = (700, 10, 10)
+        self.GC_THRESHOLD = (700, 10, 10)  # Пороги для garbage collector
         
-        # Health Check
+        # ====================================================================
+        # HEALTH CHECK
+        # ====================================================================
+        
         self.HEALTH_CHECK_ENABLED = self._get_bool_env('HEALTH_CHECK_ENABLED', True)
         self.HEALTH_CHECK_INTERVAL = self._get_int_env('HEALTH_CHECK_INTERVAL', 300)
         self.HEALTH_CHECK_TIMEOUT = self._get_int_env('HEALTH_CHECK_TIMEOUT', 10)
         
-        # Metrics
-        self.METRICS_ENABLED = self._get_bool_env('METRICS_ENABLED', True)
+        # ====================================================================
+        # METRICS
+        # ====================================================================
+        
+        self.METRICS_ENABLED = self._get_bool_env('METRICS_ENABLED', False)
         self.METRICS_INTERVAL = self._get_int_env('METRICS_INTERVAL', 60)
         self.METRICS_RETENTION_HOURS = self._get_int_env('METRICS_RETENTION_HOURS', 24)
         
-        # HTTP Headers
+        # ====================================================================
+        # HTTP HEADERS
+        # ====================================================================
+        
         self.COMMON_HEADERS = {
             'User-Agent': (
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -86,45 +123,109 @@ class BaseConfig:
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0'
         }
+        
+        logger.debug("BaseConfig инициализирован")
+    
+    # ========================================================================
+    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    # ========================================================================
     
     @staticmethod
     def _get_bool_env(key: str, default: bool = False) -> bool:
-        """Получение boolean переменной окружения"""
+        """
+        Получение boolean переменной окружения
+        
+        Args:
+            key: Название переменной
+            default: Значение по умолчанию
+            
+        Returns:
+            True если переменная установлена в 'true', '1', 'yes', 'on'
+        """
         value = os.getenv(key, str(default)).lower()
-        return value in ('true', '1', 'yes', 'on')
+        return value in ('true', '1', 'yes', 'on', 'enabled')
     
     @staticmethod
     def _get_int_env(key: str, default: int) -> int:
-        """Получение integer переменной окружения"""
+        """
+        Получение integer переменной окружения
+        
+        Args:
+            key: Название переменной
+            default: Значение по умолчанию
+            
+        Returns:
+            Целое число или default при ошибке парсинга
+        """
         try:
             return int(os.getenv(key, str(default)))
         except (ValueError, TypeError):
+            logger.warning(f"Некорректное значение для {key}, используется default: {default}")
             return default
     
     @staticmethod
     def _get_float_env(key: str, default: float) -> float:
-        """Получение float переменной окружения"""
+        """
+        Получение float переменной окружения
+        
+        Args:
+            key: Название переменной
+            default: Значение по умолчанию
+            
+        Returns:
+            Число с плавающей точкой или default при ошибке парсинга
+        """
         try:
             return float(os.getenv(key, str(default)))
         except (ValueError, TypeError):
+            logger.warning(f"Некорректное значение для {key}, используется default: {default}")
             return default
     
+    # ========================================================================
+    # ПРОВЕРКИ ОКРУЖЕНИЯ
+    # ========================================================================
+    
     def is_development(self) -> bool:
-        """Проверка режима разработки"""
-        return self.ENVIRONMENT.lower() in ('development', 'dev')
+        """
+        Проверка режима разработки
+        
+        Returns:
+            True если окружение development или dev
+        """
+        return self.ENVIRONMENT.lower() in ('development', 'dev', 'local')
     
     def is_production(self) -> bool:
-        """Проверка production режима"""
+        """
+        Проверка production режима
+        
+        Returns:
+            True если окружение production или prod
+        """
         return self.ENVIRONMENT.lower() in ('production', 'prod')
     
     def is_staging(self) -> bool:
-        """Проверка staging режима"""
-        return self.ENVIRONMENT.lower() in ('staging', 'stage')
+        """
+        Проверка staging режима
+        
+        Returns:
+            True если окружение staging или stage
+        """
+        return self.ENVIRONMENT.lower() in ('staging', 'stage', 'test')
+    
+    # ========================================================================
+    # ГЕТТЕРЫ КОНФИГУРАЦИИ
+    # ========================================================================
     
     def get_timeout_config(self) -> Dict[str, int]:
-        """Получение конфигурации таймаутов"""
+        """
+        Получение конфигурации таймаутов
+        
+        Returns:
+            Словарь с настройками таймаутов
+        """
         return {
             'http': self.HTTP_TIMEOUT,
             'rpc': self.RPC_TIMEOUT,
@@ -134,7 +235,12 @@ class BaseConfig:
         }
     
     def get_session_config(self) -> Dict[str, int]:
-        """Получение конфигурации сессий"""
+        """
+        Получение конфигурации сессий
+        
+        Returns:
+            Словарь с настройками сессий и пулов соединений
+        """
         return {
             'timeout_total': self.SESSION_TIMEOUT_TOTAL,
             'timeout_connect': self.SESSION_TIMEOUT_CONNECT,
@@ -145,7 +251,12 @@ class BaseConfig:
         }
     
     def get_memory_config(self) -> Dict[str, Any]:
-        """Получение конфигурации управления памятью"""
+        """
+        Получение конфигурации управления памятью
+        
+        Returns:
+            Словарь с настройками памяти и GC
+        """
         return {
             'max_memory_mb': self.MAX_MEMORY_MB,
             'gc_interval_seconds': self.GC_INTERVAL_SECONDS,
@@ -153,7 +264,12 @@ class BaseConfig:
         }
     
     def get_health_check_config(self) -> Dict[str, Any]:
-        """Получение конфигурации health check"""
+        """
+        Получение конфигурации health check
+        
+        Returns:
+            Словарь с настройками health check
+        """
         return {
             'enabled': self.HEALTH_CHECK_ENABLED,
             'interval': self.HEALTH_CHECK_INTERVAL,
@@ -161,15 +277,29 @@ class BaseConfig:
         }
     
     def get_metrics_config(self) -> Dict[str, Any]:
-        """Получение конфигурации метрик"""
+        """
+        Получение конфигурации метрик
+        
+        Returns:
+            Словарь с настройками метрик
+        """
         return {
             'enabled': self.METRICS_ENABLED,
             'interval': self.METRICS_INTERVAL,
             'retention_hours': self.METRICS_RETENTION_HOURS
         }
     
+    # ========================================================================
+    # СЕРИАЛИЗАЦИЯ
+    # ========================================================================
+    
     def to_dict(self) -> Dict[str, Any]:
-        """Конвертация в словарь"""
+        """
+        Конвертация в словарь
+        
+        Returns:
+            Словарь со всеми параметрами базовой конфигурации
+        """
         return {
             'environment': self.ENVIRONMENT,
             'app_name': self.APP_NAME,
@@ -185,3 +315,13 @@ class BaseConfig:
             'health_check': self.get_health_check_config(),
             'metrics': self.get_metrics_config()
         }
+    
+    def __repr__(self) -> str:
+        """Строковое представление"""
+        return (
+            f"BaseConfig("
+            f"env={self.ENVIRONMENT}, "
+            f"port={self.PORT}, "
+            f"debug={self.DEBUG_MODE}"
+            f")"
+        )
