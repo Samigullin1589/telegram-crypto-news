@@ -1,153 +1,103 @@
 # core/components/loaders.py
 """
-Component Loaders
-Загрузчики бизнес-компонентов приложения
+Component Loaders v2.0 - Main Entry Point
+Центральная точка загрузки всех компонентов системы
 """
 
 import logging
-from typing import Optional, Any
+from typing import Optional, Any, Dict
+
+from .news_loader import NewsLoader
+from .whale_loader import WhaleLoader
+from .trading_loader import TradingLoader
+from .bot_loader import BotLoader
+from .loader_utils import LoaderUtils
 
 logger = logging.getLogger(__name__)
 
 
 class ComponentLoader:
     """
-    Загрузчик бизнес-компонентов приложения
+    Центральный загрузчик компонентов
     
-    Отвечает за безопасную загрузку модулей с обработкой ошибок
-    и логированием процесса
+    Улучшения v2.0:
+    - Модульная архитектура
+    - Proper dependency injection
+    - Comprehensive error handling
+    - Validation после загрузки
     """
     
-    @staticmethod
-    def load_news_processor() -> Optional[Any]:
+    def __init__(self):
+        """Инициализация загрузчика"""
+        self.utils = LoaderUtils()
+        self.news_loader = NewsLoader(self.utils)
+        self.whale_loader = WhaleLoader(self.utils)
+        self.trading_loader = TradingLoader(self.utils)
+        self.bot_loader = BotLoader(self.utils)
+    
+    def load_news_processor(self) -> Optional[Any]:
         """
         Загрузка News Processor
         
         Returns:
             NewsProcessor instance или None
         """
-        try:
-            from app.config import config
-            
-            if not config.is_feature_enabled('news'):
-                logger.info("ℹ️  [LOADER] News Bot отключен в конфигурации")
-                return None
-            
-            logger.info("📰 [LOADER] Загрузка News Processor...")
-            
-            try:
-                from bot.news.processor import NewsProcessor
-                processor = NewsProcessor()
-            except ImportError:
-                logger.debug("   Попытка импорта из bot.processor")
-                from bot.processor import NewsProcessor
-                processor = NewsProcessor()
-            
-            logger.info("✅ [LOADER] News Processor успешно загружен")
-            return processor
-            
-        except ImportError as e:
-            logger.warning(f"⚠️  [LOADER] News Processor недоступен: {e}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ [LOADER] Ошибка загрузки News Processor: {e}")
-            logger.debug("Traceback:", exc_info=True)
-            return None
+        return self.news_loader.load()
     
-    @staticmethod
-    def load_whale_scheduler() -> Optional[Any]:
+    def load_whale_scheduler(self) -> Optional[Any]:
         """
         Загрузка Whale Scheduler
         
         Returns:
-            Scheduler instance или None
+            WhaleMonitor instance или None
         """
-        try:
-            from app.config import config
-            
-            if not config.is_feature_enabled('whale'):
-                logger.info("ℹ️  [LOADER] Whale Monitor отключен в конфигурации")
-                return None
-            
-            logger.info("🐋 [LOADER] Загрузка Whale Scheduler...")
-            
-            try:
-                from app.scheduler.whale_monitor import WhaleMonitor
-                scheduler = WhaleMonitor()
-            except (ImportError, AttributeError):
-                logger.debug("   Попытка импорта scheduler из app.scheduler")
-                from app.scheduler import scheduler
-                return scheduler
-            
-            logger.info("✅ [LOADER] Whale Scheduler успешно загружен")
-            return scheduler
-            
-        except ImportError as e:
-            logger.warning(f"⚠️  [LOADER] Whale Scheduler недоступен: {e}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ [LOADER] Ошибка загрузки Whale Scheduler: {e}")
-            logger.debug("Traceback:", exc_info=True)
-            return None
+        return self.whale_loader.load()
     
-    @staticmethod
-    def load_bot_application() -> Optional[Any]:
+    def load_bot_application(self) -> Optional[Any]:
         """
         Загрузка Bot Application
         
         Returns:
             Application instance или None
         """
-        try:
-            logger.info("🤖 [LOADER] Загрузка Bot Application...")
-            
-            from app.bot import application as bot_application
-            
-            if bot_application is None:
-                logger.warning("⚠️  [LOADER] Bot Application не инициализирован")
-                return None
-            
-            logger.info("✅ [LOADER] Bot Application успешно загружен")
-            return bot_application
-            
-        except ImportError as e:
-            logger.warning(f"⚠️  [LOADER] Bot Application недоступен: {e}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ [LOADER] Ошибка загрузки Bot Application: {e}")
-            logger.debug("Traceback:", exc_info=True)
-            return None
+        return self.bot_loader.load()
     
-    @staticmethod
-    def load_trading_system() -> Optional[Any]:
+    def load_trading_system(self) -> Optional[Any]:
         """
         Загрузка Trading System
         
         Returns:
             TradingSystem instance или None
         """
-        try:
-            from app.config import config
-            
-            if not config.is_feature_enabled('trading'):
-                logger.debug("ℹ️  [LOADER] Trading System отключен")
-                return None
-            
-            logger.info("📈 [LOADER] Загрузка Trading System...")
-            
-            from app.trading_system import TradingSystem
-            trading = TradingSystem()
-            
-            logger.info("✅ [LOADER] Trading System успешно загружен")
-            return trading
-            
-        except ImportError:
-            logger.debug("   Trading System недоступен")
-            return None
-            
-        except Exception as e:
-            logger.warning(f"⚠️  [LOADER] Ошибка Trading System: {e}")
-            return None
+        return self.trading_loader.load()
+    
+    def load_all_components(self) -> Dict[str, Any]:
+        """
+        Загрузка всех компонентов
+        
+        Returns:
+            Dict с загруженными компонентами
+        """
+        logger.info("\n" + "="*80)
+        logger.info("📦 ЗАГРУЗКА КОМПОНЕНТОВ СИСТЕМЫ")
+        logger.info("="*80)
+        
+        components = {
+            'news_processor': self.load_news_processor(),
+            'whale_scheduler': self.load_whale_scheduler(),
+            'bot_application': self.load_bot_application(),
+            'trading_system': self.load_trading_system()
+        }
+        
+        # Подсчет успешно загруженных
+        loaded = sum(1 for c in components.values() if c is not None)
+        total = len(components)
+        
+        logger.info("="*80)
+        logger.info(f"✅ Загружено {loaded}/{total} компонентов")
+        logger.info("="*80 + "\n")
+        
+        return components
+
+
+__all__ = ['ComponentLoader']
