@@ -1,4 +1,3 @@
-# app/config/__init__.py
 """
 Configuration Package
 Главный модуль конфигурации с правильной архитектурой без циклических импортов
@@ -33,6 +32,8 @@ from .blockchain_config import BlockchainConfig
 from .features_config import FeaturesConfig
 from .database_config import DatabaseConfig
 from .rate_limiting_config import RateLimitingConfig
+from .config_validator import ConfigValidator
+from .config_printer import ConfigPrinter
 
 
 # ============================================================================
@@ -67,22 +68,15 @@ class Config:
         if self._initialized:
             return
         
-        self._print_initialization_header()
         self._initialize_configuration_modules()
-        self._validate_configuration()
-        self._print_configuration_summary()
+        self._initialize_helpers()
+        self._print_initialization_info()
         
         self._initialized = True
     
     # ========================================================================
     # Инициализация
     # ========================================================================
-    
-    def _print_initialization_header(self) -> None:
-        """Вывод заголовка инициализации конфигурации"""
-        print("\n" + "=" * 80)
-        print("⚙️  CRYPTO COMPASS - CONFIGURATION INITIALIZATION v4.2.0")
-        print("=" * 80 + "\n")
     
     def _initialize_configuration_modules(self) -> None:
         """
@@ -130,44 +124,18 @@ class Config:
         
         logger.info("✅ Все модули конфигурации инициализированы")
     
-    # ========================================================================
-    # Валидация конфигурации
-    # ========================================================================
+    def _initialize_helpers(self) -> None:
+        """Инициализация вспомогательных классов"""
+        self.validator = ConfigValidator(self)
+        self.printer = ConfigPrinter(self)
     
-    def _validate_configuration(self) -> None:
-        """
-        Комплексная валидация конфигурации
+    def _print_initialization_info(self) -> None:
+        """Вывод информации об инициализации"""
+        # Заголовок
+        self.printer.print_initialization_header()
         
-        Проверяет:
-        - Наличие обязательных API ключей
-        - Корректность настроек блокчейнов
-        - Активные источники новостей
-        - AI провайдеры
-        - Функциональные модули
-        """
-        logger.info("🔍 Валидация конфигурации...")
-        
-        validation_results = []
-        
-        # Проверка активных фидов
-        active_feeds_count = len(self.feeds.get_enabled_feeds())
-        if active_feeds_count == 0:
-            validation_results.append("⚠️  Нет активных RSS источников новостей")
-        
-        # Проверка AI провайдера
-        if not self.api.has_ai_provider():
-            validation_results.append("⚠️  AI провайдер не настроен")
-        
-        # Проверка API ключей для блокчейн сканеров
-        missing_scanner_keys = self.get_missing_scanner_keys()
-        if missing_scanner_keys:
-            validation_results.append(
-                f"⚠️  Отсутствуют API ключи для сканеров: {', '.join(missing_scanner_keys)}"
-            )
-        
-        # Проверка что хотя бы одна функция включена
-        if not self.features.is_any_feature_enabled():
-            validation_results.append("❌ Все функциональные модули отключены!")
+        # Валидация
+        validation_results = self.validator.validate()
         
         # Вывод результатов валидации
         if validation_results:
@@ -175,26 +143,8 @@ class Config:
             for result in validation_results:
                 print(f"   {result}")
         
-        logger.info("✅ Валидация завершена")
-    
-    def _print_configuration_summary(self) -> None:
-        """Вывод сводки загруженной конфигурации"""
-        print("\n" + "=" * 80)
-        print("📊 CONFIGURATION SUMMARY")
-        print("=" * 80)
-        print(f"   Окружение: {self.base.ENVIRONMENT}")
-        print(f"   Debug режим: {self.base.DEBUG}")
-        print(f"   Активных RSS фидов: {len(self.feeds.get_enabled_feeds())}")
-        print(f"   Включенные блокчейны: {', '.join(self.blockchain.enabled_chains)}")
-        print(f"   AI Provider: {self.api.get_ai_provider() or 'Не настроен'}")
-        print(f"   База данных: {self.paths.db_path}")
-        print("\n   Функциональные модули:")
-        print(f"      • Whale Monitor: {'✅ Включен' if self.features.whale_enabled else '❌ Отключен'}")
-        print(f"      • News Bot: {'✅ Включен' if self.features.news_enabled else '❌ Отключен'}")
-        print(f"      • Analytics: {'✅ Включен' if self.features.analytics_enabled else '❌ Отключен'}")
-        print(f"      • Trading System: {'✅ Включен' if self.features.trading_enabled else '❌ Отключен'}")
-        print(f"      • Hyperliquid: {'✅ Включен' if self.features.hyperliquid_enabled else '❌ Отключен'}")
-        print("=" * 80 + "\n")
+        # Сводка конфигурации
+        self.printer.print_configuration_summary()
     
     # ========================================================================
     # API ключи и сканеры
@@ -555,6 +505,8 @@ __all__ = [
     'FeaturesConfig',
     'DatabaseConfig',
     'RateLimitingConfig',
+    'ConfigValidator',
+    'ConfigPrinter',
     
     # Константы для обратной совместимости
     # Telegram
