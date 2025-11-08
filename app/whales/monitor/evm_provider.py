@@ -1,56 +1,70 @@
 # app/whales/monitor/evm_provider.py
 """
-EVM Chain Provider v2.0 (Ethereum, BSC, Base, Arbitrum, Polygon)
-Optimized for production with better error handling
+EVM Chain Provider v3.0
+Модульная архитектура для работы с EVM-совместимыми блокчейнами
 """
 
 import asyncio
-from typing import List, Dict, Optional
+import logging
+from typing import List, Optional
 from datetime import datetime
 
 from app.config import config
 from app.whales.normalize import WhaleEvent
 from app.whales.monitor.dex_detector import DEXDetector
+from .evm_components import (
+    EVMBlockFetcher,
+    EVMTransactionParser,
+    EVMPriceProvider,
+    EVMRPCClient,
+    EVMEventFilter
+)
+
+logger = logging.getLogger(__name__)
 
 
 class EVMProvider:
-    """Провайдер для EVM-совместимых блокчейнов"""
+    """
+    Главный провайдер для EVM-совместимых блокчейнов
+    Координирует работу всех подкомпонентов
+    """
+    
+    SUPPORTED_CHAINS = ["ethereum", "bsc", "base", "arbitrum", "polygon"]
     
     def __init__(self, session, rate_limiter, tx_cache, dex_detector: DEXDetector):
+        """
+        Инициализация провайдера
+        
+        Args:
+            session: aiohttp ClientSession
+            rate_limiter: Rate limiter для контроля частоты запросов
+            tx_cache: Кэш обработанных транзакций
+            dex_detector: Детектор DEX адресов
+        """
         self.session = session
         self.rate_limiter = rate_limiter
         self.tx_cache = tx_cache
         self.dex_detector = dex_detector
         
-        self.rpc_endpoints = {
-            "ethereum": "https://eth.llamarpc.com",
-            "bsc": "https://bsc-dataseed.binance.org",
-            "base": "https://mainnet.base.org",
-            "arbitrum": "https://arb1.arbitrum.io/rpc",
-            "polygon": "https://polygon-rpc.com"
+        # Инициализация компонентов
+        self.rpc_client = EVMRPCClient(session)
+        self.block_fetcher = EVMBlockFetcher(self.rpc_client, rate_limiter)
+        self.price_provider = EVMPriceProvider(session)
+        self.transaction_parser = EVMTransactionParser(
+            dex_detector, 
+            self.price_provider
+        )
+        self.event_filter = EVMEventFilter()
+        
+        # Статистика
+        self.stats = {
+            "blocks_scanned": 0,
+            "transactions_checked": 0,
+            "events_found": 0,
+            "errors": 0
         }
         
-        self.fallback_rpc = {
-            "ethereum": "https://rpc.ankr.com/eth",
-            "bsc": "https://rpc.ankr.com/bsc",
-            "base": "https://base.blockpi.network/v1/rpc/public",
-            "arbitrum": "https://rpc.ankr.com/arbitrum",
-            "polygon": "https://rpc.ankr.com/polygon"
-        }
-        
-        self.chain_configs = {
-            "ethereum": {"native": "ETH", "decimals": 18, "block_time": 12},
-            "bsc": {"native": "BNB", "decimals": 18, "block_time": 3},
-            "base": {"native": "ETH", "decimals": 18, "block_time": 2},
-            "arbitrum": {"native": "ETH", "decimals": 18, "block_time": 0.25},
-            "polygon": {"native": "MATIC", "decimals": 18, "block_time": 2}
-        }
-        
-        self.fallback_prices = {
-            "ETH": 2500,
-            "BNB": 400,
-            "MATIC": 0.8
-        }
+        logger.info("🔧 [EVM] Провайдер инициализирован для chains: %s", self.SUPPORTED_CHAINS)
     
     async def fetch_events(
         self,
@@ -58,12 +72,43 @@ class EVMProvider:
         start_time: datetime,
         assets: Optional[List[str]] = None
     ) -> List[WhaleEvent]:
-        """Получает события для EVM chain"""
+        """
+        Получение whale событий для указанного EVM chain
+        
+        Args:
+            chain: Название блокчейна
+            start_time: Время начала периода мониторинга
+            assets: Список активов для мониторинга (опционально)
+            
+        Returns:
+            Список обнаруженных whale событий
+        """
+        if chain not in self.SUPPORTED_CHAINS:
+            logger.error(f"❌ [EVM] Неподдерживаемый chain: {chain}")
+            return []
+        
+        logger.info(f"🔍 [EVM] Начинаю сканирование {chain} с {start_time}")
+        
+        # Сброс статистики для нового цикла
+        self._reset_stats()
         
         events = []
         
-        native_events = await self._fetch_native_transfers(chain, start_time)
-        events.extend(native_events)
+        try:
+            # Получение нативных переводов
+            native_events = await self._fetch_native_transfers(chain, start_time)
+            events.extend(native_events)
+            
+            # Получение ERC20 переводов (если доступно)
+            erc20_events = await self._fetch_erc20_transfers(chain, start_time, assets)
+            events.extend(erc20_events)
+            
+            # Логирование результатов
+            self._log_scan_results(chain)
+            
+        except Exception as e:
+            logger.error(f"❌ [EVM] Критическая ошибка при сканировании {chain}: {e}", exc_info=True)
+            self.stats["errors"] += 1
         
         return events
     
@@ -72,228 +117,219 @@ class EVMProvider:
         chain: str,
         start_time: datetime
     ) -> List[WhaleEvent]:
-        """Получает крупные нативные транзакции"""
+        """
+        Получение крупных нативных переводов (ETH, BNB, MATIC и т.д.)
         
+        Args:
+            chain: Название блокчейна
+            start_time: Время начала периода
+            
+        Returns:
+            Список нативных whale событий
+        """
         events = []
         
         try:
-            latest_block = await self._get_latest_block(chain)
+            # Определение диапазона блоков для сканирования
+            latest_block = await self.block_fetcher.get_latest_block_number(chain)
             
             if latest_block is None:
+                logger.warning(f"⚠️ [EVM] Не удалось получить latest block для {chain}")
                 return []
             
-            time_window_minutes = (datetime.utcnow() - start_time).total_seconds() / 60
-            chain_config = self.chain_configs[chain]
-            block_time = chain_config["block_time"]
-            blocks_to_scan = int((time_window_minutes * 60) / block_time)
-            blocks_to_scan = min(blocks_to_scan, 50)
-            
+            blocks_to_scan = self._calculate_blocks_to_scan(chain, start_time, latest_block)
             start_block = max(latest_block - blocks_to_scan, 0)
             
-            batch_size = 5
+            logger.info(
+                f"📊 [EVM] {chain}: будут проверены блоки {start_block}-{latest_block} "
+                f"({blocks_to_scan} блоков)"
+            )
             
-            for block_num in range(start_block, latest_block, batch_size):
-                actual_batch = min(batch_size, latest_block - block_num)
-                
-                block_tasks = [
-                    self._get_block_with_txs(chain, block_num + i)
-                    for i in range(actual_batch)
-                ]
-                
-                blocks = await asyncio.gather(*block_tasks, return_exceptions=True)
-                
-                for block_data in blocks:
-                    if isinstance(block_data, Exception) or not block_data:
-                        continue
-                    
-                    transactions = block_data.get("transactions", [])
-                    
-                    for tx in transactions:
-                        tx_hash = tx.get("hash", "")
-                        if self.tx_cache.contains(tx_hash):
-                            continue
-                        
-                        event = await self._parse_native_transaction(tx, chain)
-                        
-                        if event:
-                            events.append(event)
-                            self.tx_cache.add(tx_hash)
-                
-                await asyncio.sleep(0.2)
+            # Сканирование блоков батчами
+            batch_events = await self.block_fetcher.fetch_blocks_batch(
+                chain=chain,
+                start_block=start_block,
+                end_block=latest_block,
+                batch_size=10
+            )
+            
+            # Обработка транзакций из блоков
+            for block_data in batch_events:
+                block_events = await self._process_block(block_data, chain)
+                events.extend(block_events)
+                self.stats["blocks_scanned"] += 1
+            
+            logger.info(f"✅ [EVM] {chain}: найдено {len(events)} нативных событий")
         
         except Exception as e:
-            print(f"❌ [EVM] Ошибка {chain}: {e}")
+            logger.error(f"❌ [EVM] Ошибка получения нативных переводов {chain}: {e}")
+            self.stats["errors"] += 1
         
         return events
     
-    async def _get_latest_block(self, chain: str) -> Optional[int]:
-        """Получает номер последнего блока с fallback"""
-        
-        rpc_urls = [
-            self.rpc_endpoints[chain],
-            self.fallback_rpc.get(chain)
-        ]
-        
-        for rpc_url in rpc_urls:
-            if not rpc_url:
-                continue
-            
-            try:
-                rpc_payload = {
-                    "jsonrpc": "2.0",
-                    "method": "eth_blockNumber",
-                    "params": [],
-                    "id": 1
-                }
-                
-                headers = {"Content-Type": "application/json"}
-                
-                async with self.session.post(
-                    rpc_url,
-                    json=rpc_payload,
-                    headers=headers,
-                    timeout=15
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    
-                    if "error" in data:
-                        continue
-                    
-                    result = data.get("result", "0x0")
-                    if isinstance(result, str) and result.startswith("0x"):
-                        return int(result, 16)
-            
-            except asyncio.TimeoutError:
-                print(f"⏱️ [EVM] {chain} timeout on {rpc_url}")
-                continue
-            
-            except Exception:
-                continue
-        
-        return None
-    
-    async def _get_block_with_txs(
+    async def _fetch_erc20_transfers(
         self,
         chain: str,
-        block_num: int
-    ) -> Optional[Dict]:
-        """Получает блок с транзакциями (оптимизировано)"""
+        start_time: datetime,
+        assets: Optional[List[str]] = None
+    ) -> List[WhaleEvent]:
+        """
+        Получение крупных ERC20 переводов
         
-        rpc_urls = [
-            self.rpc_endpoints[chain],
-            self.fallback_rpc.get(chain)
-        ]
-        
-        for rpc_url in rpc_urls:
-            if not rpc_url:
-                continue
+        Args:
+            chain: Название блокчейна
+            start_time: Время начала периода
+            assets: Список токенов для мониторинга
             
-            try:
-                rpc_payload = {
-                    "jsonrpc": "2.0",
-                    "method": "eth_getBlockByNumber",
-                    "params": [hex(block_num), True],
-                    "id": 1
-                }
-                
-                headers = {"Content-Type": "application/json"}
-                
-                async with self.session.post(
-                    rpc_url,
-                    json=rpc_payload,
-                    headers=headers,
-                    timeout=20
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    
-                    if "error" in data:
-                        continue
-                    
-                    return data.get("result")
-            
-            except asyncio.TimeoutError:
-                continue
-            
-            except Exception:
-                continue
-        
-        return None
+        Returns:
+            Список ERC20 whale событий
+        """
+        # TODO: Реализация ERC20 мониторинга в следующей версии
+        # Требует декодирование логов событий Transfer
+        return []
     
-    async def _parse_native_transaction(
+    async def _process_block(
         self,
-        tx: Dict,
+        block_data: dict,
         chain: str
-    ) -> Optional[WhaleEvent]:
-        """Парсит нативную EVM транзакцию"""
+    ) -> List[WhaleEvent]:
+        """
+        Обработка одного блока и его транзакций
         
+        Args:
+            block_data: Данные блока из RPC
+            chain: Название блокчейна
+            
+        Returns:
+            Список событий из этого блока
+        """
+        events = []
+        
+        if not block_data:
+            return events
+        
+        # Получение timestamp блока
+        block_timestamp = block_data.get("timestamp")
+        block_number = block_data.get("number")
+        
+        if not block_timestamp:
+            logger.debug(f"⚠️ [EVM] Блок {block_number} не имеет timestamp")
+            return events
+        
+        # Конвертация timestamp
         try:
-            from_addr = tx.get("from", "").lower()
-            to_addr = tx.get("to", "").lower()
-            
-            if not from_addr or not to_addr:
-                return None
-            
-            value_hex = tx.get("value", "0x0")
-            
-            if not isinstance(value_hex, str):
-                return None
-            
-            try:
-                value_wei = int(value_hex, 16)
-            except (ValueError, TypeError):
-                return None
-            
-            if value_wei == 0:
-                return None
-            
-            chain_config = self.chain_configs[chain]
-            decimals = chain_config["decimals"]
-            native_token = chain_config["native"]
-            
-            amount = value_wei / (10 ** decimals)
-            
-            price = self.fallback_prices.get(native_token, 2000)
-            amount_usd = amount * price
-            
-            min_threshold = getattr(config.whale, 'min_usd_threshold', 50000)
-            if amount_usd < min_threshold:
-                return None
-            
-            block_time_unix = tx.get("timestamp")
-            if block_time_unix:
-                try:
-                    if isinstance(block_time_unix, str):
-                        timestamp = int(block_time_unix, 16)
-                    else:
-                        timestamp = int(block_time_unix)
-                    tx_time = datetime.fromtimestamp(timestamp)
-                except (ValueError, TypeError, OSError):
-                    tx_time = datetime.utcnow()
+            if isinstance(block_timestamp, str):
+                timestamp_int = int(block_timestamp, 16)
             else:
-                tx_time = datetime.utcnow()
+                timestamp_int = int(block_timestamp)
             
-            dex = self.dex_detector.detect_evm_dex(chain, to_addr)
+            block_time = datetime.utcfromtimestamp(timestamp_int)
+        except (ValueError, TypeError, OSError) as e:
+            logger.warning(f"⚠️ [EVM] Ошибка парсинга timestamp блока {block_number}: {e}")
+            block_time = datetime.utcnow()
+        
+        # Обработка транзакций
+        transactions = block_data.get("transactions", [])
+        
+        logger.debug(f"🔍 [EVM] Блок {block_number}: {len(transactions)} транзакций")
+        
+        for tx in transactions:
+            if not isinstance(tx, dict):
+                continue
             
-            event = WhaleEvent(
+            self.stats["transactions_checked"] += 1
+            
+            # Проверка кэша
+            tx_hash = tx.get("hash", "")
+            if self.tx_cache.contains(tx_hash):
+                continue
+            
+            # Парсинг транзакции
+            event = await self.transaction_parser.parse_native_transaction(
+                tx=tx,
                 chain=chain,
-                asset=native_token,
-                from_address=from_addr,
-                to_address=to_addr,
-                amount_native=amount,
-                amount_usd=amount_usd,
-                tx_hash=tx.get("hash", ""),
-                direction="unknown",
-                phase="execution",
-                dex=dex,
-                is_internal=False,
-                is_bridge=False,
-                is_reorg=False,
-                tx_time_utc=tx_time
+                block_time=block_time
             )
             
-            return event
+            if event:
+                # Фильтрация события
+                if self.event_filter.should_process(event):
+                    events.append(event)
+                    self.tx_cache.add(tx_hash)
+                    self.stats["events_found"] += 1
+                    
+                    logger.info(
+                        f"💰 [EVM] Найдено событие: {event.asset} "
+                        f"${event.amount_usd:,.0f} на {chain}"
+                    )
         
-        except Exception as e:
-            return None
+        return events
+    
+    def _calculate_blocks_to_scan(
+        self,
+        chain: str,
+        start_time: datetime,
+        latest_block: int
+    ) -> int:
+        """
+        Расчёт количества блоков для сканирования
+        
+        Args:
+            chain: Название блокчейна
+            start_time: Время начала
+            latest_block: Номер последнего блока
+            
+        Returns:
+            Количество блоков для сканирования
+        """
+        time_window_seconds = (datetime.utcnow() - start_time).total_seconds()
+        
+        # Получение среднего времени блока
+        block_time = self.block_fetcher.get_block_time(chain)
+        
+        # Расчёт количества блоков
+        estimated_blocks = int(time_window_seconds / block_time)
+        
+        # Ограничение максимального количества блоков
+        max_blocks = 100
+        blocks_to_scan = min(estimated_blocks, max_blocks)
+        
+        logger.debug(
+            f"📊 [EVM] {chain}: время окна {time_window_seconds}s, "
+            f"block_time {block_time}s, сканирую {blocks_to_scan} блоков"
+        )
+        
+        return blocks_to_scan
+    
+    def _reset_stats(self):
+        """Сброс статистики"""
+        self.stats = {
+            "blocks_scanned": 0,
+            "transactions_checked": 0,
+            "events_found": 0,
+            "errors": 0
+        }
+    
+    def _log_scan_results(self, chain: str):
+        """
+        Логирование результатов сканирования
+        
+        Args:
+            chain: Название блокчейна
+        """
+        logger.info(
+            f"📊 [EVM] {chain} - Результаты сканирования: "
+            f"блоков={self.stats['blocks_scanned']}, "
+            f"транзакций={self.stats['transactions_checked']}, "
+            f"событий={self.stats['events_found']}, "
+            f"ошибок={self.stats['errors']}"
+        )
+    
+    def get_stats(self) -> dict:
+        """
+        Получение статистики провайдера
+        
+        Returns:
+            Dict со статистикой
+        """
+        return self.stats.copy()
