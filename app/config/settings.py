@@ -1,9 +1,11 @@
 # app/config/settings.py
 """
-Main configuration settings
+Configuration Settings v2.0
+Модульная система конфигурации с валидацией и гибкими порогами
 """
 
 import os
+import logging
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 
@@ -30,9 +32,14 @@ from app.config.validators import ConfigValidator
 from app.config.printer import ConfigPrinter
 from app.config.paths import PathManager, EnvironmentPaths
 
+logger = logging.getLogger(__name__)
+
 
 class Config:
-    """Главный класс конфигурации"""
+    """
+    Главный класс конфигурации приложения
+    Singleton pattern для единого источника конфигурации
+    """
     
     _instance = None
     
@@ -46,10 +53,12 @@ class Config:
         if self._initialized:
             return
         
-        print('🔧 [CONFIG] Инициализация конфигурации...')
+        print('🔧 [CONFIG] Инициализация конфигурации системы...')
         
+        # Загрузчик переменных окружения
         self.env = EnvironmentLoader()
         
+        # Загрузка всех конфигурационных секций
         self._load_telegram_config()
         self._load_production_config()
         self._load_rate_limit_config()
@@ -72,11 +81,13 @@ class Config:
         self._load_api_keys()
         
         self._initialized = True
+        
+        # Валидация и вывод информации
         self._validate()
         self._print_summary()
     
     def _load_telegram_config(self):
-        """Загружает Telegram конфигурацию"""
+        """Загрузка конфигурации Telegram"""
         self.telegram = TelegramConfig(
             token=self.env.get_required_env('TELEGRAM_BOT_TOKEN', 'TELEGRAM_TOKEN', 'BOT_TOKEN'),
             channel_id=self.env.get_required_env('TELEGRAM_CHANNEL_ID', 'CHAT_ID', 'CHANNEL_ID'),
@@ -85,7 +96,7 @@ class Config:
         )
     
     def _load_production_config(self):
-        """Загружает Production конфигурацию"""
+        """Загрузка production конфигурации"""
         self.production = ProductionConfig(
             port=self.env.get_int_env('PORT', 8000),
             http_timeout=self.env.get_int_env('HTTP_TIMEOUT', 30),
@@ -98,7 +109,7 @@ class Config:
         )
     
     def _load_rate_limit_config(self):
-        """Загружает Rate Limit конфигурацию"""
+        """Загрузка конфигурации rate limiting"""
         self.rate_limit = RateLimitConfig(
             enabled=self.env.get_bool_env('RATE_LIMIT_ENABLED', True),
             calls_per_minute=self.env.get_int_env('RATE_LIMIT_CALLS', 60),
@@ -109,12 +120,14 @@ class Config:
         )
     
     def _load_chains_config(self):
-        """Загружает Chains конфигурацию"""
+        """Загрузка конфигурации блокчейнов"""
+        # Список активных блокчейнов
         enabled_chains = self.env.get_list_env(
             'ENABLED_CHAINS',
             ['ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'solana']
         )
         
+        # RPC endpoints для каждого блокчейна
         rpc_urls = {
             'ethereum': self.env.get_env('ETHEREUM_RPC_URL', 'https://eth.llamarpc.com'),
             'bsc': self.env.get_env('BSC_RPC_URL', 'https://bsc-dataseed.binance.org'),
@@ -127,6 +140,7 @@ class Config:
             'avalanche': self.env.get_env('AVALANCHE_RPC_URL', 'https://api.avax.network/ext/bc/C/rpc'),
         }
         
+        # API ключи для explorer и RPC сервисов
         api_keys = {
             'etherscan': self.env.get_env('ETHERSCAN_API_KEY', ''),
             'bscscan': self.env.get_env('BSCSCAN_API_KEY', ''),
@@ -138,6 +152,7 @@ class Config:
             'snowtrace': self.env.get_env('SNOWTRACE_API_KEY', ''),
         }
         
+        # Fallback RPC URLs
         fallback_urls = {
             'ethereum': self.env.get_env('ETHEREUM_FALLBACK_RPC', 'https://rpc.ankr.com/eth'),
             'solana': self.env.get_env('SOLANA_FALLBACK_RPC', 'https://solana-api.projectserum.com'),
@@ -151,20 +166,42 @@ class Config:
         )
     
     def _load_whale_config(self):
-        """Загружает Whale конфигурацию"""
+        """
+        Загрузка конфигурации whale мониторинга
+        КРИТИЧНО: Пороги должны быть реалистичными для обнаружения событий
+        """
+        # Базовый порог в USD - СНИЖЕН до реалистичного значения
+        base_threshold = self.env.get_float_env(
+            'WHALE_MIN_VALUE_USD',
+            self.env.get_float_env('MIN_USD_THRESHOLD', 10000.0)  # $10K вместо $50K
+        )
+        
+        # Специфичные пороги для разных блокчейнов
+        chain_thresholds = {
+            'ethereum': self.env.get_float_env('WHALE_ETHEREUM_MIN_USD', base_threshold),
+            'bsc': self.env.get_float_env('WHALE_BSC_MIN_USD', base_threshold * 0.5),  # $5K
+            'polygon': self.env.get_float_env('WHALE_POLYGON_MIN_USD', base_threshold * 0.3),  # $3K
+            'arbitrum': self.env.get_float_env('WHALE_ARBITRUM_MIN_USD', base_threshold * 0.5),  # $5K
+            'base': self.env.get_float_env('WHALE_BASE_MIN_USD', base_threshold * 0.5),  # $5K
+            'solana': self.env.get_float_env('WHALE_SOLANA_MIN_USD', base_threshold * 0.5),  # $5K
+        }
+        
         self.whale = WhaleConfig(
-            min_usd_threshold=self.env.get_float_env(
-                'WHALE_MIN_VALUE_USD',
-                self.env.get_float_env('MIN_USD_THRESHOLD', 50000.0)
-            ),
+            min_usd_threshold=base_threshold,
+            chain_thresholds=chain_thresholds,
             min_confidence_score=self.env.get_int_env('MIN_CONFIDENCE_SCORE', 6),
             posts_per_hour_cap=self.env.get_int_env('POSTS_PER_HOUR_CAP', 5),
             poll_seconds=self.env.get_int_env('POLL_SECONDS', 120),
             start_from_minutes_ago=self.env.get_int_env('START_FROM_MINUTES_AGO', 60)
         )
+        
+        logger.info(f"🐋 [CONFIG] Whale пороги установлены:")
+        logger.info(f"  • Базовый: ${base_threshold:,.0f}")
+        for chain, threshold in chain_thresholds.items():
+            logger.info(f"  • {chain}: ${threshold:,.0f}")
     
     def _load_hyperliquid_config(self):
-        """Загружает Hyperliquid конфигурацию"""
+        """Загрузка конфигурации Hyperliquid"""
         self.hyperliquid = HyperliquidConfig(
             enabled=self.env.get_bool_env('HYPERLIQUID_ENABLED', True),
             api_url=self.env.get_env('HYPERLIQUID_API_URL', 'https://api.hyperliquid.xyz'),
@@ -176,7 +213,7 @@ class Config:
         )
     
     def _load_trading_config(self):
-        """Загружает Trading конфигурацию"""
+        """Загрузка конфигурации торговли"""
         monitored_assets = self.env.get_list_env(
             'TRADING_MONITORED_ASSETS',
             ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'MATIC', 'LINK']
@@ -190,7 +227,7 @@ class Config:
         )
     
     def _load_news_config(self):
-        """Загружает News конфигурацию"""
+        """Загрузка конфигурации новостей"""
         self.news = NewsConfig(
             enabled=self.env.get_bool_env('NEWS_ENABLED', True),
             fetch_interval=self.env.get_int_env(
@@ -210,7 +247,7 @@ class Config:
         )
     
     def _load_smart_discovery_config(self):
-        """Загружает Smart Discovery конфигурацию"""
+        """Загрузка конфигурации smart discovery"""
         self.smart_discovery = SmartDiscoveryConfig(
             enabled=self.env.get_bool_env('SMART_DISCOVERY_ENABLED', True),
             interval_hours=self.env.get_int_env('SMART_DISCOVERY_INTERVAL_HOURS', 6),
@@ -225,7 +262,7 @@ class Config:
         )
     
     def _load_validation_config(self):
-        """Загружает Validation конфигурацию"""
+        """Загрузка конфигурации валидации"""
         self.validation = ValidationConfig(
             enabled=self.env.get_bool_env('VALIDATION_ENABLED', True),
             interval_days=self.env.get_int_env('VALIDATION_INTERVAL_DAYS', 1),
@@ -237,7 +274,7 @@ class Config:
         )
     
     def _load_performance_config(self):
-        """Загружает Performance конфигурацию"""
+        """Загрузка конфигурации производительности"""
         self.performance = PerformanceConfig(
             tracking_enabled=self.env.get_bool_env('PERFORMANCE_TRACKING_ENABLED', True),
             success_threshold=self.env.get_float_env('PERFORMANCE_SUCCESS_THRESHOLD', 0.05),
@@ -248,7 +285,7 @@ class Config:
         )
     
     def _load_adaptive_thresholds_config(self):
-        """Загружает Adaptive Thresholds конфигурацию"""
+        """Загрузка конфигурации адаптивных порогов"""
         self.adaptive_thresholds = AdaptiveThresholdsConfig(
             enabled=self.env.get_bool_env('ADAPTIVE_THRESHOLDS_ENABLED', True),
             base_min_confidence=self.env.get_int_env('ADAPTIVE_BASE_MIN_CONFIDENCE', 40),
@@ -260,7 +297,7 @@ class Config:
         )
     
     def _load_analytics_config(self):
-        """Загружает Analytics конфигурацию"""
+        """Загрузка конфигурации аналитики"""
         self.analytics = AnalyticsConfig(
             enabled=self.env.get_bool_env('ANALYTICS_ENABLED', True),
             sentiment_analysis=self.env.get_bool_env('ANALYTICS_SENTIMENT', True),
@@ -272,7 +309,7 @@ class Config:
         )
     
     def _load_database_config(self):
-        """Загружает Database конфигурацию"""
+        """Загрузка конфигурации базы данных"""
         self.database = DatabaseConfig(
             type=self.env.get_env('DATABASE_TYPE', 'sqlite'),
             path=self.env.get_env('DATABASE_PATH', 'data/crypto_monitor.db'),
@@ -290,7 +327,7 @@ class Config:
         )
     
     def _load_metrics_config(self):
-        """Загружает Metrics конфигурацию"""
+        """Загрузка конфигурации метрик"""
         self.metrics = MetricsConfig(
             enabled=self.env.get_bool_env('ENABLE_METRICS', False),
             port=self.env.get_int_env('METRICS_PORT', 9090),
@@ -298,13 +335,15 @@ class Config:
         )
     
     def _load_discovery_config(self):
-        """Загружает Discovery конфигурацию"""
+        """Загрузка конфигурации discovery engine"""
+        # Парсинг blacklist из строки
         blacklist_str = self.env.get_env('DISCOVERY_BLACKLIST', '')
         blacklist_set = set()
         
         if blacklist_str:
             blacklist_set = {item.strip().upper() for item in blacklist_str.split(',') if item.strip()}
         else:
+            # Дефолтный blacklist
             blacklist_set = {
                 'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'USDD',
                 'WBTC', 'WETH', 'WBNB', 'WMATIC', 'WAVAX',
@@ -325,7 +364,7 @@ class Config:
         )
     
     def _load_features(self):
-        """Загружает Features флаги"""
+        """Загрузка флагов фич"""
         self.features_enabled = {
             'whale': self.env.get_bool_env('WHALE_ENABLED', True),
             'news': self.env.get_bool_env('NEWS_ENABLED', True),
@@ -341,7 +380,7 @@ class Config:
         }
     
     def _load_paths(self):
-        """Загружает пути"""
+        """Загрузка путей к файлам и директориям"""
         data_dir = EnvironmentPaths.get_data_dir()
         self.path_manager = PathManager(data_dir)
         
@@ -356,7 +395,7 @@ class Config:
         self.path_manager.create_directories()
     
     def _load_misc_settings(self):
-        """Загружает разные настройки"""
+        """Загрузка прочих настроек"""
         self.webhook_url = self.env.get_env('WEBHOOK_URL', '')
         self.render_external_url = self.env.get_env('RENDER_EXTERNAL_URL', '')
         self.render_service_name = self.env.get_env('RENDER_SERVICE_NAME', 'crypto-compass')
@@ -370,7 +409,7 @@ class Config:
         self.send_daily_stats = self.env.get_bool_env('SEND_DAILY_STATS', True)
     
     def _load_api_keys(self):
-        """Загружает API ключи"""
+        """Загрузка API ключей"""
         self.coingecko_api_key = self.env.get_env('COINGECKO_API_KEY', '')
         self.openai_api_key = self.env.get_env('OPENAI_API_KEY', '')
         self.anthropic_api_key = self.env.get_env('ANTHROPIC_API_KEY', '')
@@ -378,20 +417,23 @@ class Config:
         self.alchemy_api_key = self.env.get_env('ALCHEMY_API_KEY', '')
     
     def _validate(self):
-        """Валидирует конфигурацию"""
+        """Валидация конфигурации"""
         validator = ConfigValidator()
         
         all_errors = []
         all_warnings = []
         
+        # Валидация лимитов памяти
         errors, warnings = validator.validate_memory_limits(self.production.max_memory_mb)
         all_errors.extend(errors)
         all_warnings.extend(warnings)
         
+        # Валидация блокчейнов
         errors, warnings = validator.validate_chains(self.chains.enabled_chains, self.chains.rpc_urls)
         all_errors.extend(errors)
         all_warnings.extend(warnings)
         
+        # Валидация whale конфигурации
         errors, warnings = validator.validate_whale_config(
             self.whale.min_usd_threshold,
             self.whale.posts_per_hour_cap
@@ -399,6 +441,7 @@ class Config:
         all_errors.extend(errors)
         all_warnings.extend(warnings)
         
+        # Валидация AI ключей для новостей
         ai_keys = {
             'openai': self.openai_api_key,
             'anthropic': self.anthropic_api_key,
@@ -408,6 +451,7 @@ class Config:
         all_errors.extend(errors)
         all_warnings.extend(warnings)
         
+        # Валидация торговой конфигурации
         errors, warnings = validator.validate_trading_config(
             self.trading.enabled,
             self.trading.monitored_assets
@@ -415,6 +459,7 @@ class Config:
         all_errors.extend(errors)
         all_warnings.extend(warnings)
         
+        # Валидация discovery конфигурации
         errors, warnings = validator.validate_discovery_config(
             self.discovery.min_token_age_days,
             self.discovery.min_volume_usd,
@@ -423,19 +468,22 @@ class Config:
         all_errors.extend(errors)
         all_warnings.extend(warnings)
         
+        # Обработка ошибок валидации
         if all_errors:
             print('❌ [CONFIG] Критические ошибки конфигурации:')
             for error in all_errors:
                 print(f'   • {error}')
-            raise ValueError('Некорректная конфигурация')
+            raise ValueError('Некорректная конфигурация. Исправьте ошибки и перезапустите.')
         
+        # Вывод предупреждений
         if all_warnings:
-            print('⚠️  [CONFIG] Предупреждения:')
+            print('⚠️  [CONFIG] Предупреждения конфигурации:')
             for warning in all_warnings:
                 print(f'   • {warning}')
     
     def _print_summary(self):
-        """Выводит summary конфигурации"""
+        """Вывод summary конфигурации"""
+        # Сбор информации о доступных API ключах
         api_keys_list = []
         if self.openai_api_key:
             api_keys_list.append('OpenAI')
@@ -446,6 +494,7 @@ class Config:
         if self.coingecko_api_key:
             api_keys_list.append('CoinGecko')
         
+        # Формирование данных для вывода
         config_data = {
             'telegram': {
                 'token': self.telegram.token,
@@ -463,6 +512,7 @@ class Config:
             },
             'whale': {
                 'min_usd_threshold': self.whale.min_usd_threshold,
+                'chain_thresholds': self.whale.chain_thresholds,
                 'min_confidence_score': self.whale.min_confidence_score,
                 'posts_per_hour_cap': self.whale.posts_per_hour_cap
             },
@@ -507,19 +557,70 @@ class Config:
         ConfigPrinter.print_summary(config_data)
     
     def is_feature_enabled(self, feature: str) -> bool:
-        """Проверяет включена ли фича"""
+        """
+        Проверка включена ли фича
+        
+        Args:
+            feature: Название фичи
+            
+        Returns:
+            True если фича включена
+        """
         return self.features_enabled.get(feature, False)
     
     def get_rpc_url(self, chain: str) -> str:
-        """Получает RPC URL для chain"""
+        """
+        Получение RPC URL для блокчейна
+        
+        Args:
+            chain: Название блокчейна
+            
+        Returns:
+            RPC URL
+        """
         return self.chains.rpc_urls.get(chain, '')
     
     def get_fallback_rpc_url(self, chain: str) -> Optional[str]:
-        """Получает fallback RPC URL для chain"""
+        """
+        Получение fallback RPC URL для блокчейна
+        
+        Args:
+            chain: Название блокчейна
+            
+        Returns:
+            Fallback RPC URL или None
+        """
         return self.chains.fallback_urls.get(chain)
     
+    def get_whale_threshold(self, chain: str) -> float:
+        """
+        Получение порога для конкретного блокчейна
+        
+        Args:
+            chain: Название блокчейна
+            
+        Returns:
+            Порог в USD
+        """
+        # Проверка chain-specific порога
+        if hasattr(self.whale, 'chain_thresholds') and self.whale.chain_thresholds:
+            chain_threshold = self.whale.chain_thresholds.get(chain)
+            if chain_threshold is not None:
+                return chain_threshold
+        
+        # Fallback на базовый порог
+        return self.whale.min_usd_threshold
+    
     def has_api_key(self, service: str) -> bool:
-        """Проверяет наличие API ключа"""
+        """
+        Проверка наличия API ключа
+        
+        Args:
+            service: Название сервиса
+            
+        Returns:
+            True если ключ есть
+        """
         if service in self.chains.api_keys:
             return bool(self.chains.api_keys[service])
         
@@ -533,7 +634,15 @@ class Config:
         return bool(key_map.get(service, ''))
     
     def get_api_key(self, service: str) -> str:
-        """Получает API ключ"""
+        """
+        Получение API ключа
+        
+        Args:
+            service: Название сервиса
+            
+        Returns:
+            API ключ
+        """
         if service in self.chains.api_keys:
             return self.chains.api_keys[service]
         
@@ -547,8 +656,14 @@ class Config:
         return key_map.get(service, '')
     
     def get_ai_provider(self) -> Optional[str]:
-        """Определяет AI провайдера"""
+        """
+        Определение AI провайдера для использования
+        
+        Returns:
+            Название провайдера или None
+        """
         if self.news.ai_enabled:
+            # Приоритет заданному провайдеру
             if self.news.ai_provider == 'openai' and self.openai_api_key:
                 return 'openai'
             elif self.news.ai_provider == 'anthropic' and self.anthropic_api_key:
@@ -556,6 +671,7 @@ class Config:
             elif self.news.ai_provider == 'gemini' and self.gemini_api_key:
                 return 'gemini'
             
+            # Fallback на первый доступный
             if self.openai_api_key:
                 return 'openai'
             elif self.anthropic_api_key:
@@ -566,7 +682,12 @@ class Config:
         return None
     
     def to_dict(self) -> Dict[str, Any]:
-        """Конвертация в словарь"""
+        """
+        Конвертация конфигурации в словарь
+        
+        Returns:
+            Dict с конфигурацией
+        """
         return {
             'telegram': {
                 'channel_id': self.telegram.channel_id,
@@ -583,6 +704,7 @@ class Config:
             'features': self.features_enabled,
             'whale': {
                 'min_usd': self.whale.min_usd_threshold,
+                'chain_thresholds': getattr(self.whale, 'chain_thresholds', {}),
                 'min_confidence': self.whale.min_confidence_score,
             },
             'trading': {
@@ -600,4 +722,5 @@ class Config:
         }
 
 
+# Создание глобального экземпляра конфигурации
 config = Config()
