@@ -1,173 +1,129 @@
 # bot/news/fetcher.py
 """
-News Fetcher - RSS/Web scraping
+News Fetcher v2.0 - Fixed FeedConfig Support
+Исправленный фетчер с поддержкой FeedConfig объектов
 """
 
-import re
-import asyncio
-from datetime import datetime, timezone
-from typing import List, Dict, Optional
+import logging
+from typing import List, Dict, Union, TYPE_CHECKING
 
-import aiohttp
-import feedparser
-from bs4 import BeautifulSoup
+from .http_client import NewsHttpClient
+from .parsers import RSSParser, HTMLParser
+from .extractors import ArticleExtractor
+
+if TYPE_CHECKING:
+    from app.config import FeedConfig
+
+logger = logging.getLogger(__name__)
 
 
 class NewsFetcher:
-    """Получение новостей из RSS источников"""
+    """
+    Получение новостей из RSS/Web источников
+    
+    Улучшения v2.0:
+    - Поддержка FeedConfig объектов (не только словарей)
+    - Модульная архитектура
+    - Улучшенная обработка ошибок
+    """
     
     def __init__(self):
-        self.timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
-            'Accept-Encoding': 'gzip, deflate',
-            'DNT': '1',
-            'Connection': 'keep-alive'
-        }
+        """Инициализация фетчера"""
+        self.http_client = NewsHttpClient()
+        self.rss_parser = RSSParser()
+        self.html_parser = HTMLParser()
+        self.extractor = ArticleExtractor()
     
-    async def fetch_source(self, source: Dict) -> List[Dict]:
+    async def fetch_source(self, source: Union[Dict, 'FeedConfig']) -> List[Dict]:
         """
         Получает статьи из одного источника
         
         Args:
-            source: Словарь с данными источника (name, url, category)
+            source: Словарь или FeedConfig объект с данными источника
         
         Returns:
             List статей
         """
-        url = source.get('url')
-        name = source.get('name', 'Unknown')
-        category = source.get('category', 'news')
+        # Нормализация источника в словарь
+        source_data = self._normalize_source(source)
+        
+        url = source_data.get('url')
+        name = source_data.get('name', 'Unknown')
+        category = source_data.get('category', 'news')
         
         if not url:
+            logger.warning(f"Source {name} has no URL")
             return []
         
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout, headers=self.headers) as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        print(f"⚠️  [{name}] HTTP {response.status}")
-                        return []
-                    
-                    content_type = response.headers.get('Content-Type', '')
-                    
-                    if 'xml' in content_type or 'rss' in content_type or 'atom' in content_type:
-                        text = await response.text()
-                        return self._parse_rss(text, name, category)
-                    else:
-                        text = await response.text()
-                        return self._parse_html(text, name, category, url)
-        
-        except asyncio.TimeoutError:
-            print(f"⏱️  [{name}] Timeout")
-            return []
-        
-        except aiohttp.ClientError as e:
-            print(f"❌ [{name}] Network error: {e}")
-            return []
-        
-        except Exception as e:
-            print(f"❌ [{name}] Error: {e}")
-            return []
-    
-    def _parse_rss(self, content: str, source_name: str, category: str) -> List[Dict]:
-        """Парсит RSS feed"""
-        try:
-            feed = feedparser.parse(content)
+            # Получение контента
+            content, content_type = await self.http_client.fetch(url, name)
             
-            if not feed.entries:
+            if content is None:
                 return []
             
-            articles = []
+            # Парсинг в зависимости от типа контента
+            if self._is_feed_content(content_type):
+                articles = self.rss_parser.parse(content, name, category)
+            else:
+                articles = self.html_parser.parse(content, name, category, url)
             
-            for entry in feed.entries[:10]:
-                try:
-                    article = self._extract_article_from_entry(entry, source_name, category)
-                    if article:
-                        articles.append(article)
-                except Exception:
-                    continue
-            
-            return articles
+            # Обогащение статей дополнительными данными
+            return self.extractor.enrich_articles(articles, source_data)
         
         except Exception as e:
-            print(f"❌ [RSS] Parse error: {e}")
+            logger.error(f"Error fetching {name}: {e}", exc_info=True)
             return []
     
-    def _parse_html(self, content: str, source_name: str, category: str, base_url: str) -> List[Dict]:
-        """Парсит HTML страницу"""
-        try:
-            soup = BeautifulSoup(content, 'html.parser')
-            articles = []
-            
-            for article_tag in soup.find_all('article', limit=10):
-                try:
-                    title_tag = article_tag.find(['h1', 'h2', 'h3', 'h4'])
-                    link_tag = article_tag.find('a', href=True)
-                    
-                    if title_tag and link_tag:
-                        title = title_tag.get_text(strip=True)
-                        url = link_tag['href']
-                        
-                        if not url.startswith('http'):
-                            url = base_url + url
-                        
-                        article = {
-                            'title': title,
-                            'url': url,
-                            'link': url,
-                            'source': source_name,
-                            'category': category,
-                            'published': datetime.now(timezone.utc)
-                        }
-                        
-                        articles.append(article)
-                
-                except Exception:
-                    continue
-            
-            return articles
+    def _normalize_source(self, source: Union[Dict, 'FeedConfig']) -> Dict:
+        """
+        Нормализует источник в словарь
         
-        except Exception as e:
-            print(f"❌ [HTML] Parse error: {e}")
-            return []
-    
-    def _extract_article_from_entry(self, entry, source: str, category: str) -> Optional[Dict]:
-        """Извлекает данные статьи из RSS entry"""
+        Поддерживает:
+        - Словари (старый формат)
+        - FeedConfig объекты (новый формат)
+        
+        Args:
+            source: Источник данных
+            
+        Returns:
+            Словарь с данными источника
+        """
+        if isinstance(source, dict):
+            # Уже словарь
+            return source
+        
+        # Объект FeedConfig
         try:
-            title = entry.get('title', '').strip()
-            url = entry.get('link', '').strip()
-            
-            if not title or not url:
-                return None
-            
-            description = entry.get('summary', '') or entry.get('description', '')
-            
-            if description:
-                description = BeautifulSoup(description, 'html.parser').get_text()
-                description = re.sub(r'\s+', ' ', description).strip()[:500]
-            
-            published = self._parse_date(entry.get('published', ''))
-            
             return {
-                'title': title,
-                'url': url,
-                'link': url,
-                'source': source,
-                'category': category,
-                'description': description,
-                'published': published or datetime.now(timezone.utc)
+                'name': getattr(source, 'name', 'Unknown'),
+                'url': getattr(source, 'url', ''),
+                'category': getattr(source, 'category', 'news'),
+                'enabled': getattr(source, 'enabled', True),
+                'priority': getattr(source, 'priority', 1),
+                'language': getattr(source, 'language', 'en'),
+                'fetch_interval': getattr(source, 'fetch_interval', 300)
             }
-        
-        except Exception:
-            return None
+        except Exception as e:
+            logger.error(f"Error normalizing source: {e}")
+            return {
+                'name': 'Unknown',
+                'url': '',
+                'category': 'news'
+            }
     
-    def _parse_date(self, date_str: str) -> Optional[datetime]:
-        """Парсит дату из RSS"""
-        try:
-            from email.utils import parsedate_to_datetime
-            return parsedate_to_datetime(date_str)
-        except:
-            return None
+    def _is_feed_content(self, content_type: str) -> bool:
+        """
+        Проверка является ли контент RSS/Atom фидом
+        
+        Args:
+            content_type: Content-Type заголовок
+            
+        Returns:
+            True если это фид
+        """
+        feed_types = ['xml', 'rss', 'atom', 'feed']
+        return any(feed_type in content_type.lower() for feed_type in feed_types)
+
+
+__all__ = ['NewsFetcher']
