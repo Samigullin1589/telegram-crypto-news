@@ -1,17 +1,17 @@
 # app/whales/monitor/solana_provider.py
 """
-Solana Chain Provider v3.0
-Модульная архитектура для работы с Solana блокчейном
+Solana Chain Provider v4.0
+Главный координатор для работы с Solana блокчейном
+Модульная архитектура с полной функциональностью
 """
 
-import asyncio
 import logging
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from app.config import config
 from app.whales.normalize import WhaleEvent
 from app.whales.monitor.dex_detector import DEXDetector
+
 from .solana_components import (
     SolanaRPCClient,
     SolanaTransactionParser,
@@ -20,19 +20,34 @@ from .solana_components import (
     SolanaConfig
 )
 
+from .solana_components.solana_signature_fetcher import SolanaSignatureFetcher
+from .solana_components.solana_transaction_processor import SolanaTransactionProcessor
+from .solana_components.solana_spl_monitor import SolanaSPLMonitor
+from .solana_components.solana_api_health import SolanaAPIHealth
+
 logger = logging.getLogger(__name__)
 
 
 class SolanaProvider:
     """
     Главный провайдер для Solana блокчейна
-    Координирует работу всех подкомпонентов
+    
+    Features:
+    - Мониторинг SOL и SPL токен переводов
+    - Параллельная обработка транзакций
+    - Health monitoring для RPC endpoints
+    - Умное кэширование и rate limiting
+    - Поддержка множественных токенов
     """
     
-    def __init__(self, session, rate_limiter, tx_cache, dex_detector: DEXDetector = None):
+    def __init__(
+        self,
+        session,
+        rate_limiter,
+        tx_cache,
+        dex_detector: DEXDetector = None
+    ):
         """
-        Инициализация провайдера
-        
         Args:
             session: aiohttp ClientSession
             rate_limiter: Rate limiter для контроля частоты запросов
@@ -44,31 +59,45 @@ class SolanaProvider:
         self.tx_cache = tx_cache
         self.dex_detector = dex_detector or DEXDetector()
         
-        # Инициализация компонентов
         self.rpc_client = SolanaRPCClient(session, rate_limiter)
+        
         self.price_provider = SolanaPriceProvider(session)
+        
         self.transaction_parser = SolanaTransactionParser(
             dex_detector=self.dex_detector,
             price_provider=self.price_provider
         )
+        
         self.event_filter = SolanaEventFilter()
         
-        # Статистика
+        self.signature_fetcher = SolanaSignatureFetcher(self.rpc_client)
+        
+        self.transaction_processor = SolanaTransactionProcessor(
+            rpc_client=self.rpc_client,
+            transaction_parser=self.transaction_parser,
+            event_filter=self.event_filter,
+            tx_cache=self.tx_cache
+        )
+        
+        self.spl_monitor = SolanaSPLMonitor(
+            signature_fetcher=self.signature_fetcher,
+            transaction_parser=self.transaction_parser,
+            price_provider=self.price_provider,
+            event_filter=self.event_filter
+        )
+        
+        self.health_monitor = SolanaAPIHealth(self.rpc_client)
+        
         self.stats = {
-            "signatures_fetched": 0,
-            "transactions_processed": 0,
-            "events_found": 0,
+            "sol_events": 0,
+            "spl_events": 0,
+            "total_processed": 0,
             "errors": 0
         }
         
         logger.info("🔧 [SOLANA] Провайдер инициализирован")
         
-        # Проверка API ключа
-        if not self.rpc_client.has_api_key():
-            logger.warning(
-                "⚠️ [SOLANA] Helius API ключ не настроен! "
-                "Функциональность ограничена публичными endpoints"
-            )
+        self.health_monitor.check_api_key_status()
     
     async def fetch_events(
         self,
@@ -91,32 +120,41 @@ class SolanaProvider:
             logger.error(f"❌ [SOLANA] Неподдерживаемый chain: {chain}")
             return []
         
+        is_healthy = await self.health_monitor.check_health()
+        if not is_healthy:
+            logger.warning("⚠️ [SOLANA] RPC недоступен, пропускаем сканирование")
+            return []
+        
         logger.info(f"🔍 [SOLANA] Начинаю сканирование с {start_time}")
         
-        # Сброс статистики
         self._reset_stats()
         
         events = []
         
         try:
-            # Получение SOL переводов
             sol_events = await self._fetch_sol_transfers(start_time)
             events.extend(sol_events)
+            self.stats["sol_events"] = len(sol_events)
             
-            # Получение SPL токен переводов
             spl_events = await self._fetch_spl_transfers(start_time, assets)
             events.extend(spl_events)
+            self.stats["spl_events"] = len(spl_events)
             
-            # Логирование результатов
-            self._log_scan_results()
+            self._log_scan_results(events)
         
         except Exception as e:
-            logger.error(f"❌ [SOLANA] Критическая ошибка при сканировании: {e}", exc_info=True)
+            logger.error(
+                f"❌ [SOLANA] Критическая ошибка при сканировании: {e}",
+                exc_info=True
+            )
             self.stats["errors"] += 1
         
         return events
     
-    async def _fetch_sol_transfers(self, start_time: datetime) -> List[WhaleEvent]:
+    async def _fetch_sol_transfers(
+        self,
+        start_time: datetime
+    ) -> List[WhaleEvent]:
         """
         Получение крупных SOL переводов
         
@@ -126,38 +164,30 @@ class SolanaProvider:
         Returns:
             Список SOL whale событий
         """
-        events = []
-        
         try:
-            # Получение подписей последних транзакций
-            signatures = await self._get_recent_signatures(start_time)
+            signatures = await self.signature_fetcher.get_recent_signatures(
+                start_time=start_time,
+                limit=100
+            )
             
             if not signatures:
-                logger.info("👍 [SOLANA] Нет новых подписей для обработки")
+                logger.info("👍 [SOLANA] Нет новых SOL подписей")
                 return []
             
-            logger.info(f"📥 [SOLANA] Получено {len(signatures)} подписей")
-            self.stats["signatures_fetched"] = len(signatures)
+            logger.info(f"📥 [SOLANA] Получено {len(signatures)} SOL подписей")
             
-            # Обработка транзакций батчами
-            batch_size = 20
+            events = await self.transaction_processor.process_signatures(signatures)
             
-            for i in range(0, len(signatures), batch_size):
-                batch = signatures[i:i + batch_size]
-                batch_events = await self._process_signature_batch(batch)
-                events.extend(batch_events)
-                
-                # Задержка между батчами
-                if i + batch_size < len(signatures):
-                    await asyncio.sleep(0.5)
+            self.stats["total_processed"] += self.transaction_processor.stats["processed"]
             
             logger.info(f"✅ [SOLANA] Найдено {len(events)} SOL событий")
+            
+            return events
         
         except Exception as e:
             logger.error(f"❌ [SOLANA] Ошибка получения SOL переводов: {e}")
             self.stats["errors"] += 1
-        
-        return events
+            return []
     
     async def _fetch_spl_transfers(
         self,
@@ -174,157 +204,50 @@ class SolanaProvider:
         Returns:
             Список SPL whale событий
         """
-        # TODO: Реализация SPL токен мониторинга в следующей версии
-        # Требует работу с getSignaturesForAddress для конкретных токен программ
-        # и парсинг SPL Transfer инструкций
-        return []
-    
-    async def _get_recent_signatures(
-        self,
-        start_time: datetime,
-        limit: int = 100
-    ) -> List[dict]:
-        """
-        Получение недавних подписей транзакций
-        
-        Args:
-            start_time: Время начала периода
-            limit: Максимальное количество подписей
-            
-        Returns:
-            Список подписей с метаданными
-        """
         try:
-            # Используем системную программу для получения активности
-            system_program = SolanaConfig.SYSTEM_PROGRAM_ID
-            
-            signatures = await self.rpc_client.get_signatures_for_address(
-                address=system_program,
-                limit=min(limit, 1000)
+            events = await self.spl_monitor.fetch_spl_events(
+                start_time=start_time,
+                assets=assets
             )
             
-            if not signatures:
-                return []
+            logger.info(f"✅ [SOLANA] Найдено {len(events)} SPL событий")
             
-            # Фильтрация по времени
-            start_timestamp = start_time.timestamp()
-            filtered_signatures = []
-            
-            for sig in signatures:
-                block_time = sig.get("blockTime")
-                
-                if block_time and block_time >= start_timestamp:
-                    filtered_signatures.append(sig)
-            
-            logger.info(
-                f"📊 [SOLANA] Отфильтровано {len(filtered_signatures)}/{len(signatures)} "
-                f"подписей по времени"
-            )
-            
-            return filtered_signatures
+            return events
         
         except Exception as e:
-            logger.error(f"❌ [SOLANA] Ошибка получения подписей: {e}")
+            logger.error(f"❌ [SOLANA] Ошибка получения SPL переводов: {e}")
+            self.stats["errors"] += 1
             return []
     
-    async def _process_signature_batch(self, signatures: List[dict]) -> List[WhaleEvent]:
-        """
-        Обработка батча подписей
-        
-        Args:
-            signatures: Список подписей для обработки
-            
-        Returns:
-            Список событий из этого батча
-        """
-        events = []
-        
-        # Создание задач для параллельного получения транзакций
-        tasks = [
-            self._process_signature(sig)
-            for sig in signatures
-        ]
-        
-        # Выполнение с обработкой исключений
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Сбор успешных результатов
-        for result in results:
-            if isinstance(result, Exception):
-                logger.debug(f"⚠️ [SOLANA] Ошибка обработки подписи: {result}")
-                continue
-            
-            if result:
-                events.append(result)
-        
-        return events
-    
-    async def _process_signature(self, signature_data: dict) -> Optional[WhaleEvent]:
-        """
-        Обработка одной подписи транзакции
-        
-        Args:
-            signature_data: Данные подписи
-            
-        Returns:
-            WhaleEvent или None
-        """
-        signature = signature_data.get("signature")
-        
-        if not signature:
-            return None
-        
-        # Проверка кэша
-        if self.tx_cache.contains(signature):
-            return None
-        
-        try:
-            # Получение полных данных транзакции
-            tx_data = await self.rpc_client.get_transaction(signature)
-            
-            if not tx_data:
-                return None
-            
-            self.stats["transactions_processed"] += 1
-            
-            # Парсинг транзакции
-            event = await self.transaction_parser.parse_transaction(tx_data)
-            
-            if event:
-                # Фильтрация события
-                if self.event_filter.should_process(event):
-                    self.tx_cache.add(signature)
-                    self.stats["events_found"] += 1
-                    
-                    logger.info(
-                        f"💰 [SOLANA] Найдено событие: {event.asset} "
-                        f"${event.amount_usd:,.0f}"
-                    )
-                    
-                    return event
-        
-        except Exception as e:
-            logger.debug(f"⚠️ [SOLANA] Ошибка обработки {signature[:16]}...: {e}")
-        
-        return None
-    
-    def _reset_stats(self):
+    def _reset_stats(self) -> None:
         """Сброс статистики"""
         self.stats = {
-            "signatures_fetched": 0,
-            "transactions_processed": 0,
-            "events_found": 0,
+            "sol_events": 0,
+            "spl_events": 0,
+            "total_processed": 0,
             "errors": 0
         }
+        self.transaction_processor.reset_stats()
     
-    def _log_scan_results(self):
-        """Логирование результатов сканирования"""
+    def _log_scan_results(self, events: List[WhaleEvent]) -> None:
+        """
+        Логирование результатов сканирования
+        
+        Args:
+            events: Список найденных событий
+        """
+        processor_stats = self.transaction_processor.get_stats()
+        spl_stats = self.spl_monitor.get_stats()
+        
         logger.info(
-            f"📊 [SOLANA] Результаты: "
-            f"подписей={self.stats['signatures_fetched']}, "
-            f"обработано={self.stats['transactions_processed']}, "
-            f"событий={self.stats['events_found']}, "
-            f"ошибок={self.stats['errors']}"
+            f"📊 [SOLANA] Результаты сканирования:\n"
+            f"  • SOL события: {self.stats['sol_events']}\n"
+            f"  • SPL события: {self.stats['spl_events']}\n"
+            f"  • Обработано транзакций: {processor_stats['processed']}\n"
+            f"  • Кэш hits: {processor_stats['cached_hits']}\n"
+            f"  • SPL токенов проверено: {spl_stats['tokens_checked']}\n"
+            f"  • Всего событий: {len(events)}\n"
+            f"  • Ошибок: {self.stats['errors']}"
         )
     
     def get_stats(self) -> dict:
@@ -334,4 +257,23 @@ class SolanaProvider:
         Returns:
             Dict со статистикой
         """
-        return self.stats.copy()
+        return {
+            "provider": self.stats.copy(),
+            "processor": self.transaction_processor.get_stats(),
+            "spl_monitor": self.spl_monitor.get_stats(),
+            "health": self.health_monitor.get_status()
+        }
+    
+    async def health_check(self) -> Dict:
+        """
+        Проверка здоровья провайдера
+        
+        Returns:
+            Статус здоровья
+        """
+        is_healthy = await self.health_monitor.check_health()
+        
+        return {
+            "is_healthy": is_healthy,
+            "details": self.health_monitor.get_status()
+        }

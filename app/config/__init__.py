@@ -1,169 +1,477 @@
 # app/config/__init__.py
 """
-Configuration package for Crypto Compass Bot
+Configuration Package
+Главный модуль конфигурации приложения
 """
 
-from app.config.settings import Config, config
-from app.config.models import (
-    TelegramConfig,
-    ProductionConfig,
-    RateLimitConfig,
-    ChainConfig,
-    WhaleConfig,
-    HyperliquidConfig,
-    TradingConfig,
-    NewsConfig,
-    SmartDiscoveryConfig,
-    ValidationConfig,
-    PerformanceConfig,
-    AdaptiveThresholdsConfig,
-    AnalyticsConfig,
-    DatabaseConfig,
-    MetricsConfig,
-    DiscoveryConfig
-)
+import logging
+from typing import Dict, Any
+from pathlib import Path
 
-# Экспорт для обратной совместимости
-TELEGRAM_BOT_TOKEN = config.telegram.token
-TELEGRAM_TOKEN = config.telegram.token
-BOT_TOKEN = config.telegram.token
-TELEGRAM_CHANNEL_ID = config.telegram.channel_id
-CHAT_ID = config.telegram.channel_id
-CHANNEL_ID = config.telegram.channel_id
-ADMIN_CHAT_ID = config.telegram.admin_chat_id
+from .base_config import BaseConfig
+from .paths_config import PathsConfig
+from .api_config import APIConfig
+from .telegram_config import TelegramConfig
+from .feeds_config import FeedsConfig, FeedConfig
+from .blockchain_config import BlockchainConfig
+from .features_config import FeaturesConfig
+from .database_config import DatabaseConfig
+from .rate_limiting_config import RateLimitingConfig
 
-PORT = config.production.port
-HTTP_TIMEOUT = config.production.http_timeout
-RPC_TIMEOUT = config.production.rpc_timeout
-WEBHOOK_TIMEOUT = config.production.webhook_timeout
-MAX_MEMORY_MB = config.production.max_memory_mb
-GC_INTERVAL_SECONDS = config.production.gc_interval_seconds
+logger = logging.getLogger(__name__)
 
-MIN_USD = config.whale.min_usd_threshold
-MIN_USD_THRESHOLD = config.whale.min_usd_threshold
-WHALE_MIN_VALUE_USD = config.whale.min_usd_threshold
-MIN_CONFIDENCE_SCORE = config.whale.min_confidence_score
-POSTS_PER_HOUR_CAP = config.whale.posts_per_hour_cap
-POLL_SECONDS = config.whale.poll_seconds
-START_FROM_MINUTES_AGO = config.whale.start_from_minutes_ago
 
-ENABLED_CHAINS = config.chains.enabled_chains
-CHAINS_ENABLED = config.is_feature_enabled('chains')
+class Config:
+    """
+    Главный класс конфигурации
+    Объединяет все модули конфигурации и предоставляет единый интерфейс
+    
+    Singleton паттерн для обеспечения единственного экземпляра
+    """
+    
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        """Инициализация главной конфигурации"""
+        if self._initialized:
+            return
+        
+        print("\n" + "="*80)
+        print("⚙️  BOT CONFIG v4.2 - INITIALIZATION")
+        print("="*80 + "\n")
+        
+        self.base = BaseConfig()
+        self.paths = PathsConfig()
+        self.api = APIConfig()
+        self.telegram = TelegramConfig()
+        self.feeds = FeedsConfig()
+        self.blockchain = BlockchainConfig()
+        self.features = FeaturesConfig()
+        self.database = DatabaseConfig(self.paths.db_path)
+        self.rate_limiting = RateLimitingConfig()
+        
+        self._setup_compatibility_properties()
+        
+        self._initialized = True
+        
+        self._validate_config()
+        self._print_summary()
+    
+    def _setup_compatibility_properties(self):
+        """Настройка свойств для обратной совместимости"""
+        
+        self.TELEGRAM_BOT_TOKEN = self.telegram.bot_token
+        self.TELEGRAM_CHANNEL_ID = self.telegram.channel_id
+        self.ADMIN_CHAT_ID = self.telegram.admin_chat_id
+        
+        self.GEMINI_API_KEY = self.api.gemini_api_key
+        self.OPENAI_API_KEY = self.api.openai_api_key
+        self.ANTHROPIC_API_KEY = self.api.anthropic_api_key
+        
+        self.GEMINI_MODEL = self.api.gemini_model
+        self.OPENAI_MODEL = self.api.openai_model
+        self.ANTHROPIC_MODEL = self.api.anthropic_model
+        
+        self.AI_MAX_RETRIES = self.api.ai_max_retries
+        self.AI_BACKOFF_FACTOR = self.api.ai_backoff_factor
+        self.AI_TIMEOUT = self.api.ai_timeout
+        self.AI_MAX_TOKENS = self.api.ai_max_tokens
+        self.AI_TEMPERATURE = self.api.ai_temperature
+        
+        self.ETHERSCAN_API_KEY = self.api.etherscan_api_key
+        self.BSCSCAN_API_KEY = self.api.bscscan_api_key
+        self.POLYGONSCAN_API_KEY = self.api.polygonscan_api_key
+        self.ARBISCAN_API_KEY = self.api.arbiscan_api_key
+        self.BASESCAN_API_KEY = self.api.basescan_api_key
+        self.SNOWTRACE_API_KEY = self.api.snowtrace_api_key
+        self.OPTIMISM_ETHERSCAN_API_KEY = self.api.optimism_etherscan_api_key
+        self.FTMSCAN_API_KEY = self.api.ftmscan_api_key
+        
+        self.HELIUS_API_KEY = self.api.helius_api_key
+        self.SOLSCAN_API_KEY = self.api.solscan_api_key
+        
+        self.COINGECKO_API_KEY = self.api.coingecko_api_key
+        self.ALCHEMY_API_KEY = self.api.alchemy_api_key
+        self.COINMARKETCAP_API_KEY = self.api.coinmarketcap_api_key
+        self.CRYPTOPANIC_API_KEY = self.api.cryptopanic_api_key
+        self.NEWSAPI_KEY = self.api.newsapi_key
+        self.DEXSCREENER_API_KEY = self.api.dexscreener_api_key
+        self.BIRDEYE_API_KEY = self.api.birdeye_api_key
+        
+        self.RSS_FEEDS = self.feeds.feeds
+        self.FETCH_INTERVAL = self.features.fetch_interval
+        self.POSTS_PER_HOUR_CAP = self.features.posts_per_hour_cap
+        self.MIN_CONFIDENCE_SCORE = self.features.min_confidence_score
+        self.NEWS_CHECK_INTERVAL = self.features.news_check_interval
+        
+        self.WHALE_THRESHOLDS = self.blockchain.whale_thresholds
+        self.ENABLED_CHAINS = self.blockchain.enabled_chains
+        self.MIN_USD = self.blockchain.min_usd
+        
+        self.WHALE_ENABLED = self.features.whale_enabled
+        self.NEWS_ENABLED = self.features.news_enabled
+        self.ANALYTICS_ENABLED = self.features.analytics_enabled
+        self.TRADING_ENABLED = self.features.trading_enabled
+        self.HYPERLIQUID_ENABLED = self.features.hyperliquid_enabled
+        
+        self.POST_DELAY_SECONDS = self.features.post_delay_seconds
+        self.IDLE_DELAY_SECONDS = self.features.idle_delay_seconds
+        self.FEED_FETCH_TIMEOUT = self.features.feed_fetch_timeout
+        self.RATE_LIMIT_DELAY_SECONDS = self.features.rate_limit_delay_seconds
+        
+        self.DATA_DIR = self.paths.data_dir
+        self.DB_PATH = self.paths.db_path
+        self.NEWS_DB_PATH = self.paths.news_db_path
+        self.STATE_FILE = self.paths.state_file
+        self.WALLET_DB_JSON_PATH = self.paths.wallet_db_json_path
+        self.CACHE_DIR = self.paths.cache_dir
+        
+        self.DB_BACKUP_ENABLED = self.database.db_backup_enabled
+        self.DB_BACKUP_INTERVAL_HOURS = self.database.db_backup_interval_hours
+        self.DB_MAX_AGE_DAYS = self.database.db_max_age_days
+        
+        self.MIN_IMAGE_WIDTH = self.features.min_image_width
+        self.MIN_IMAGE_HEIGHT = self.features.min_image_height
+        self.MAX_IMAGE_SIZE_MB = self.features.max_image_size_mb
+        self.IMAGE_CHECK_TIMEOUT = self.features.image_check_timeout
+        self.IMAGE_PARTIAL_READ_BYTES = self.features.image_partial_read_bytes
+        self.IMAGE_QUALITY = self.features.image_quality
+        self.IMAGE_COMPRESSION_ENABLED = self.features.image_compression_enabled
+        
+        self.COMMON_HEADERS = self.base.COMMON_HEADERS
+        
+        self.SESSION_TIMEOUT_TOTAL = self.base.SESSION_TIMEOUT_TOTAL
+        self.SESSION_TIMEOUT_CONNECT = self.base.SESSION_TIMEOUT_CONNECT
+        self.SESSION_MAX_RETRIES = self.base.SESSION_MAX_RETRIES
+        self.SESSION_RETRY_DELAY = self.base.SESSION_RETRY_DELAY
+        self.CONNECTION_POOL_SIZE = self.base.CONNECTION_POOL_SIZE
+        self.CONNECTION_POOL_MAX_SIZE = self.base.CONNECTION_POOL_MAX_SIZE
+        
+        self.MAX_ARTICLE_TEXT_LENGTH = self.features.max_article_text_length
+        self.MAX_SUMMARY_LENGTH = self.features.max_summary_length
+        self.MAX_SUMMARY_RETRIES = self.features.max_summary_retries
+        self.SUMMARY_ENABLED = self.features.summary_enabled
+        
+        self.LOG_LEVEL = self.base.LOG_LEVEL
+        self.VERBOSE_LOGGING = self.base.VERBOSE_LOGGING
+        self.DEBUG_MODE = self.base.DEBUG_MODE
+        self.LOG_FILE_ENABLED = self.base.LOG_FILE_ENABLED
+        self.LOG_FILE_PATH = self.paths.log_file_path
+        
+        self.RATE_LIMIT_ENABLED = self.rate_limiting.rate_limit_enabled
+        self.MAX_REQUESTS_PER_MINUTE = self.rate_limiting.max_requests_per_minute
+        self.MAX_API_CALLS_PER_SECOND = self.rate_limiting.max_api_calls_per_second
+        self.RATE_LIMIT_BURST = self.rate_limiting.rate_limit_burst
+        
+        self.CACHE_ENABLED = self.database.cache_enabled
+        self.CACHE_TTL_SECONDS = self.database.cache_ttl_seconds
+        self.CACHE_MAX_SIZE_MB = self.database.cache_max_size_mb
+        
+        self.RETRY_ENABLED = self.rate_limiting.retry_enabled
+        self.RETRY_MAX_ATTEMPTS = self.rate_limiting.retry_max_attempts
+        self.RETRY_INITIAL_DELAY = self.rate_limiting.retry_initial_delay
+        self.RETRY_MAX_DELAY = self.rate_limiting.retry_max_delay
+        self.RETRY_EXPONENTIAL_BASE = self.rate_limiting.retry_exponential_base
+        
+        self.HEALTH_CHECK_ENABLED = self.base.HEALTH_CHECK_ENABLED
+        self.HEALTH_CHECK_INTERVAL = self.base.HEALTH_CHECK_INTERVAL
+        self.HEALTH_CHECK_TIMEOUT = self.base.HEALTH_CHECK_TIMEOUT
+        
+        self.METRICS_ENABLED = self.base.METRICS_ENABLED
+        self.METRICS_INTERVAL = self.base.METRICS_INTERVAL
+        
+        self.PORT = self.base.PORT
+        self.HTTP_TIMEOUT = self.base.HTTP_TIMEOUT
+        self.RPC_TIMEOUT = self.base.RPC_TIMEOUT
+        self.WEBHOOK_TIMEOUT = self.base.WEBHOOK_TIMEOUT
+        
+        self.MAX_MEMORY_MB = self.base.MAX_MEMORY_MB
+        self.GC_INTERVAL_SECONDS = self.base.GC_INTERVAL_SECONDS
+        
+        self.NOTIFICATION_CHANNELS = self.telegram.notification_channels
+        
+        self.TELEGRAM_MAX_MESSAGE_LENGTH = self.telegram.max_message_length
+        self.TELEGRAM_MAX_CAPTION_LENGTH = self.telegram.max_caption_length
+        self.TELEGRAM_RETRY_AFTER_DELAY = self.telegram.retry_after_delay
+        self.TELEGRAM_RATE_LIMIT_DELAY = self.telegram.rate_limit_delay
+        
+        self.BLOCKCHAIN_EXPLORERS = self.blockchain.blockchain_explorers
+        self.CHAIN_NATIVE_SYMBOLS = self.blockchain.chain_native_symbols
+        self.CHAIN_NAMES = self.blockchain.chain_names
+        self.CHAIN_COLORS = self.blockchain.chain_colors
+        self.CHAIN_EMOJIS = self.blockchain.chain_emojis
+    
+    def has_scanner_api_key(self, chain: str) -> bool:
+        """Проверка наличия API ключа для сканера"""
+        return self.api.has_scanner_key(chain)
+    
+    def get_scanner_api_key(self, chain: str) -> str:
+        """Получение API ключа для сканера"""
+        return self.api.get_scanner_key(chain)
+    
+    def get_missing_scanner_keys(self) -> list:
+        """Получение списка отсутствующих ключей"""
+        return self.api.get_missing_scanner_keys(self.blockchain.enabled_chains)
+    
+    def has_coingecko(self) -> bool:
+        """Проверка наличия CoinGecko API"""
+        return bool(self.api.coingecko_api_key)
+    
+    def has_alchemy(self) -> bool:
+        """Проверка наличия Alchemy API"""
+        return bool(self.api.alchemy_api_key)
+    
+    def has_coinmarketcap(self) -> bool:
+        """Проверка наличия CoinMarketCap API"""
+        return bool(self.api.coinmarketcap_api_key)
+    
+    def has_ai_provider(self) -> bool:
+        """Проверка наличия AI провайдера"""
+        return self.api.has_ai_provider()
+    
+    def get_ai_provider(self) -> str:
+        """Получение названия AI провайдера"""
+        return self.api.get_ai_provider()
+    
+    def get_chain_explorer_url(self, chain: str, address: str = None, tx_hash: str = None) -> str:
+        """Получение URL эксплорера"""
+        return self.blockchain.get_explorer_url(chain, address, tx_hash)
+    
+    def get_chain_symbol(self, chain: str) -> str:
+        """Получение символа блокчейна"""
+        return self.blockchain.get_chain_symbol(chain)
+    
+    def get_chain_name(self, chain: str) -> str:
+        """Получение имени блокчейна"""
+        return self.blockchain.get_chain_name(chain)
+    
+    def get_chain_emoji(self, chain: str) -> str:
+        """Получение emoji блокчейна"""
+        return self.blockchain.get_chain_emoji(chain)
+    
+    def get_chain_color(self, chain: str) -> str:
+        """Получение цвета блокчейна"""
+        return self.blockchain.get_chain_color(chain)
+    
+    def is_chain_enabled(self, chain: str) -> bool:
+        """Проверка включен ли блокчейн"""
+        return self.blockchain.is_chain_enabled(chain)
+    
+    def get_sorted_feeds(self) -> list:
+        """Получение отсортированных фидов"""
+        return self.feeds.get_sorted_feeds()
+    
+    def get_feed_by_name(self, name: str) -> FeedConfig:
+        """Получение фида по имени"""
+        return self.feeds.get_feed_by_name(name)
+    
+    def get_feed_config(self, name: str) -> FeedConfig:
+        """Получение конфигурации фида"""
+        return self.feeds.get_feed_by_name(name)
+    
+    def get_all_feeds(self) -> Dict[str, FeedConfig]:
+        """Получение всех фидов"""
+        return self.feeds.feeds
+    
+    def get_enabled_feeds(self) -> Dict[str, FeedConfig]:
+        """Получение активных фидов"""
+        return self.feeds.get_enabled_feeds()
+    
+    def enable_feed(self, name: str):
+        """Включение фида"""
+        self.feeds.enable_feed(name)
+    
+    def disable_feed(self, name: str):
+        """Отключение фида"""
+        self.feeds.disable_feed(name)
+    
+    def get_whale_threshold(self, chain: str) -> Dict[str, float]:
+        """Получение порогов whale для блокчейна"""
+        return self.blockchain.get_whale_threshold(chain)
+    
+    def is_whale_transaction(self, chain: str, usd_value: float) -> bool:
+        """Проверка является ли транзакция whale"""
+        return self.blockchain.is_whale_transaction(chain, usd_value)
+    
+    def is_mega_whale_transaction(self, chain: str, usd_value: float) -> bool:
+        """Проверка является ли транзакция mega whale"""
+        return self.blockchain.is_mega_whale_transaction(chain, usd_value)
+    
+    def _validate_config(self):
+        """Валидация конфигурации"""
+        
+        active_feeds = len(self.feeds.get_enabled_feeds())
+        if active_feeds == 0:
+            logger.warning("⚠️ [CONFIG] Нет активных RSS источников")
+        
+        if not self.api.has_ai_provider():
+            logger.warning("⚠️ [CONFIG] AI провайдер не настроен")
+        
+        missing_keys = self.get_missing_scanner_keys()
+        if missing_keys:
+            logger.warning(
+                f"⚠️ [CONFIG] Отсутствуют API ключи для: {', '.join(missing_keys)}"
+            )
+        
+        if not self.features.is_any_feature_enabled():
+            logger.error("❌ [CONFIG] Все функции отключены!")
+    
+    def _print_summary(self):
+        """Вывод сводки конфигурации"""
+        print("✅ [CONFIG] Конфигурация загружена успешно")
+        print(f"   Окружение: {self.base.ENVIRONMENT}")
+        print(f"   Активных фидов: {len(self.feeds.get_enabled_feeds())}")
+        print(f"   Включенные chains: {', '.join(self.blockchain.enabled_chains)}")
+        print(f"   AI Provider: {self.api.get_ai_provider() or 'None'}")
+        print(
+            f"   Функции: Whale={self.features.whale_enabled}, "
+            f"News={self.features.news_enabled}, "
+            f"Analytics={self.features.analytics_enabled}"
+        )
+        print(f"   База данных: {self.paths.db_path}")
+        print("")
+    
+    @property
+    def ai_prompt_template(self) -> str:
+        """Шаблон промпта для AI"""
+        return """
+Ты — ведущий аналитик издания 'Bloomberg Crypto'. Твоя задача — проанализировать текст новости и подготовить профессиональный, структурированный пост для Telegram-канала 'Crypto Compass'.
 
-WHALE_ENABLED = config.is_feature_enabled('whale')
-NEWS_ENABLED = config.is_feature_enabled('news')
-ANALYTICS_ENABLED = config.is_feature_enabled('analytics')
-TRADING_ENABLED = config.is_feature_enabled('trading')
-HYPERLIQUID_ENABLED = config.is_feature_enabled('hyperliquid')
-SMART_DISCOVERY_ENABLED = config.is_feature_enabled('smart_discovery')
-VALIDATION_ENABLED = config.is_feature_enabled('validation')
-ADAPTIVE_THRESHOLDS_ENABLED = config.is_feature_enabled('adaptive_thresholds')
-PERFORMANCE_TRACKING_ENABLED = config.is_feature_enabled('performance_tracking')
+Твой ответ должен быть исключительно на русском языке и строго следовать формату Markdown ниже. Не добавляй никаких комментариев или вводных фраз. Твой ответ должен начинаться сразу с заголовка.
 
-FETCH_INTERVAL = config.news.fetch_interval
-NEWS_CHECK_INTERVAL = config.news.fetch_interval
-NEWS_SOURCES = config.news.sources
-NEWS_DB_PATH = config.database.news_db_path
-DB_PATH = config.database.news_db_path
+{emoji} **{title}**
 
-DATA_DIR = str(config.data_dir)
-STATE_FILE = str(config.state_file)
-WALLET_DB_JSON_PATH = str(config.wallet_db_path)
-WATCHLIST_FILE = str(config.watchlist_file)
-HISTORY_FILE = str(config.history_file)
-POSITIONS_DIR = str(config.positions_dir)
-PERFORMANCE_DIR = str(config.performance_dir)
+*Здесь напиши главную суть новости в 2-3 предложениях. Используй профессиональный, но понятный язык. Объясни, почему это важно.*
 
-LOG_LEVEL = config.log_level
+**Детали:**
+- Ключевой факт или цифра из статьи.
+- Контекст или причина произошедшего.
+- Возможные последствия для рынка или индустрии.
 
-HEALTH_CHECK_ENABLED = config.health_check_enabled
-HEALTH_CHECK_INTERVAL = config.health_check_interval
-HEALTH_CHECK_MAX_SILENCE = config.health_check_max_silence
-SEND_STARTUP_NOTIFICATION = config.send_startup_notification
-SEND_DAILY_STATS = config.send_daily_stats
+*(Сгенерируй 3 релевантных хэштега на русском, например: #биткоин #регулирование #SEC)*
+"""
+    
+    @property
+    def features_enabled(self) -> Dict[str, bool]:
+        """Статус включенных функций"""
+        return self.features.get_enabled_features()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Конвертация в словарь"""
+        return {
+            'base': self.base.to_dict(),
+            'paths': self.paths.to_dict(),
+            'api': self.api.to_dict(),
+            'telegram': self.telegram.to_dict(),
+            'feeds': self.feeds.to_dict(),
+            'blockchain': self.blockchain.to_dict(),
+            'features': self.features.to_dict(),
+            'database': self.database.to_dict(),
+            'rate_limiting': self.rate_limiting.to_dict()
+        }
 
-OPENAI_API_KEY = config.openai_api_key
-ANTHROPIC_API_KEY = config.anthropic_api_key
-GEMINI_API_KEY = config.gemini_api_key
-COINGECKO_API_KEY = config.coingecko_api_key
-ALCHEMY_API_KEY = config.alchemy_api_key
 
-ETHERSCAN_API_KEY = config.chains.api_keys.get('etherscan', '')
-BSCSCAN_API_KEY = config.chains.api_keys.get('bscscan', '')
-POLYGONSCAN_API_KEY = config.chains.api_keys.get('polygonscan', '')
-ARBISCAN_API_KEY = config.chains.api_keys.get('arbiscan', '')
-BASESCAN_API_KEY = config.chains.api_keys.get('basescan', '')
-HELIUS_API_KEY = config.chains.api_keys.get('helius', '')
+config = Config()
 
-ETHEREUM_RPC_URL = config.chains.rpc_urls.get('ethereum', '')
-BSC_RPC_URL = config.chains.rpc_urls.get('bsc', '')
-POLYGON_RPC_URL = config.chains.rpc_urls.get('polygon', '')
-ARBITRUM_RPC_URL = config.chains.rpc_urls.get('arbitrum', '')
-BASE_RPC_URL = config.chains.rpc_urls.get('base', '')
-SOLANA_RPC_URL = config.chains.rpc_urls.get('solana', '')
-TRON_RPC_URL = config.chains.rpc_urls.get('tron', '')
 
-SOLANA_RATE_LIMIT_REQUESTS = config.rate_limit.solana_requests
-SOLANA_RATE_LIMIT_WINDOW = config.rate_limit.solana_window_seconds
-SOLANA_RETRY_ON_429 = config.rate_limit.solana_retry_on_429
+TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN
+TELEGRAM_TOKEN = config.TELEGRAM_BOT_TOKEN
+BOT_TOKEN = config.TELEGRAM_BOT_TOKEN
+TELEGRAM_CHANNEL_ID = config.TELEGRAM_CHANNEL_ID
+CHAT_ID = config.TELEGRAM_CHANNEL_ID
+CHANNEL_ID = config.TELEGRAM_CHANNEL_ID
+ADMIN_CHAT_ID = config.ADMIN_CHAT_ID
 
-HYPERLIQUID_API_URL = config.hyperliquid.api_url
-HYPERLIQUID_MIN_TRADE_USD = config.hyperliquid.min_trade_usd
-HYPERLIQUID_MIN_LIQUIDATION_USD = config.hyperliquid.min_liquidation_usd
-HYPERLIQUID_MIN_WHALE_ACTIVITY_USD = config.hyperliquid.min_whale_activity_usd
-HYPERLIQUID_NOTIFY_WHALE_ACTIVITY = config.hyperliquid.notify_whale_activity
-HYPERLIQUID_NOTIFY_LIQUIDATIONS = config.hyperliquid.notify_liquidations
+GEMINI_API_KEY = config.GEMINI_API_KEY
+OPENAI_API_KEY = config.OPENAI_API_KEY
+ANTHROPIC_API_KEY = config.ANTHROPIC_API_KEY
 
-TRADING_SIGNAL_INTERVAL_HOURS = config.trading.signal_interval_hours
-TRADING_MONITORED_ASSETS = config.trading.monitored_assets
-POSITION_UPDATE_INTERVAL_SECONDS = config.trading.position_update_interval_seconds
+ETHERSCAN_API_KEY = config.ETHERSCAN_API_KEY
+BSCSCAN_API_KEY = config.BSCSCAN_API_KEY
+POLYGONSCAN_API_KEY = config.POLYGONSCAN_API_KEY
+ARBISCAN_API_KEY = config.ARBISCAN_API_KEY
+BASESCAN_API_KEY = config.BASESCAN_API_KEY
+SNOWTRACE_API_KEY = config.SNOWTRACE_API_KEY
+OPTIMISM_ETHERSCAN_API_KEY = config.OPTIMISM_ETHERSCAN_API_KEY
+FTMSCAN_API_KEY = config.FTMSCAN_API_KEY
+HELIUS_API_KEY = config.HELIUS_API_KEY
+SOLSCAN_API_KEY = config.SOLSCAN_API_KEY
 
-SMART_DISCOVERY_INTERVAL_HOURS = config.smart_discovery.interval_hours
-SMART_DISCOVERY_MAX_NEW_WALLETS = config.smart_discovery.max_new_wallets
+COINGECKO_API_KEY = config.COINGECKO_API_KEY
+ALCHEMY_API_KEY = config.ALCHEMY_API_KEY
+COINMARKETCAP_API_KEY = config.COINMARKETCAP_API_KEY
+CRYPTOPANIC_API_KEY = config.CRYPTOPANIC_API_KEY
+NEWSAPI_KEY = config.NEWSAPI_KEY
+DEXSCREENER_API_KEY = config.DEXSCREENER_API_KEY
+BIRDEYE_API_KEY = config.BIRDEYE_API_KEY
 
-VALIDATION_INTERVAL_DAYS = config.validation.interval_days
-VALIDATION_MIN_SCORE_TO_KEEP = config.validation.min_score_to_keep
+RSS_FEEDS = {name: feed.url for name, feed in config.RSS_FEEDS.items()}
+POST_DELAY_SECONDS = config.POST_DELAY_SECONDS
+IDLE_DELAY_SECONDS = config.IDLE_DELAY_SECONDS
+DB_PATH = str(config.DB_PATH)
+NEWS_DB_PATH = str(config.NEWS_DB_PATH)
+MIN_IMAGE_WIDTH = config.MIN_IMAGE_WIDTH
+MIN_IMAGE_HEIGHT = config.MIN_IMAGE_HEIGHT
+COMMON_HEADERS = config.COMMON_HEADERS
 
-PERFORMANCE_SUCCESS_THRESHOLD = config.performance.success_threshold
+NEWS_SOURCES = [
+    {
+        'name': name,
+        'url': feed.url,
+        'priority': feed.priority,
+        'category': feed.category,
+        'language': feed.language,
+        'enabled': feed.enabled
+    }
+    for name, feed in config.RSS_FEEDS.items()
+]
 
-ADAPTIVE_BASE_MIN_CONFIDENCE = config.adaptive_thresholds.base_min_confidence
+FETCH_INTERVAL = config.FETCH_INTERVAL
+NEWS_CHECK_INTERVAL = config.NEWS_CHECK_INTERVAL
+POSTS_PER_HOUR_CAP = config.POSTS_PER_HOUR_CAP
+MIN_CONFIDENCE_SCORE = config.MIN_CONFIDENCE_SCORE
 
-WEBHOOK_URL = config.webhook_url
-RENDER_EXTERNAL_URL = config.render_external_url
-RENDER_SERVICE_NAME = config.render_service_name
+ENABLED_CHAINS = config.ENABLED_CHAINS
+MIN_USD = config.MIN_USD
 
-ENABLE_METRICS = config.metrics.enabled
-METRICS_PORT = config.metrics.port
-SENTRY_DSN = config.metrics.sentry_dsn
+WHALE_ENABLED = config.WHALE_ENABLED
+NEWS_ENABLED = config.NEWS_ENABLED
+ANALYTICS_ENABLED = config.ANALYTICS_ENABLED
+TRADING_ENABLED = config.TRADING_ENABLED
+HYPERLIQUID_ENABLED = config.HYPERLIQUID_ENABLED
 
-# Discovery Engine параметры
-MIN_TOKEN_AGE_DAYS = config.discovery.min_token_age_days
-DISCOVERY_TOP_N_PER_CHAIN = config.discovery.top_n_per_chain
-DISCOVERY_BLACKLIST = config.discovery.blacklist
-DISCOVERY_MIN_VOLUME_USD = config.discovery.min_volume_usd
-DISCOVERY_MIN_MARKET_CAP_USD = config.discovery.min_market_cap_usd
-DISCOVERY_MAX_PRICE_CHANGE_PERCENT = config.discovery.max_price_change_percent
-DISCOVERY_INTERVAL_HOURS = config.discovery.interval_hours
+DATA_DIR = config.DATA_DIR
+STATE_FILE = config.STATE_FILE
+WALLET_DB_JSON_PATH = config.WALLET_DB_JSON_PATH
+
+LOG_LEVEL = config.LOG_LEVEL
+HEALTH_CHECK_ENABLED = config.HEALTH_CHECK_ENABLED
+
+PORT = config.PORT
+HTTP_TIMEOUT = config.HTTP_TIMEOUT
+RPC_TIMEOUT = config.RPC_TIMEOUT
+MAX_MEMORY_MB = config.MAX_MEMORY_MB
+
 
 __all__ = [
     'config',
     'Config',
+    'FeedConfig',
+    'BaseConfig',
+    'PathsConfig',
+    'APIConfig',
     'TelegramConfig',
-    'ProductionConfig',
-    'RateLimitConfig',
-    'ChainConfig',
-    'WhaleConfig',
-    'HyperliquidConfig',
-    'TradingConfig',
-    'NewsConfig',
-    'SmartDiscoveryConfig',
-    'ValidationConfig',
-    'PerformanceConfig',
-    'AdaptiveThresholdsConfig',
-    'AnalyticsConfig',
+    'FeedsConfig',
+    'BlockchainConfig',
+    'FeaturesConfig',
     'DatabaseConfig',
-    'MetricsConfig',
-    'DiscoveryConfig',
+    'RateLimitingConfig',
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_TOKEN',
     'BOT_TOKEN',
@@ -171,95 +479,53 @@ __all__ = [
     'CHAT_ID',
     'CHANNEL_ID',
     'ADMIN_CHAT_ID',
-    'PORT',
-    'HTTP_TIMEOUT',
-    'RPC_TIMEOUT',
-    'WEBHOOK_TIMEOUT',
-    'MAX_MEMORY_MB',
-    'GC_INTERVAL_SECONDS',
-    'MIN_USD',
-    'MIN_USD_THRESHOLD',
-    'WHALE_MIN_VALUE_USD',
-    'MIN_CONFIDENCE_SCORE',
-    'POSTS_PER_HOUR_CAP',
-    'POLL_SECONDS',
-    'START_FROM_MINUTES_AGO',
-    'ENABLED_CHAINS',
-    'CHAINS_ENABLED',
-    'WHALE_ENABLED',
-    'NEWS_ENABLED',
-    'ANALYTICS_ENABLED',
-    'TRADING_ENABLED',
-    'HYPERLIQUID_ENABLED',
-    'SMART_DISCOVERY_ENABLED',
-    'VALIDATION_ENABLED',
-    'ADAPTIVE_THRESHOLDS_ENABLED',
-    'PERFORMANCE_TRACKING_ENABLED',
-    'FETCH_INTERVAL',
-    'NEWS_CHECK_INTERVAL',
-    'NEWS_SOURCES',
-    'NEWS_DB_PATH',
-    'DB_PATH',
-    'DATA_DIR',
-    'STATE_FILE',
-    'WALLET_DB_JSON_PATH',
-    'WATCHLIST_FILE',
-    'HISTORY_FILE',
-    'POSITIONS_DIR',
-    'PERFORMANCE_DIR',
-    'LOG_LEVEL',
-    'HEALTH_CHECK_ENABLED',
-    'HEALTH_CHECK_INTERVAL',
-    'HEALTH_CHECK_MAX_SILENCE',
-    'SEND_STARTUP_NOTIFICATION',
-    'SEND_DAILY_STATS',
+    'GEMINI_API_KEY',
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
-    'GEMINI_API_KEY',
-    'COINGECKO_API_KEY',
-    'ALCHEMY_API_KEY',
     'ETHERSCAN_API_KEY',
     'BSCSCAN_API_KEY',
     'POLYGONSCAN_API_KEY',
     'ARBISCAN_API_KEY',
     'BASESCAN_API_KEY',
+    'SNOWTRACE_API_KEY',
+    'OPTIMISM_ETHERSCAN_API_KEY',
+    'FTMSCAN_API_KEY',
     'HELIUS_API_KEY',
-    'ETHEREUM_RPC_URL',
-    'BSC_RPC_URL',
-    'POLYGON_RPC_URL',
-    'ARBITRUM_RPC_URL',
-    'BASE_RPC_URL',
-    'SOLANA_RPC_URL',
-    'TRON_RPC_URL',
-    'SOLANA_RATE_LIMIT_REQUESTS',
-    'SOLANA_RATE_LIMIT_WINDOW',
-    'SOLANA_RETRY_ON_429',
-    'HYPERLIQUID_API_URL',
-    'HYPERLIQUID_MIN_TRADE_USD',
-    'HYPERLIQUID_MIN_LIQUIDATION_USD',
-    'HYPERLIQUID_MIN_WHALE_ACTIVITY_USD',
-    'HYPERLIQUID_NOTIFY_WHALE_ACTIVITY',
-    'HYPERLIQUID_NOTIFY_LIQUIDATIONS',
-    'TRADING_SIGNAL_INTERVAL_HOURS',
-    'TRADING_MONITORED_ASSETS',
-    'POSITION_UPDATE_INTERVAL_SECONDS',
-    'SMART_DISCOVERY_INTERVAL_HOURS',
-    'SMART_DISCOVERY_MAX_NEW_WALLETS',
-    'VALIDATION_INTERVAL_DAYS',
-    'VALIDATION_MIN_SCORE_TO_KEEP',
-    'PERFORMANCE_SUCCESS_THRESHOLD',
-    'ADAPTIVE_BASE_MIN_CONFIDENCE',
-    'WEBHOOK_URL',
-    'RENDER_EXTERNAL_URL',
-    'RENDER_SERVICE_NAME',
-    'ENABLE_METRICS',
-    'METRICS_PORT',
-    'SENTRY_DSN',
-    'MIN_TOKEN_AGE_DAYS',
-    'DISCOVERY_TOP_N_PER_CHAIN',
-    'DISCOVERY_BLACKLIST',
-    'DISCOVERY_MIN_VOLUME_USD',
-    'DISCOVERY_MIN_MARKET_CAP_USD',
-    'DISCOVERY_MAX_PRICE_CHANGE_PERCENT',
-    'DISCOVERY_INTERVAL_HOURS',
+    'SOLSCAN_API_KEY',
+    'COINGECKO_API_KEY',
+    'ALCHEMY_API_KEY',
+    'COINMARKETCAP_API_KEY',
+    'CRYPTOPANIC_API_KEY',
+    'NEWSAPI_KEY',
+    'DEXSCREENER_API_KEY',
+    'BIRDEYE_API_KEY',
+    'RSS_FEEDS',
+    'NEWS_SOURCES',
+    'FETCH_INTERVAL',
+    'NEWS_CHECK_INTERVAL',
+    'POSTS_PER_HOUR_CAP',
+    'MIN_CONFIDENCE_SCORE',
+    'POST_DELAY_SECONDS',
+    'IDLE_DELAY_SECONDS',
+    'DB_PATH',
+    'NEWS_DB_PATH',
+    'DATA_DIR',
+    'STATE_FILE',
+    'WALLET_DB_JSON_PATH',
+    'MIN_IMAGE_WIDTH',
+    'MIN_IMAGE_HEIGHT',
+    'COMMON_HEADERS',
+    'ENABLED_CHAINS',
+    'MIN_USD',
+    'WHALE_ENABLED',
+    'NEWS_ENABLED',
+    'ANALYTICS_ENABLED',
+    'TRADING_ENABLED',
+    'HYPERLIQUID_ENABLED',
+    'LOG_LEVEL',
+    'HEALTH_CHECK_ENABLED',
+    'PORT',
+    'HTTP_TIMEOUT',
+    'RPC_TIMEOUT',
+    'MAX_MEMORY_MB',
 ]
