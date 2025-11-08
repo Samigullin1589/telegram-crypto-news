@@ -1,9 +1,11 @@
 # bot/news/__init__.py
 """
-News Processing System v5.0
-Modular news processing with robust error handling
+News Processing System v6.0
+Модульная система обработки новостей
 """
 
-from bot.news.processor import NewsProcessor
+from .processor import NewsProcessor
 
 __all__ = ['NewsProcessor']
+
+__version__ = '6.0.0'
