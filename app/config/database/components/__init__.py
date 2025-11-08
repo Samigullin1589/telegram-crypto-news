@@ -1,29 +1,156 @@
 """
-Database Configuration Components
-Модульные компоненты конфигурации БД
+Экспорт всех компонентов оптимизации БД
+
+Этот модуль предоставляет единую точку импорта для всех компонентов
+системы оптимизации базы данных.
 """
 
-from .pool import DatabaseConnectionPoolConfig, PoolStrategy
-from .pragma import DatabasePragmaConfig, PragmaPreset
-from .backup import DatabaseBackupConfig, BackupStrategy
-from .vacuum import DatabaseVacuumConfig, VacuumStrategy
-from .cache import DatabaseCacheConfig, CacheStrategy
-from .connection import DatabaseConnectionConfig, RetryStrategy
+from .backup import (
+    BackupConfig,
+    BackupStrategy,
+    BackupSchedule
+)
+
+from .pool import (
+    ConnectionPoolConfig,
+    PoolStrategy,
+    HealthCheckConfig
+)
+
+from .pragma import (
+    PragmaConfig,
+    PragmaSettings,
+    WorkMemConfig,
+    MaintenanceWorkMemConfig,
+    EffectiveCacheConfig,
+    RandomPageCostConfig,
+    WalConfig
+)
+
+from .indexes import (
+    IndexConfig,
+    IndexType,
+    IndexHealth,
+    IndexMetrics,
+    IndexRecommendation
+)
+
+from .partitions import (
+    PartitionConfig,
+    PartitionStrategy,
+    PartitionPeriod,
+    PartitionInfo
+)
+
+from .vacuum import (
+    VacuumConfig,
+    VacuumStrategy,
+    VacuumPriority,
+    TableVacuumMetrics,
+    VacuumOperation
+)
+
+from .cache import (
+    CacheConfig,
+    CacheLevel,
+    EvictionPolicy,
+    CacheEntry,
+    HotKey
+)
+
+from .monitoring import (
+    DatabaseMonitor,
+    HealthStatus,
+    AlertSeverity,
+    MetricThreshold,
+    MetricDataPoint,
+    Alert,
+    PerformanceBaseline
+)
+
+from .statistics import (
+    DatabaseStatistics,
+    StatisticsPeriod,
+    QueryStatistics,
+    TableStatistics,
+    ConnectionStatistics
+)
+
+from .query_analyzer import (
+    QueryAnalyzer,
+    QueryType,
+    QueryIssue,
+    QueryPlan,
+    QueryRecommendation
+)
 
 __all__ = [
-    # Config classes
-    'DatabaseConnectionPoolConfig',
-    'DatabasePragmaConfig',
-    'DatabaseBackupConfig',
-    'DatabaseVacuumConfig',
-    'DatabaseCacheConfig',
-    'DatabaseConnectionConfig',
-    
-    # Strategies
-    'PoolStrategy',
-    'PragmaPreset',
+    # Backup
+    'BackupConfig',
     'BackupStrategy',
+    'BackupSchedule',
+    
+    # Pool
+    'ConnectionPoolConfig',
+    'PoolStrategy',
+    'HealthCheckConfig',
+    
+    # Pragma
+    'PragmaConfig',
+    'PragmaSettings',
+    'WorkMemConfig',
+    'MaintenanceWorkMemConfig',
+    'EffectiveCacheConfig',
+    'RandomPageCostConfig',
+    'WalConfig',
+    
+    # Indexes
+    'IndexConfig',
+    'IndexType',
+    'IndexHealth',
+    'IndexMetrics',
+    'IndexRecommendation',
+    
+    # Partitions
+    'PartitionConfig',
+    'PartitionStrategy',
+    'PartitionPeriod',
+    'PartitionInfo',
+    
+    # Vacuum
+    'VacuumConfig',
     'VacuumStrategy',
-    'CacheStrategy',
-    'RetryStrategy',
+    'VacuumPriority',
+    'TableVacuumMetrics',
+    'VacuumOperation',
+    
+    # Cache
+    'CacheConfig',
+    'CacheLevel',
+    'EvictionPolicy',
+    'CacheEntry',
+    'HotKey',
+    
+    # Monitoring
+    'DatabaseMonitor',
+    'HealthStatus',
+    'AlertSeverity',
+    'MetricThreshold',
+    'MetricDataPoint',
+    'Alert',
+    'PerformanceBaseline',
+    
+    # Statistics
+    'DatabaseStatistics',
+    'StatisticsPeriod',
+    'QueryStatistics',
+    'TableStatistics',
+    'ConnectionStatistics',
+    
+    # Query Analyzer
+    'QueryAnalyzer',
+    'QueryType',
+    'QueryIssue',
+    'QueryPlan',
+    'QueryRecommendation'
 ]
