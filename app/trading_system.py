@@ -1,122 +1,127 @@
 # app/trading_system.py
 """
-TRADING SYSTEM FACADE v4.0
-========================================
-Унифицированный интерфейс для модульной Trading System
-
-Этот файл - простой wrapper, который:
-1. Импортирует SignalGenerator из app.trading
-2. Проверяет TRADING_ENABLED
-3. Предоставляет единый интерфейс для scheduler
+Trading System Facade v5.0
+Унифицированный интерфейс для Trading System с улучшенной архитектурой
 """
 
-import asyncio
-import pandas as pd
-from typing import Dict, List, Optional
-from datetime import datetime
+import logging
+from typing import Dict, Any, Optional, List
 
-# Settings
-from app.settings import (
-    TRADING_ENABLED,
-    TRADING_MIN_CONFIDENCE,
-    TRADING_MAX_SIGNALS_PER_DAY,
-    TRADING_SIGNAL_COOLDOWN_MINUTES,
-    TRADING_MAX_POSITION_SIZE_USD,
-    TRADING_MAX_OPEN_POSITIONS,
-    TRADING_DEFAULT_STOP_LOSS_PERCENT,
-    TRADING_DEFAULT_TAKE_PROFIT_PERCENT,
-    TRADING_MIN_TECHNICAL_SCORE,
-    TRADING_MIN_FUNDAMENTAL_SCORE,
-    TRADING_MIN_ML_CONFIDENCE,
-    TRADING_DRY_RUN,
-    COINGECKO_API_KEY,
-)
+from app.config import config
 
-# Модульная Trading System
-try:
-    from app.trading.signal_generator import SignalGenerator, TradingSignal
-    from app.trading.position_tracker import PositionTracker
-    from app.trading.performance_stats import PerformanceStats
-    TRADING_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ [TRADING_SYSTEM] Модули не найдены: {e}")
-    TRADING_AVAILABLE = False
-    SignalGenerator = None
-    TradingSignal = None
-    PositionTracker = None
-    PerformanceStats = None
+logger = logging.getLogger(__name__)
 
 
 class TradingSystem:
     """
-    Facade для Trading System
+    Фасад для Trading System
     
-    Простой wrapper вокруг SignalGenerator с дополнительными проверками
+    Улучшения v5.0:
+    - Использует app.config вместо app.settings
+    - Модульная архитектура
+    - Улучшенная обработка ошибок
+    - Безопасная инициализация
     """
     
     def __init__(self):
         """Инициализация Trading System"""
         
-        self.enabled = TRADING_ENABLED and TRADING_AVAILABLE
-        self.dry_run = TRADING_DRY_RUN
+        # Проверка включен ли trading в конфигурации
+        self.enabled = config.is_feature_enabled('trading')
         
-        # Настройки
-        self.min_confidence = TRADING_MIN_CONFIDENCE
-        self.max_signals_per_day = TRADING_MAX_SIGNALS_PER_DAY
-        self.cooldown_minutes = TRADING_SIGNAL_COOLDOWN_MINUTES
+        # Получение конфигурации
+        self.trading_config = config.features.get_trading_config()
+        self.dry_run = self.trading_config.get('dry_run', True)
         
         # Компоненты
         self.signal_generator = None
         self.positions = None
         self.performance = None
+        self._initialized = False
         
-        if self.enabled and TRADING_AVAILABLE:
-            try:
-                # Инициализируем SignalGenerator
-                self.signal_generator = SignalGenerator(coingecko_key=COINGECKO_API_KEY)
-                
-                # Получаем ссылки на компоненты
-                self.positions = self.signal_generator.positions
-                self.performance = self.signal_generator.performance
-                
-                print(f"\n{'='*80}")
-                print(f"📈 TRADING SYSTEM v4.0 - INITIALIZED")
-                print(f"{'='*80}")
-                print(f"Status: ✅ ENABLED")
-                print(f"Mode: {'🧪 DRY RUN' if self.dry_run else '💰 LIVE'}")
-                print(f"Min Confidence: {self.min_confidence}/100")
-                print(f"Max Signals/Day: {self.max_signals_per_day}")
-                print(f"Cooldown: {self.cooldown_minutes} minutes")
-                print(f"Technical Score Filter: ≥{TRADING_MIN_TECHNICAL_SCORE}")
-                print(f"Fundamental Score Filter: ≥{TRADING_MIN_FUNDAMENTAL_SCORE}")
-                print(f"ML Confidence Filter: ≥{TRADING_MIN_ML_CONFIDENCE}%")
-                print(f"{'='*80}\n")
-                
-            except Exception as e:
-                print(f"❌ [TRADING_SYSTEM] Ошибка инициализации: {e}")
-                import traceback
-                traceback.print_exc()
-                self.enabled = False
+        # Попытка инициализации компонентов
+        if self.enabled:
+            self._initialize_components()
         else:
-            print(f"\n{'='*80}")
-            print(f"📈 TRADING SYSTEM v4.0")
-            print(f"{'='*80}")
-            if not TRADING_ENABLED:
-                print(f"Status: ❌ DISABLED (TRADING_ENABLED=false)")
-            elif not TRADING_AVAILABLE:
-                print(f"Status: ❌ DISABLED (модули не найдены)")
-            print(f"{'='*80}\n")
+            logger.info("📈 [TRADING] Trading System disabled in configuration")
+            self._log_disabled_status()
+    
+    def _initialize_components(self):
+        """Инициализация компонентов Trading System"""
+        try:
+            # Импорт модулей trading
+            from app.trading.signal_generator import SignalGenerator
+            from app.trading.position_tracker import PositionTracker
+            from app.trading.performance_stats import PerformanceStats
+            
+            # Получение CoinGecko API key
+            coingecko_key = getattr(config.api, 'coingecko_api_key', None)
+            
+            # Инициализация компонентов
+            self.signal_generator = SignalGenerator(coingecko_key=coingecko_key)
+            self.positions = self.signal_generator.positions
+            self.performance = self.signal_generator.performance
+            
+            self._initialized = True
+            
+            self._log_initialization_success()
+        
+        except ImportError as e:
+            logger.warning(f"⚠️  [TRADING] Trading modules not available: {e}")
+            self.enabled = False
+            self._log_modules_unavailable()
+        
+        except Exception as e:
+            logger.error(f"❌ [TRADING] Initialization error: {e}", exc_info=True)
+            self.enabled = False
+    
+    def _log_initialization_success(self):
+        """Логирование успешной инициализации"""
+        logger.info("\n" + "="*80)
+        logger.info("📈 TRADING SYSTEM v5.0 - INITIALIZED")
+        logger.info("="*80)
+        logger.info(f"Status: ✅ ENABLED")
+        logger.info(f"Mode: {'🧪 DRY RUN' if self.dry_run else '💰 LIVE'}")
+        logger.info(f"Min Confidence: {self.trading_config.get('min_confidence', 75)}/100")
+        logger.info(f"Max Signals/Day: {self.trading_config.get('max_signals_per_day', 10)}")
+        logger.info(f"Max Open Positions: {self.trading_config.get('max_open_positions', 5)}")
+        logger.info(f"Stop Loss: {self.trading_config.get('default_stop_loss', 3.0)}%")
+        logger.info(f"Take Profit: {self.trading_config.get('default_take_profit', 5.0)}%")
+        logger.info("="*80 + "\n")
+    
+    def _log_disabled_status(self):
+        """Логирование отключенного статуса"""
+        logger.info("\n" + "="*80)
+        logger.info("📈 TRADING SYSTEM v5.0")
+        logger.info("="*80)
+        logger.info("Status: ❌ DISABLED")
+        logger.info("Reason: TRADING_ENABLED=false in configuration")
+        logger.info("="*80 + "\n")
+    
+    def _log_modules_unavailable(self):
+        """Логирование недоступности модулей"""
+        logger.info("\n" + "="*80)
+        logger.info("📈 TRADING SYSTEM v5.0")
+        logger.info("="*80)
+        logger.info("Status: ❌ DISABLED")
+        logger.info("Reason: Trading modules not available")
+        logger.info("="*80 + "\n")
     
     def is_enabled(self) -> bool:
-        """Проверка включен ли Trading System"""
-        return self.enabled and self.signal_generator is not None
+        """
+        Проверка включен ли Trading System
+        
+        Returns:
+            True если система включена и инициализирована
+        """
+        return self.enabled and self._initialized and self.signal_generator is not None
     
     async def generate_signal(
         self,
         symbol: str,
-        price_data: pd.DataFrame,
-        session
-    ) -> Optional[Dict]:
+        price_data: Any,
+        session: Any
+    ) -> Optional[Dict[str, Any]]:
         """
         Генерация торгового сигнала
         
@@ -124,15 +129,16 @@ class TradingSystem:
             symbol: Тикер актива
             price_data: DataFrame с OHLCV данными
             session: aiohttp session
-        
+            
         Returns:
             Signal dict или None
         """
         if not self.is_enabled():
+            logger.debug(f"[TRADING] System not enabled, skipping signal for {symbol}")
             return None
         
         try:
-            # Генерируем сигнал через SignalGenerator
+            # Генерация сигнала
             signal = await self.signal_generator.generate_signal(
                 asset=symbol,
                 price_data=price_data,
@@ -142,22 +148,29 @@ class TradingSystem:
             if not signal:
                 return None
             
-            # Фильтруем по confidence
-            if signal.confidence < self.min_confidence:
-                print(f"⚠️ [TRADING] Сигнал {symbol} отфильтрован: confidence {signal.confidence:.1f} < {self.min_confidence}")
+            # Фильтрация по confidence
+            min_confidence = self.trading_config.get('min_confidence', 75)
+            if signal.confidence < min_confidence:
+                logger.debug(
+                    f"[TRADING] Signal {symbol} filtered: "
+                    f"confidence {signal.confidence:.1f} < {min_confidence}"
+                )
                 return None
             
-            # Конвертируем в dict для совместимости
+            # Конвертация в dict
             return signal.to_dict()
-            
+        
         except Exception as e:
-            print(f"❌ [TRADING_SYSTEM] Ошибка генерации сигнала {symbol}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"❌ [TRADING] Error generating signal for {symbol}: {e}")
             return None
     
-    async def get_open_positions(self) -> List[Dict]:
-        """Получить открытые позиции"""
+    async def get_open_positions(self) -> List[Dict[str, Any]]:
+        """
+        Получение открытых позиций
+        
+        Returns:
+            Список открытых позиций
+        """
         if not self.is_enabled() or not self.positions:
             return []
         
@@ -165,39 +178,44 @@ class TradingSystem:
             open_pos = self.positions.get_open_positions()
             return [pos.to_dict() for pos in open_pos]
         except Exception as e:
-            print(f"❌ [TRADING_SYSTEM] Ошибка получения позиций: {e}")
+            logger.error(f"❌ [TRADING] Error getting positions: {e}")
             return []
     
-    async def get_performance_stats(self) -> Dict:
-        """Получить статистику производительности"""
+    async def get_performance_stats(self) -> Dict[str, Any]:
+        """
+        Получение статистики производительности
+        
+        Returns:
+            Dict со статистикой
+        """
         if not self.is_enabled() or not self.performance:
             return {
                 'total_signals': 0,
                 'total_trades': 0,
-                'win_rate': 0,
-                'avg_profit': 0,
-                'total_pnl': 0
+                'win_rate': 0.0,
+                'avg_profit': 0.0,
+                'total_pnl': 0.0
             }
         
         try:
             return self.performance.get_summary_stats()
         except Exception as e:
-            print(f"❌ [TRADING_SYSTEM] Ошибка получения статистики: {e}")
+            logger.error(f"❌ [TRADING] Error getting stats: {e}")
             return {
                 'total_signals': 0,
                 'total_trades': 0,
-                'win_rate': 0,
-                'avg_profit': 0,
-                'total_pnl': 0
+                'win_rate': 0.0,
+                'avg_profit': 0.0,
+                'total_pnl': 0.0
             }
     
-    async def update_positions(self, price_provider=None) -> List[Dict]:
+    async def update_positions(self, price_provider: Any = None) -> List[Dict[str, Any]]:
         """
-        Обновить позиции (проверить SL/TP)
+        Обновление позиций (проверка SL/TP)
         
         Args:
             price_provider: Provider для получения текущих цен
-        
+            
         Returns:
             Список закрытых позиций
         """
@@ -205,38 +223,43 @@ class TradingSystem:
             return []
         
         try:
-            # Обновляем позиции
             closed = []
             open_positions = self.positions.get_open_positions()
             
             for position in open_positions:
-                # Получаем текущую цену
+                # Получение текущей цены
                 if price_provider and hasattr(price_provider, 'get_price'):
                     try:
                         current_price = await price_provider.get_price(position.asset)
                         
-                        # Обновляем позицию
-                        updated = self.positions.update_position(position.id, current_price)
+                        # Обновление позиции
+                        updated = self.positions.update_position(
+                            position.id,
+                            current_price
+                        )
                         
-                        # Если позиция закрылась - добавляем в список
+                        # Проверка закрытия
                         if updated and updated.status != 'OPEN':
                             closed.append(updated.to_dict())
+                    
                     except Exception as e:
-                        print(f"⚠️ [TRADING] Ошибка обновления позиции {position.asset}: {e}")
+                        logger.warning(
+                            f"⚠️  [TRADING] Error updating position {position.asset}: {e}"
+                        )
             
             return closed
-            
+        
         except Exception as e:
-            print(f"❌ [TRADING_SYSTEM] Ошибка обновления позиций: {e}")
+            logger.error(f"❌ [TRADING] Error updating positions: {e}")
             return []
     
-    def format_signal_for_telegram(self, signal: Dict) -> str:
+    def format_signal_for_telegram(self, signal: Dict[str, Any]) -> str:
         """
-        Форматировать сигнал для Telegram
+        Форматирование сигнала для Telegram
         
         Args:
             signal: Signal dict
-        
+            
         Returns:
             Formatted message (HTML)
         """
@@ -244,64 +267,61 @@ class TradingSystem:
             return ""
         
         try:
-            # Если signal уже TradingSignal объект
+            # Если объект TradingSignal
             if hasattr(signal, 'format_signal_message'):
                 return signal.format_signal_message()
             
-            # Если dict - используем SignalGenerator
+            # Если dict - используем signal_generator
             if self.signal_generator:
-                # Создаем TradingSignal из dict (упрощенно)
-                from app.trading.signal_generator import TradingSignal as TS
-                
-                ts = TS(
-                    asset=signal.get('asset', 'UNKNOWN'),
-                    timestamp=datetime.fromisoformat(signal.get('timestamp', datetime.utcnow().isoformat())),
-                    signal=signal.get('signal', 'HOLD'),
-                    confidence=signal.get('confidence', 0),
-                    technical=signal.get('technical'),
-                    fundamental=signal.get('fundamental'),
-                    wallet=signal.get('wallet'),
-                    ml=signal.get('ml'),
-                    entry_price=signal.get('recommendations', {}).get('entry_price', 0),
-                    stop_loss=signal.get('recommendations', {}).get('stop_loss'),
-                    take_profit=signal.get('recommendations', {}).get('take_profit'),
-                    position_size_pct=signal.get('recommendations', {}).get('position_size_pct', 0),
-                    reasons=signal.get('reasons', []),
-                    warnings=signal.get('warnings', [])
-                )
-                
-                return self.signal_generator.format_signal_message(ts)
-            
+                return self.signal_generator.format_signal_message(signal)
+        
         except Exception as e:
-            print(f"❌ [TRADING_SYSTEM] Ошибка форматирования: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"❌ [TRADING] Error formatting signal: {e}")
         
         return ""
     
-    def get_config(self) -> Dict:
-        """Получить текущую конфигурацию"""
+    def get_config(self) -> Dict[str, Any]:
+        """
+        Получение текущей конфигурации
+        
+        Returns:
+            Dict с конфигурацией
+        """
         return {
             'enabled': self.enabled,
-            'dry_run': self.dry_run,
-            'min_confidence': self.min_confidence,
-            'max_signals_per_day': self.max_signals_per_day,
-            'cooldown_minutes': self.cooldown_minutes,
-            'min_technical_score': TRADING_MIN_TECHNICAL_SCORE,
-            'min_fundamental_score': TRADING_MIN_FUNDAMENTAL_SCORE,
-            'min_ml_confidence': TRADING_MIN_ML_CONFIDENCE,
-            'max_position_size': TRADING_MAX_POSITION_SIZE_USD,
-            'max_open_positions': TRADING_MAX_OPEN_POSITIONS,
-            'default_stop_loss': TRADING_DEFAULT_STOP_LOSS_PERCENT,
-            'default_take_profit': TRADING_DEFAULT_TAKE_PROFIT_PERCENT,
+            'initialized': self._initialized,
+            **self.trading_config
         }
+    
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Получение статуса системы
+        
+        Returns:
+            Dict со статусом
+        """
+        return {
+            'enabled': self.enabled,
+            'initialized': self._initialized,
+            'dry_run': self.dry_run,
+            'has_signal_generator': self.signal_generator is not None,
+            'has_positions': self.positions is not None,
+            'has_performance': self.performance is not None
+        }
+    
+    async def cleanup(self):
+        """Очистка ресурсов"""
+        logger.info("🧹 [TRADING] Cleanup...")
+        
+        try:
+            if self.signal_generator and hasattr(self.signal_generator, 'cleanup'):
+                await self.signal_generator.cleanup()
+            
+            self._initialized = False
+            logger.info("✅ [TRADING] Cleanup completed")
+        
+        except Exception as e:
+            logger.error(f"⚠️  [TRADING] Cleanup error: {e}")
 
 
-# ============================================================================
-# INITIALIZATION CHECK
-# ============================================================================
-
-if TRADING_AVAILABLE:
-    print("✅ [TRADING_SYSTEM] Trading System modules loaded successfully")
-else:
-    print("⚠️ [TRADING_SYSTEM] Trading System modules not available")
+__all__ = ['TradingSystem']
