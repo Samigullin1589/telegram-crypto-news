@@ -1,229 +1,214 @@
 # bot/news/processor.py
 """
-News Processor v5.0 - Production Ready
+News Processor v6.1 - Fixed Configuration Access
+Исправленный процессор с правильным доступом к конфигурации
 """
 
-import asyncio
-import traceback
-from datetime import datetime, timezone
-from typing import List, Dict, Optional
+import logging
+from typing import Dict, Any
 
 from app.config import config
 from bot.news.fetcher import NewsFetcher
 from bot.news.deduplicator import ArticleDeduplicator
+from bot.news.state import ProcessorState, ProcessorLogger
+from bot.news.components import ComponentsLoader, ProcessorComponents
+from bot.news.lifecycle import ProcessorLifecycle
+from bot.news.cycle import NewsCycleProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class NewsProcessor:
-    """Production-ready новостной процессор"""
+    """
+    Главный процессор новостей
+    
+    Исправления v6.1:
+    - Использует config.feeds напрямую (не зависит от алиаса config.news)
+    - Безопасная проверка наличия модулей конфигурации
+    - Улучшенная обработка ошибок инициализации
+    """
     
     def __init__(self):
         """Инициализация процессора"""
         
-        print("\n" + "="*80)
-        print("📰 NEWS PROCESSOR v5.0 - INITIALIZATION")
-        print("="*80 + "\n")
+        self.logger = ProcessorLogger()
+        self.logger.log_header("NEWS PROCESSOR v6.1 - INITIALIZATION")
         
-        self._initialized = False
-        self._database_initialized = False
-        self._baseline_loaded = False
-        self.shutdown_requested = False
-        
+        # Проверка предварительных условий
         if not self._check_prerequisites():
+            self.state = ProcessorState(core_initialized=False)
             return
         
         try:
+            # Инициализация состояния
+            self.state = ProcessorState()
+            
+            # Загрузка основных компонентов
             self.fetcher = NewsFetcher()
             self.deduplicator = ArticleDeduplicator()
             
-            self._load_optional_components()
+            self.logger.log_success("Core components loaded")
+            self._log_configuration()
             
-            self.posts_this_hour = 0
-            self.hour_start_time = datetime.now(timezone.utc)
+            # Загрузка опциональных компонентов
+            self.components = ComponentsLoader.load_all()
             
-            print("✅ Core components initialized")
-            print(f"   • Sources: {len(config.news.sources)}")
-            print(f"   • Fetch interval: {config.news.fetch_interval}s")
-            print(f"   • Posts per hour cap: {config.news.posts_per_hour_cap}")
-            print()
+            # Инициализация менеджеров
+            self.lifecycle = ProcessorLifecycle(self.state, self.components)
+            self.cycle_processor = NewsCycleProcessor(
+                self.state,
+                self.components,
+                self.fetcher,
+                self.deduplicator
+            )
             
-            self._initialized = True
-        
+            # Установка флага инициализации
+            self.state.core_initialized = True
+            
+            self.logger.log_success("Processor initialized successfully")
+            self.logger.log_section_end()
+            
         except Exception as e:
-            print(f"❌ [NEWS] Initialization failed: {e}")
-            traceback.print_exc()
-            self._initialized = False
+            self.logger.log_error(f"Initialization failed: {e}")
+            logger.error("Processor init error", exc_info=True)
+            self.state = ProcessorState(core_initialized=False)
     
     def _check_prerequisites(self) -> bool:
-        """Проверка предварительных условий"""
-        if not config.is_feature_enabled('news'):
-            print("⚠️  [NEWS] News processing disabled in config")
+        """
+        Проверка предварительных условий
+        
+        Проверяет:
+        1. Включен ли модуль news в features
+        2. Существует ли config.feeds (основной модуль)
+        3. Есть ли настроенные источники новостей
+        
+        Returns:
+            True если все условия выполнены
+        """
+        # Проверка 1: Включен ли модуль news
+        try:
+            if not config.is_feature_enabled('news'):
+                self.logger.log_warning("News processing disabled in config.features")
+                return False
+        except Exception as e:
+            self.logger.log_error(f"Cannot check feature status: {e}")
             return False
         
-        if not hasattr(config, 'news'):
-            print("❌ [NEWS] config.news not found")
+        # Проверка 2: Существует ли config.feeds
+        if not hasattr(config, 'feeds'):
+            self.logger.log_error("config.feeds not found")
+            self.logger.log_info("Configuration module is not properly initialized")
             return False
         
-        if not hasattr(config.news, 'sources') or not config.news.sources:
-            print("❌ [NEWS] No news sources configured")
+        # Проверка 3: Есть ли настроенные источники
+        try:
+            # Проверяем через feeds модуль
+            enabled_feeds = config.feeds.get_enabled_feeds()
+            
+            if not enabled_feeds:
+                self.logger.log_error("No news sources configured")
+                self.logger.log_info("Check config.feeds or ENABLED_FEEDS environment variable")
+                return False
+            
+            self.logger.log_info(f"Found {len(enabled_feeds)} enabled news sources")
+            return True
+            
+        except Exception as e:
+            self.logger.log_error(f"Cannot access news sources: {e}")
+            logger.debug("Feeds access error", exc_info=True)
             return False
-        
-        return True
     
-    def _load_optional_components(self):
-        """Загрузка опциональных компонентов"""
+    def _log_configuration(self):
+        """Вывод информации о конфигурации"""
         try:
-            from bot.ai_handler import AIHandler
-            self.ai_handler = AIHandler()
-            print("   ✅ AI Handler loaded")
-        except ImportError:
-            print("   ⚠️  AI Handler not available (disabled)")
-            self.ai_handler = None
+            # Получаем конфигурацию из feeds
+            enabled_feeds = config.feeds.get_enabled_feeds()
+            
+            self.logger.log_info(f"Sources: {len(enabled_feeds)}")
+            
+            # Пытаемся получить дополнительные параметры
+            if hasattr(config.feeds, 'fetch_interval'):
+                self.logger.log_info(f"Fetch interval: {config.feeds.fetch_interval}s")
+            
+            if hasattr(config.feeds, 'posts_per_hour_cap'):
+                self.logger.log_info(f"Posts per hour cap: {config.feeds.posts_per_hour_cap}")
+            
         except Exception as e:
-            print(f"   ⚠️  AI Handler error: {e}")
-            self.ai_handler = None
-        
-        try:
-            from bot.content_parser import ContentParser
-            self.content_parser = ContentParser()
-            print("   ✅ Content Parser loaded")
-        except ImportError:
-            print("   ⚠️  Content Parser not available")
-            self.content_parser = None
-        except Exception as e:
-            print(f"   ⚠️  Content Parser error: {e}")
-            self.content_parser = None
-        
-        try:
-            from bot.database import NewsDatabase
-            self.database = NewsDatabase()
-            print("   ✅ Database loaded")
-        except ImportError:
-            print("   ⚠️  Database not available")
-            self.database = None
-        except Exception as e:
-            print(f"   ⚠️  Database error: {e}")
-            self.database = None
-        
-        try:
-            from bot.telegram_poster import NewsTelegramPoster
-            self.telegram = NewsTelegramPoster()
-            print("   ✅ Telegram Poster loaded")
-        except ImportError:
-            print("   ⚠️  Telegram Poster not available")
-            self.telegram = None
-        except Exception as e:
-            print(f"   ⚠️  Telegram Poster error: {e}")
-            self.telegram = None
+            self.logger.log_warning(f"Cannot log full configuration: {e}")
     
     @property
     def is_initialized(self) -> bool:
-        """Проверить инициализацию"""
-        return getattr(self, '_initialized', False)
+        """
+        Проверка инициализации процессора
+        
+        Returns:
+            True если процессор инициализирован
+        """
+        return self.state.core_initialized if hasattr(self, 'state') else False
     
     async def initialize_database(self):
-        """Инициализировать базу данных"""
-        if self._database_initialized or not self.database:
+        """Инициализация базы данных (если есть)"""
+        if not self.is_initialized:
             return
         
-        try:
-            await self.database.initialize()
-            print("✅ [NEWS] Database initialized")
-            self._database_initialized = True
-        except Exception as e:
-            print(f"⚠️  [NEWS] Database initialization failed: {e}")
+        await self.lifecycle.initialize_database()
+    
+    async def load_baseline(self):
+        """Загрузка базового состояния"""
+        if not self.is_initialized:
+            return
+        
+        await self.lifecycle.load_baseline(self.fetcher, self.deduplicator)
     
     async def run_cycle(self):
-        """Выполнить один цикл обработки новостей"""
+        """
+        Выполнение одного цикла обработки новостей
+        
+        Этапы:
+        1. Инициализация БД (если не инициализирована)
+        2. Загрузка baseline (если не загружен)
+        3. Выполнение цикла обработки
+        """
         
         if not self.is_initialized:
-            print("⚠️  [NEWS] Processor not initialized, skipping cycle")
+            self.logger.log_warning("Processor not initialized, skipping cycle")
             return
         
-        if not self._database_initialized and self.database:
+        # Инициализация БД при первом запуске
+        if not self.state.database_initialized:
             await self.initialize_database()
         
-        if not self._baseline_loaded:
-            await self._initial_baseline()
-            self._baseline_loaded = True
-            return
+        # Загрузка baseline при первом запуске
+        if not self.state.baseline_loaded:
+            await self.load_baseline()
+            return  # Первый запуск только для baseline
         
-        print(f"\n📰 [NEWS] Cycle at {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
-        
-        articles = await self._fetch_all_sources()
-        
-        if not articles:
-            print("✅ [NEWS] No new articles")
-            return
-        
-        print(f"📊 [NEWS] Fetched {len(articles)} new articles")
-        
-        new_articles = self._filter_duplicates(articles)
-        
-        if not new_articles:
-            print("✅ [NEWS] All articles are duplicates")
-            return
-        
-        print(f"🆕 [NEWS] {len(new_articles)} new unique articles")
-        
-        for article in new_articles[:3]:
-            self.deduplicator.mark_as_seen(article)
-        
-        await asyncio.sleep(1)
+        # Выполнение цикла
+        await self.cycle_processor.run_cycle()
     
-    async def _initial_baseline(self):
-        """Загрузить начальное состояние"""
-        print("📊 [BASELINE] Loading initial state...")
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Получение статуса процессора
         
-        try:
-            articles = await self._fetch_all_sources()
-            
-            for article in articles:
-                self.deduplicator.mark_as_seen(article)
-            
-            stats = self.deduplicator.get_stats()
-            print(f"✅ [BASELINE] Created: {stats['seen_urls']} URLs, {stats['seen_hashes']} hashes")
+        Returns:
+            Словарь со статусом и статистикой
+        """
+        status = {
+            'initialized': self.is_initialized,
+            'state': self.state.to_dict() if self.is_initialized else {},
+        }
         
-        except Exception as e:
-            print(f"⚠️  [BASELINE] Error: {e}")
-            traceback.print_exc()
-    
-    async def _fetch_all_sources(self) -> List[Dict]:
-        """Получить статьи из всех источников"""
-        all_articles = []
+        if self.is_initialized:
+            status['statistics'] = self.cycle_processor.get_statistics()
         
-        sources = config.news.sources[:5]
-        
-        tasks = [self.fetcher.fetch_source(source) for source in sources]
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                source_name = sources[i].get('name', 'Unknown')
-                print(f"❌ [FETCH] {source_name}: {result}")
-            elif result:
-                all_articles.extend(result)
-        
-        return all_articles
-    
-    def _filter_duplicates(self, articles: List[Dict]) -> List[Dict]:
-        """Фильтрует дубликаты"""
-        return [
-            article for article in articles
-            if not self.deduplicator.is_duplicate(article)
-        ]
+        return status
     
     async def cleanup(self):
         """Очистка ресурсов"""
-        print("\n⏹️  [NEWS] Cleanup processor...")
-        self.shutdown_requested = True
+        if not self.is_initialized:
+            return
         
-        try:
-            if self.database and hasattr(self.database, 'close'):
-                await self.database.close()
-                print("   ✓ Database closed")
-        except Exception as e:
-            print(f"⚠️  [NEWS] Cleanup error: {e}")
+        await self.lifecycle.cleanup()
 
 
 __all__ = ['NewsProcessor']

@@ -1,13 +1,14 @@
 # bot/news/lifecycle.py
 """
-News Processor Lifecycle Management
-Управление жизненным циклом процессора
+News Processor Lifecycle Management v2.0
+Улучшенное управление жизненным циклом с правильным доступом к конфигурации
 """
 
 import asyncio
 import logging
 from typing import Optional
 
+from app.config import config
 from .state import ProcessorState, ProcessorLogger
 from .components import ProcessorComponents
 
@@ -15,7 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 class ProcessorLifecycle:
-    """Управление жизненным циклом процессора"""
+    """
+    Управление жизненным циклом процессора
+    
+    Улучшения v2.0:
+    - Использует config.feeds напрямую
+    - Безопасный доступ к конфигурации
+    """
     
     def __init__(
         self,
@@ -78,18 +85,23 @@ class ProcessorLifecycle:
         self.logger.log_header("LOADING INITIAL BASELINE")
         
         try:
-            from app.config import config
+            # Безопасное получение источников
+            enabled_feeds = config.feeds.get_enabled_feeds()
+            sources = list(enabled_feeds.values())[:5]  # Первые 5 источников
+            
+            if not sources:
+                self.logger.log_warning("No sources available for baseline")
+                self.state.baseline_loaded = True
+                return True
             
             # Получаем статьи из всех источников
             all_articles = []
-            sources = config.news.sources[:5]  # Первые 5 источников
-            
             tasks = [fetcher.fetch_source(source) for source in sources]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    source_name = sources[i].get('name', 'Unknown')
+                    source_name = getattr(sources[i], 'name', 'Unknown')
                     self.logger.log_warning(f"Source {source_name}: {result}")
                 elif result:
                     all_articles.extend(result)

@@ -1,7 +1,7 @@
 # bot/news/cycle.py
 """
-News Processing Cycle
-Логика цикла обработки новостей
+News Processing Cycle v2.0
+Улучшенная логика цикла обработки новостей с правильным доступом к конфигурации
 """
 
 import asyncio
@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict
 
+from app.config import config
 from .state import ProcessorState, ProcessorLogger
 from .components import ProcessorComponents
 
@@ -16,7 +17,14 @@ logger = logging.getLogger(__name__)
 
 
 class NewsCycleProcessor:
-    """Процессор цикла обработки новостей"""
+    """
+    Процессор цикла обработки новостей
+    
+    Улучшения v2.0:
+    - Использует config.feeds напрямую
+    - Безопасный доступ к конфигурации
+    - Лучшая обработка ошибок
+    """
     
     def __init__(
         self,
@@ -99,10 +107,21 @@ class NewsCycleProcessor:
         Returns:
             Список статей
         """
-        from app.config import config
-        
         all_articles = []
-        sources = config.news.sources[:5]  # Первые 5 источников
+        
+        # Безопасное получение источников из config.feeds
+        try:
+            enabled_feeds = config.feeds.get_enabled_feeds()
+            sources = list(enabled_feeds.values())[:5]  # Первые 5 источников
+            
+            if not sources:
+                self.logger.log_warning("No enabled feeds found")
+                return []
+            
+        except Exception as e:
+            self.logger.log_error(f"Cannot access feeds configuration: {e}")
+            logger.debug("Feeds config access error", exc_info=True)
+            return []
         
         # Параллельное получение из всех источников
         tasks = [self.fetcher.fetch_source(source) for source in sources]
@@ -111,7 +130,7 @@ class NewsCycleProcessor:
         # Обработка результатов
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                source_name = sources[i].get('name', 'Unknown')
+                source_name = getattr(sources[i], 'name', 'Unknown')
                 self.logger.log_warning(f"Source {source_name} failed: {result}")
             elif result:
                 all_articles.extend(result)
@@ -149,19 +168,23 @@ class NewsCycleProcessor:
         Returns:
             Количество опубликованных статей
         """
-        from app.config import config
-        
         posted = 0
+        
+        # Безопасное получение лимитов
+        try:
+            posts_per_hour_cap = getattr(config.feeds, 'posts_per_hour_cap', 10)
+        except:
+            posts_per_hour_cap = 10
+        
         max_posts = min(
             len(articles),
-            config.news.posts_per_hour_cap - self.state.posts_this_hour,
+            posts_per_hour_cap - self.state.posts_this_hour,
             3  # Не более 3 за один цикл
         )
         
         for article in articles[:max_posts]:
             try:
-                # Здесь может быть AI обработка, парсинг, публикация
-                # Пока просто логируем
+                # Обработка статьи
                 title = article.get('title', 'No title')[:50]
                 self.logger.log_info(f"Processing: {title}...")
                 
