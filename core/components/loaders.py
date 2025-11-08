@@ -7,8 +7,6 @@ Component Loaders
 import logging
 from typing import Optional, Any
 
-from .errors import ComponentLoadError
-
 logger = logging.getLogger(__name__)
 
 
@@ -25,16 +23,10 @@ class ComponentLoader:
         """
         Загрузка News Processor
         
-        News Processor отвечает за:
-        - Получение новостей из RSS фидов
-        - AI обработку контента
-        - Публикацию в Telegram канал
-        
         Returns:
-            NewsProcessor instance или None если отключен/недоступен
+            NewsProcessor instance или None
         """
         try:
-            # Ленивый импорт config чтобы избежать циклических зависимостей
             from app.config import config
             
             if not config.is_feature_enabled('news'):
@@ -43,18 +35,19 @@ class ComponentLoader:
             
             logger.info("📰 [LOADER] Загрузка News Processor...")
             
-            # Импорт модуля процессора новостей
-            from bot.news.processor import NewsProcessor
-            
-            # Создание экземпляра
-            processor = NewsProcessor()
+            try:
+                from bot.news.processor import NewsProcessor
+                processor = NewsProcessor()
+            except ImportError:
+                logger.debug("   Попытка импорта из bot.processor")
+                from bot.processor import NewsProcessor
+                processor = NewsProcessor()
             
             logger.info("✅ [LOADER] News Processor успешно загружен")
             return processor
             
         except ImportError as e:
-            logger.warning(f"⚠️  [LOADER] News Processor недоступен (ImportError): {e}")
-            logger.debug(f"   Возможно отсутствует модуль bot.news.processor")
+            logger.warning(f"⚠️  [LOADER] News Processor недоступен: {e}")
             return None
             
         except Exception as e:
@@ -67,13 +60,8 @@ class ComponentLoader:
         """
         Загрузка Whale Scheduler
         
-        Whale Scheduler отвечает за:
-        - Мониторинг whale транзакций на блокчейнах
-        - Анализ и фильтрацию событий
-        - Публикацию alerts в Telegram
-        
         Returns:
-            Scheduler instance или None если отключен/недоступен
+            Scheduler instance или None
         """
         try:
             from app.config import config
@@ -84,24 +72,19 @@ class ComponentLoader:
             
             logger.info("🐋 [LOADER] Загрузка Whale Scheduler...")
             
-            # Импорт модуля whale scheduler
-            from app.scheduler.whale_monitor import WhaleMonitor
-            
-            # Создание экземпляра
-            scheduler = WhaleMonitor()
+            try:
+                from app.scheduler.whale_monitor import WhaleMonitor
+                scheduler = WhaleMonitor()
+            except (ImportError, AttributeError):
+                logger.debug("   Попытка импорта scheduler из app.scheduler")
+                from app.scheduler import scheduler
+                return scheduler
             
             logger.info("✅ [LOADER] Whale Scheduler успешно загружен")
             return scheduler
             
         except ImportError as e:
-            logger.warning(f"⚠️  [LOADER] Whale Scheduler недоступен (ImportError): {e}")
-            logger.debug(f"   Возможно отсутствует модуль app.scheduler.whale_monitor")
-            return None
-            
-        except AttributeError as e:
-            logger.error(f"❌ [LOADER] Ошибка конфигурации Whale Scheduler: {e}")
-            logger.error("   Проверьте что все необходимые атрибуты присутствуют в config")
-            logger.debug("Traceback:", exc_info=True)
+            logger.warning(f"⚠️  [LOADER] Whale Scheduler недоступен: {e}")
             return None
             
         except Exception as e:
@@ -114,18 +97,12 @@ class ComponentLoader:
         """
         Загрузка Bot Application
         
-        Bot Application отвечает за:
-        - Обработку Telegram команд пользователей
-        - Интерактивные меню и кнопки
-        - Административные функции
-        
         Returns:
-            Application instance или None если недоступен
+            Application instance или None
         """
         try:
             logger.info("🤖 [LOADER] Загрузка Bot Application...")
             
-            # Импорт telegram bot application
             from app.bot import application as bot_application
             
             if bot_application is None:
@@ -136,8 +113,7 @@ class ComponentLoader:
             return bot_application
             
         except ImportError as e:
-            logger.warning(f"⚠️  [LOADER] Bot Application недоступен (ImportError): {e}")
-            logger.debug(f"   Возможно отсутствует модуль app.bot")
+            logger.warning(f"⚠️  [LOADER] Bot Application недоступен: {e}")
             return None
             
         except Exception as e:
@@ -150,38 +126,28 @@ class ComponentLoader:
         """
         Загрузка Trading System
         
-        Trading System отвечает за:
-        - Генерацию торговых сигналов
-        - Управление позициями
-        - Риск-менеджмент
-        
         Returns:
-            TradingSystem instance или None если отключен/недоступен
+            TradingSystem instance или None
         """
         try:
             from app.config import config
             
             if not config.is_feature_enabled('trading'):
-                logger.info("ℹ️  [LOADER] Trading System отключен в конфигурации")
+                logger.debug("ℹ️  [LOADER] Trading System отключен")
                 return None
             
             logger.info("📈 [LOADER] Загрузка Trading System...")
             
-            # Импорт торговой системы
             from app.trading_system import TradingSystem
-            
-            # Создание экземпляра
             trading = TradingSystem()
             
             logger.info("✅ [LOADER] Trading System успешно загружен")
             return trading
             
-        except ImportError as e:
-            logger.warning(f"⚠️  [LOADER] Trading System недоступен (ImportError): {e}")
-            logger.debug(f"   Возможно отсутствует модуль app.trading_system")
+        except ImportError:
+            logger.debug("   Trading System недоступен")
             return None
             
         except Exception as e:
-            logger.error(f"❌ [LOADER] Ошибка загрузки Trading System: {e}")
-            logger.debug("Traceback:", exc_info=True)
+            logger.warning(f"⚠️  [LOADER] Ошибка Trading System: {e}")
             return None

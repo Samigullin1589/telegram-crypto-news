@@ -5,8 +5,8 @@ Component Status Management
 """
 
 import logging
-from typing import Dict, List, Tuple, Any, Optional
-from dataclasses import dataclass, field
+from typing import Dict, Any, Optional
+from dataclasses import dataclass
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -44,130 +44,81 @@ class ComponentInfo:
             return "Недоступен"
 
 
-class ComponentStatus:
-    """
-    Управление статусом всех компонентов системы
-    
-    Отслеживает:
-    - Какие компоненты загружены
-    - Статус каждого компонента
-    - Время загрузки
-    - Ошибки загрузки
-    """
+class ComponentStatusManager:
+    """Управление статусом компонентов"""
     
     def __init__(self):
         """Инициализация менеджера статусов"""
-        self._components: Dict[str, ComponentInfo] = {}
-        self._initialize_components()
+        self._components: Dict[str, ComponentInfo] = {
+            'news_processor': ComponentInfo('news_processor', False),
+            'whale_scheduler': ComponentInfo('whale_scheduler', False),
+            'bot_application': ComponentInfo('bot_application', False),
+            'trading_system': ComponentInfo('trading_system', False)
+        }
+        self._display_names = {
+            'news_processor': 'News Bot',
+            'whale_scheduler': 'Whale Monitor',
+            'bot_application': 'Bot Commands',
+            'trading_system': 'Trading System'
+        }
     
-    def _initialize_components(self) -> None:
-        """Инициализация списка компонентов"""
-        component_names = [
-            'news_processor',
-            'whale_scheduler',
-            'bot_application',
-            'trading_system'
-        ]
-        
-        for name in component_names:
-            self._components[name] = ComponentInfo(
-                name=name,
-                enabled=False,
-                instance=None,
-                loaded_at=None,
-                error=None
-            )
-    
-    def update_component(
+    def update(
         self,
         name: str,
         enabled: bool = False,
         instance: Optional[Any] = None,
         error: Optional[str] = None
     ) -> None:
-        """
-        Обновление информации о компоненте
-        
-        Args:
-            name: Название компонента
-            enabled: Включен ли компонент
-            instance: Экземпляр компонента
-            error: Текст ошибки (если есть)
-        """
-        if name not in self._components:
-            logger.warning(f"Unknown component: {name}")
-            return
-        
-        self._components[name] = ComponentInfo(
-            name=name,
-            enabled=enabled,
-            instance=instance,
-            loaded_at=datetime.now() if instance else None,
-            error=error
-        )
+        """Обновление информации о компоненте"""
+        if name in self._components:
+            self._components[name] = ComponentInfo(
+                name=name,
+                enabled=enabled,
+                instance=instance,
+                loaded_at=datetime.now() if instance else None,
+                error=error
+            )
     
-    def get_component(self, name: str) -> Optional[ComponentInfo]:
-        """
-        Получение информации о компоненте
-        
-        Args:
-            name: Название компонента
-            
-        Returns:
-            ComponentInfo или None
-        """
+    def get(self, name: str) -> Optional[ComponentInfo]:
+        """Получение информации о компоненте"""
         return self._components.get(name)
     
-    def is_component_available(self, name: str) -> bool:
-        """
-        Проверка доступности компонента
-        
-        Args:
-            name: Название компонента
-            
-        Returns:
-            True если компонент доступен
-        """
-        component = self.get_component(name)
+    def is_available(self, name: str) -> bool:
+        """Проверка доступности компонента"""
+        component = self.get(name)
         return component.is_available if component else False
     
-    def get_active_components_count(self) -> int:
-        """
-        Получение количества активных компонентов
-        
-        Returns:
-            Количество активных компонентов
-        """
-        return sum(
-            1 for comp in self._components.values()
-            if comp.is_available
-        )
+    def active_count(self) -> int:
+        """Количество активных компонентов"""
+        return sum(1 for comp in self._components.values() if comp.is_available)
     
-    def is_any_component_active(self) -> bool:
-        """
-        Проверка наличия хотя бы одного активного компонента
-        
-        Returns:
-            True если есть хотя бы один активный компонент
-        """
-        return self.get_active_components_count() > 0
+    def has_any_active(self) -> bool:
+        """Есть ли хотя бы один активный компонент"""
+        return self.active_count() > 0
     
-    def get_all_components(self) -> Dict[str, ComponentInfo]:
-        """
-        Получение информации о всех компонентах
+    def print_status(self) -> None:
+        """Вывод статуса всех компонентов"""
+        logger.info("\n" + "="*80)
+        logger.info("📊 COMPONENT STATUS SUMMARY")
+        logger.info("="*80)
         
-        Returns:
-            Словарь с информацией о компонентах
-        """
-        return self._components.copy()
+        for name, component in self._components.items():
+            display_name = self._display_names.get(name, name)
+            logger.info(
+                f"   {display_name:20} {component.status_emoji} {component.status_text}"
+            )
+        
+        active = self.active_count()
+        total = len(self._components)
+        logger.info(f"\n   Активно компонентов: {active}/{total}")
+        
+        if not self.has_any_active():
+            logger.warning("   ⚠️  Нет активных компонентов!")
+        
+        logger.info("="*80 + "\n")
     
-    def get_status_dict(self) -> Dict[str, Any]:
-        """
-        Получение статуса в виде словаря для API
-        
-        Returns:
-            Словарь со статусом всех компонентов
-        """
+    def to_dict(self) -> Dict[str, Any]:
+        """Конвертация в словарь для API"""
         return {
             name: {
                 'enabled': comp.enabled,
@@ -178,34 +129,3 @@ class ComponentStatus:
             }
             for name, comp in self._components.items()
         }
-    
-    def print_status(self) -> None:
-        """Вывод статуса всех компонентов в лог"""
-        logger.info("\n" + "="*80)
-        logger.info("📊 COMPONENT STATUS SUMMARY")
-        logger.info("="*80)
-        
-        # Форматированные названия для вывода
-        display_names = {
-            'news_processor': 'News Bot',
-            'whale_scheduler': 'Whale Monitor',
-            'bot_application': 'Bot Commands',
-            'trading_system': 'Trading System'
-        }
-        
-        for name, component in self._components.items():
-            display_name = display_names.get(name, name)
-            logger.info(
-                f"   {display_name:20} {component.status_emoji} {component.status_text}"
-            )
-        
-        # Общая статистика
-        active_count = self.get_active_components_count()
-        total_count = len(self._components)
-        
-        logger.info(f"\n   Активно компонентов: {active_count}/{total_count}")
-        
-        if not self.is_any_component_active():
-            logger.warning("   ⚠️  Нет активных компонентов!")
-        
-        logger.info("="*80 + "\n")
