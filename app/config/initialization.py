@@ -28,7 +28,6 @@ class ConfigInitializer:
         Args:
             config_instance: Экземпляр Config для инициализации
         """
-        # Импорты внутри метода для избежания циклических зависимостей
         from .base_config import BaseConfig
         from .paths_config import PathsConfig
         from .api_config import APIConfig
@@ -41,13 +40,8 @@ class ConfigInitializer:
         from .config_validator import ConfigValidator
         from .config_printer import ConfigPrinter
         
-        # Инициализация модулей
         self._initialize_modules(config_instance)
-        
-        # Инициализация вспомогательных инструментов
         self._initialize_helpers(config_instance)
-        
-        # Валидация и вывод
         self._validate_and_print(config_instance)
     
     def _initialize_modules(self, config_instance: 'Config'):
@@ -64,43 +58,49 @@ class ConfigInitializer:
         from .blockchain_config import BlockchainConfig
         from .features_config import FeaturesConfig
         from .database_config import DatabaseConfig
+        from .database.enums import DatabaseEngine
         from .rate_limiting_config import RateLimitingConfig
         
         logger.debug("Инициализация конфигурационных модулей...")
         
-        # Базовые настройки - первыми
         config_instance.base = BaseConfig()
         logger.debug("✓ BaseConfig")
         
-        # Пути
         config_instance.paths = PathsConfig()
         logger.debug("✓ PathsConfig")
         
-        # API ключи
         config_instance.api = APIConfig()
         logger.debug("✓ APIConfig")
         
-        # Telegram
         config_instance.telegram = TelegramConfig()
         logger.debug("✓ TelegramConfig")
         
-        # RSS фиды
         config_instance.feeds = FeedsConfig()
         logger.debug("✓ FeedsConfig")
         
-        # Блокчейны
         config_instance.blockchain = BlockchainConfig()
         logger.debug("✓ BlockchainConfig")
         
-        # Функциональные модули
         config_instance.features = FeaturesConfig()
         logger.debug("✓ FeaturesConfig")
         
-        # База данных (требует paths)
-        config_instance.database = DatabaseConfig(config_instance.paths.db_path)
-        logger.debug("✓ DatabaseConfig")
+        # База данных - используем from_env для загрузки из окружения
+        try:
+            config_instance.database = DatabaseConfig.from_env()
+            logger.debug("✓ DatabaseConfig (from environment)")
+        except Exception as e:
+            logger.warning(f"Failed to load DatabaseConfig from env: {e}")
+            # Fallback: создаём SQLite конфигурацию с путём из PathsConfig
+            config_instance.database = DatabaseConfig(
+                engine=DatabaseEngine.SQLITE,
+                database=str(config_instance.paths.db_path),
+                host="localhost",
+                port=5432,
+                user="postgres",
+                password=""
+            )
+            logger.debug("✓ DatabaseConfig (fallback to SQLite)")
         
-        # Rate limiting
         config_instance.rate_limiting = RateLimitingConfig()
         logger.debug("✓ RateLimitingConfig")
         
@@ -122,10 +122,8 @@ class ConfigInitializer:
     def _validate_and_print(self, config_instance: 'Config'):
         """Валидация и вывод информации"""
         try:
-            # Заголовок
             config_instance.printer.print_initialization_header()
             
-            # Валидация
             validation_results = config_instance.validator.validate()
             
             if validation_results:
@@ -133,7 +131,6 @@ class ConfigInitializer:
                 for result in validation_results:
                     print(f"   {result}")
             
-            # Сводка
             config_instance.printer.print_configuration_summary()
             
         except Exception as e:
