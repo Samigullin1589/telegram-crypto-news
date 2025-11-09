@@ -40,10 +40,8 @@ class SystemValidator(BaseValidator):
         """
         logger.debug("Запуск валидации системных настроек...")
         
-        # Очистка предыдущих результатов
         self.clear_messages()
         
-        # Выполнение всех проверок
         self._validate_base_config()
         self._validate_paths()
         self._validate_telegram()
@@ -51,7 +49,10 @@ class SystemValidator(BaseValidator):
         self._validate_database()
         self._validate_rate_limiting()
         
-        logger.debug(f"Валидация системы завершена: {len(self.errors)} ошибок, {len(self.warnings)} предупреждений")
+        logger.debug(
+            f"Валидация системы завершена: "
+            f"{len(self.errors)} ошибок, {len(self.warnings)} предупреждений"
+        )
         
         return self.get_all_messages()
     
@@ -63,7 +64,6 @@ class SystemValidator(BaseValidator):
         """Валидация базовой конфигурации окружения"""
         logger.debug("Проверка базовой конфигурации...")
         
-        # Проверка окружения
         valid_environments = ['production', 'staging', 'development']
         current_env = self.config.base.ENVIRONMENT.lower()
         
@@ -76,7 +76,6 @@ class SystemValidator(BaseValidator):
         else:
             self._add_info(f"Окружение: {self.config.base.ENVIRONMENT}")
         
-        # DEBUG режим в production
         if self.config.base.is_production() and self.config.base.DEBUG_MODE:
             self._add_warning(
                 "DEBUG режим включен в production окружении! "
@@ -84,11 +83,9 @@ class SystemValidator(BaseValidator):
                 "Рекомендуется отключить: установите DEBUG_MODE=false"
             )
         
-        # Проверка порта
         if self._validate_port(self.config.base.PORT, name="Системный порт"):
             self._add_info(f"Порт: {self.config.base.PORT}")
         
-        # Проверка уровня логирования
         valid_log_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         if self.config.base.LOG_LEVEL not in valid_log_levels:
             self._add_warning(
@@ -106,7 +103,6 @@ class SystemValidator(BaseValidator):
         """Валидация путей к файлам и директориям"""
         logger.debug("Проверка путей...")
         
-        # Data директория
         data_dir = self.config.paths.data_dir
         
         if not data_dir.exists():
@@ -115,13 +111,11 @@ class SystemValidator(BaseValidator):
                 f"Будет создана автоматически при первом запуске"
             )
         else:
-            # Проверка что это директория
             if not data_dir.is_dir():
                 self._add_error(
                     f"Путь {data_dir} существует, но не является директорией. "
                     f"Удалите файл или измените путь DATA_DIR"
                 )
-            # Проверка прав на запись
             elif not self._can_write_to_directory(data_dir):
                 self._add_error(
                     f"Нет прав на запись в data директорию: {data_dir}. "
@@ -130,10 +124,8 @@ class SystemValidator(BaseValidator):
             else:
                 self._add_info(f"Data директория: {data_dir}")
         
-        # Проверка путей к базам данных
         self._validate_database_paths()
         
-        # Проверка wallets директории (если есть)
         if hasattr(self.config.paths, 'wallets_dir'):
             wallets_dir = self.config.paths.wallets_dir
             if not wallets_dir.exists():
@@ -150,7 +142,6 @@ class SystemValidator(BaseValidator):
         
         for name, db_path in db_paths.items():
             if db_path.exists():
-                # Файл существует - проверяем права
                 if not db_path.is_file():
                     self._add_error(
                         f"{name}: путь {db_path} не является файлом"
@@ -160,7 +151,6 @@ class SystemValidator(BaseValidator):
                         f"{name}: нет прав на запись в файл {db_path}"
                     )
                 else:
-                    # Проверка размера файла
                     size_mb = db_path.stat().st_size / (1024 * 1024)
                     if size_mb > 100:
                         self._add_warning(
@@ -168,7 +158,6 @@ class SystemValidator(BaseValidator):
                             f"Рекомендуется регулярная очистка старых данных"
                         )
             else:
-                # Файл не существует - проверяем возможность создания
                 parent_dir = db_path.parent
                 if not parent_dir.exists():
                     self._add_warning(
@@ -188,16 +177,14 @@ class SystemValidator(BaseValidator):
         """Валидация Telegram настроек"""
         logger.debug("Проверка Telegram...")
         
-        # Bot token - критический параметр
         if not self.config.telegram.bot_token:
             self._add_error(
                 "Отсутствует TELEGRAM_BOT_TOKEN! "
                 "Бот не сможет работать без токена. "
                 "Получите токен у @BotFather в Telegram"
             )
-            return  # Без токена дальше нет смысла проверять
+            return
         
-        # Валидация формата токена
         token = self.config.telegram.bot_token
         if len(token) < 40:
             self._add_warning(
@@ -212,11 +199,9 @@ class SystemValidator(BaseValidator):
                 "Проверьте правильность токена"
             )
         else:
-            # Токен валиден
             bot_id = token.split(':')[0]
             self._add_info(f"Telegram Bot ID: {bot_id}")
         
-        # Channel ID
         if not self.config.telegram.channel_id:
             self._add_error(
                 "Отсутствует TELEGRAM_CHANNEL_ID. "
@@ -226,7 +211,6 @@ class SystemValidator(BaseValidator):
         else:
             self._validate_telegram_id('TELEGRAM_CHANNEL_ID', self.config.telegram.channel_id)
         
-        # Admin chat ID
         if not self.config.telegram.admin_chat_id:
             self._add_warning(
                 "Отсутствует ADMIN_CHAT_ID. "
@@ -235,7 +219,6 @@ class SystemValidator(BaseValidator):
         else:
             self._validate_telegram_id('ADMIN_CHAT_ID', self.config.telegram.admin_chat_id)
         
-        # Webhook URL (если используется)
         if hasattr(self.config.telegram, 'webhook_url') and self.config.telegram.webhook_url:
             if not self._validate_url(self.config.telegram.webhook_url, "Telegram Webhook", require_https=True):
                 self._add_error(
@@ -252,17 +235,14 @@ class SystemValidator(BaseValidator):
         """
         value_str = str(value)
         
-        # Может быть @username или числовой ID (возможно отрицательный для каналов)
         if value_str.startswith('@'):
-            # Username формат
-            if len(value_str) < 6:  # @ + минимум 5 символов
+            if len(value_str) < 6:
                 self._add_warning(
                     f"{name}: username {value_str} выглядит слишком коротким"
                 )
             else:
                 self._add_info(f"{name}: username формат ({value_str})")
         elif value_str.startswith('-') or value_str.lstrip('-').isdigit():
-            # Числовой ID
             self._add_info(f"{name}: числовой ID формат")
         else:
             self._add_warning(
@@ -299,7 +279,6 @@ class SystemValidator(BaseValidator):
                 f"Активных RSS источников: {len(active_feeds)} из {total_feeds}"
             )
         
-        # Проверка каждого активного фида
         for feed_name, feed_config in active_feeds.items():
             self._validate_single_feed(feed_name, feed_config)
     
@@ -311,20 +290,17 @@ class SystemValidator(BaseValidator):
             name: Название фида
             config: Конфигурация фида
         """
-        # URL
         if not config.url:
             self._add_error(f"Фид '{name}': отсутствует URL")
             return
         
         if not self._validate_url(config.url, f"RSS фид '{name}'"):
-            return  # Ошибка уже добавлена
+            return
         
-        # Приоритет
         if hasattr(config, 'priority'):
             if not self._validate_range(config.priority, 1, 100, f"Приоритет фида '{name}'"):
-                pass  # Ошибка уже добавлена
+                pass
         
-        # Категория
         if hasattr(config, 'category'):
             valid_categories = ['news', 'analysis', 'defi', 'nft', 'bitcoin', 'ethereum', 'altcoins']
             if config.category and config.category.lower() not in valid_categories:
@@ -340,26 +316,33 @@ class SystemValidator(BaseValidator):
         """Валидация настроек базы данных"""
         logger.debug("Проверка базы данных...")
         
-        # Pool size
-        pool_size = self.config.database.pool_size
-        if not self._validate_positive(pool_size, "Database pool_size", allow_zero=False):
-            return
-        
-        if pool_size > 20:
-            self._add_warning(
-                f"Очень большой connection pool: {pool_size}. "
-                f"На Render.com с ограниченной памятью рекомендуется 5-10. "
-                f"Это может привести к избыточному потреблению ресурсов"
-            )
-        else:
-            self._add_info(f"Database connection pool: {pool_size}")
+        # ИСПРАВЛЕНО: используем pool.min_size
+        if hasattr(self.config.database, 'pool') and hasattr(self.config.database.pool, 'min_size'):
+            pool_size = self.config.database.pool.min_size
+            
+            if not self._validate_positive(pool_size, "Database pool_size", allow_zero=False):
+                return
+            
+            if pool_size > 20:
+                self._add_warning(
+                    f"Очень большой connection pool: {pool_size}. "
+                    f"На Render.com с ограниченной памятью рекомендуется 5-10. "
+                    f"Это может привести к избыточному потреблению ресурсов"
+                )
+            else:
+                self._add_info(f"Database connection pool: {pool_size}")
         
         # Max overflow
-        if not self._validate_positive(self.config.database.max_overflow, "Database max_overflow", allow_zero=True):
-            return
+        if hasattr(self.config.database, 'max_overflow'):
+            if not self._validate_positive(
+                self.config.database.max_overflow, 
+                "Database max_overflow", 
+                allow_zero=True
+            ):
+                return
         
-        # Backup настройки
-        if self.config.database.backup_enabled:
+        # ИСПРАВЛЕНО: используем enable_auto_backup
+        if hasattr(self.config.database, 'enable_auto_backup') and self.config.database.enable_auto_backup:
             self._validate_backup_settings()
         else:
             self._add_warning(
@@ -367,31 +350,23 @@ class SystemValidator(BaseValidator):
                 "Рекомендуется включить автоматическое резервное копирование"
             )
         
-        # Pool timeout
-        if hasattr(self.config.database, 'pool_timeout'):
-            if self.config.database.pool_timeout < 5:
+        # ИСПРАВЛЕНО: используем pool.timeout
+        if hasattr(self.config.database, 'pool') and hasattr(self.config.database.pool, 'timeout'):
+            if self.config.database.pool.timeout < 5:
                 self._add_warning(
-                    f"Слишком короткий pool_timeout: {self.config.database.pool_timeout} секунд. "
+                    f"Слишком короткий pool_timeout: {self.config.database.pool.timeout} секунд. "
                     f"Это может привести к таймаутам при высокой нагрузке"
                 )
     
     def _validate_backup_settings(self) -> None:
         """Валидация настроек резервного копирования"""
-        interval = self.config.database.backup_interval_hours
+        # ИСПРАВЛЕНО: убрана проверка backup_interval_hours, которого нет в DatabaseConfig
+        
+        if not hasattr(self.config.database, 'backup_retention_days'):
+            return
+        
         retention = self.config.database.backup_retention_days
         
-        # Интервал
-        if interval < 1:
-            self._add_error(f"backup_interval_hours должен быть >= 1: {interval}")
-        elif interval > 168:  # Больше недели
-            self._add_warning(
-                f"Слишком редкий интервал backup: {interval} часов (>{interval//24} дней). "
-                f"Рекомендуется 6-24 часа"
-            )
-        else:
-            self._add_info(f"Database backup: каждые {interval} часов")
-        
-        # Срок хранения
         if retention < 1:
             self._add_error(f"backup_retention_days должен быть >= 1: {retention}")
         elif retention < 3:
@@ -418,7 +393,6 @@ class SystemValidator(BaseValidator):
             )
             return
         
-        # Базовые лимиты
         rpm = self.config.rate_limiting.max_requests_per_minute
         
         if not self._validate_positive(rpm, "Rate limit", allow_zero=False):
@@ -439,7 +413,6 @@ class SystemValidator(BaseValidator):
         else:
             self._add_info(f"Rate limit: {rpm} запросов/минуту")
         
-        # Burst size (если есть)
         if hasattr(self.config.rate_limiting, 'burst_size'):
             burst = self.config.rate_limiting.burst_size
             if burst < 1:
@@ -450,7 +423,6 @@ class SystemValidator(BaseValidator):
                     f"Это приведет к превышению минутного лимита"
                 )
         
-        # Solana-specific настройки
         if self.config.blockchain.is_chain_enabled('solana'):
             self._validate_solana_rate_limits()
     
