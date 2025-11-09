@@ -11,7 +11,8 @@ from .base import (
     Configurable,
     Cloneable,
     Comparable,
-    Hashable as ConfigHashable
+    ConfigHashable,  # ← ИСПРАВЛЕНО: импортируем ConfigHashable напрямую
+    Hashable,  # И алиас для совместимости
 )
 
 from .config import (
@@ -20,7 +21,7 @@ from .config import (
     SSLConfigProtocol,
     TimeoutConfigProtocol,
     RetryConfigProtocol,
-    MonitoringConfigProtocol
+    MonitoringConfigProtocol,
 )
 
 from .database import (
@@ -28,7 +29,7 @@ from .database import (
     DatabaseTransactionProtocol,
     DatabaseCursorProtocol,
     DatabasePoolProtocol,
-    DatabaseEngineProtocol
+    DatabaseEngineProtocol,
 )
 
 from .lifecycle import (
@@ -37,7 +38,7 @@ from .lifecycle import (
     Restartable,
     Pauseable,
     Resumable,
-    LifecycleManaged
+    LifecycleManaged,
 )
 
 from .monitoring import (
@@ -46,7 +47,7 @@ from .monitoring import (
     MetricsCollectable,
     Alertable,
     Loggable,
-    Traceable
+    Traceable,
 )
 
 from .timing import (
@@ -54,7 +55,7 @@ from .timing import (
     ScheduledOperation,
     ThrottledOperation,
     RateLimited,
-    TimedExecution
+    TimedExecution,
 )
 
 from .validation import (
@@ -62,7 +63,7 @@ from .validation import (
     ValidatorProtocol,
     AsyncValidatorProtocol,
     ChainableValidator,
-    ConditionalValidator
+    ConditionalValidator,
 )
 
 __all__ = [
@@ -74,6 +75,7 @@ __all__ = [
     'Cloneable',
     'Comparable',
     'ConfigHashable',
+    'Hashable',
     
     # Config protocols
     'DatabaseConfigProtocol',
