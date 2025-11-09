@@ -1,77 +1,98 @@
 # core/shutdown.py
 """
-Graceful shutdown management
+Shutdown Manager - Graceful остановка приложения
 """
 
 import asyncio
-import logging
-import signal
-from typing import Any
+from typing import Optional
+from core.logging_config import get_logger
+from core.tasks.manager import TaskManager
+from core.initialization.database import DatabaseInitializer
+from core.monitor import IntegratedCryptoMonitor
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ShutdownManager:
-    """Управление graceful shutdown"""
+    """
+    Управление graceful shutdown
     
-    def __init__(self, shutdown_event: asyncio.Event):
-        self.shutdown_event = shutdown_event
-        self._shutdown_in_progress = False
+    Координирует остановку всех компонентов в правильном порядке
+    """
     
-    def setup_signal_handlers(self):
-        """Настройка обработчиков сигналов"""
-        def signal_handler(signum, frame):
-            signal_name = signal.Signals(signum).name
-            logger.info(f"\n⚠️  [SIGNAL] Получен сигнал {signal_name}")
-            self.shutdown_event.set()
-        
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        
-        logger.info("✅ Установлен обработчик для SIGINT")
-        logger.info("✅ Установлен обработчик для SIGTERM")
-    
-    async def shutdown(
+    def __init__(
         self,
-        http_server: Any,
-        task_manager: Any,
-        component_manager: Any
+        task_manager: TaskManager,
+        db_initializer: DatabaseInitializer,
+        monitor: Optional[IntegratedCryptoMonitor] = None
     ):
-        """Выполняет graceful shutdown"""
-        if self._shutdown_in_progress:
-            logger.warning("⚠️  [SHUTDOWN] Shutdown уже в процессе")
+        """
+        Args:
+            task_manager: Менеджер задач
+            db_initializer: Инициализатор БД
+            monitor: Монитор (опционально)
+        """
+        self.task_manager = task_manager
+        self.db_initializer = db_initializer
+        self.monitor = monitor
+        self.shutdown_in_progress = False
+    
+    async def shutdown(self) -> None:
+        """Выполнение graceful shutdown"""
+        if self.shutdown_in_progress:
+            logger.warning("Shutdown already in progress")
             return
         
-        self._shutdown_in_progress = True
-        self.shutdown_event.set()
+        self.shutdown_in_progress = True
         
-        logger.info("\n" + "=" * 80)
-        logger.info("🛑 INITIATING GRACEFUL SHUTDOWN")
-        logger.info("=" * 80 + "\n")
+        try:
+            # Шаг 1: Останавливаем задачи
+            await self._stop_tasks()
+            
+            # Шаг 2: Останавливаем мониторинг
+            await self._stop_monitor()
+            
+            # Шаг 3: Закрываем БД
+            await self._close_database()
+            
+            logger.info("✅ All components stopped successfully")
         
-        logger.info("⏳ [1/4] Останавливаем HTTP health server...")
-        await http_server.stop()
-        
-        logger.info("\n⏳ [2/4] Ждём завершения всех задач...")
-        await task_manager.cancel_all_tasks()
-        
-        logger.info("\n⏳ [3/4] Останавливаем компоненты...")
-        await component_manager.stop_all()
-        
-        logger.info("\n⏳ [4/4] Финализация...")
-        import gc
-        gc.collect()
-        logger.info("   ✓ Garbage collection выполнен")
-        
-        logger.info("\n" + "=" * 80)
-        logger.info("✅ SHUTDOWN COMPLETE")
-        logger.info("=" * 80)
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}", exc_info=True)
     
-    async def cleanup(self):
-        """Финальная очистка ресурсов"""
-        logger.info("\n🧹 [CLEANUP] Финальная очистка ресурсов...")
+    async def _stop_tasks(self) -> None:
+        """Остановка всех задач"""
+        try:
+            logger.info("Stopping tasks...")
+            await self.task_manager.stop_all()
+            logger.info("✅ Tasks stopped")
         
-        import gc
-        gc.collect()
+        except Exception as e:
+            logger.error(f"Error stopping tasks: {e}", exc_info=True)
+    
+    async def _stop_monitor(self) -> None:
+        """Остановка мониторинга"""
+        if not self.monitor:
+            return
         
-        logger.info("✅ [CLEANUP] Очистка завершена")
+        try:
+            logger.info("Stopping monitor...")
+            # Если у монитора есть метод stop
+            if hasattr(self.monitor, 'stop'):
+                await self.monitor.stop()
+            logger.info("✅ Monitor stopped")
+        
+        except Exception as e:
+            logger.error(f"Error stopping monitor: {e}", exc_info=True)
+    
+    async def _close_database(self) -> None:
+        """Закрытие БД"""
+        try:
+            db_manager = self.db_initializer.get_manager()
+            if db_manager and db_manager.is_initialized:
+                logger.info("Closing database...")
+                db_manager.close()
+                logger.info("✅ Database closed")
+        
+        except Exception as e:
+            logger.error(f"Error closing database: {e}", exc_info=True)
