@@ -159,8 +159,9 @@ class MonitorInitializer:
             
             logger.debug("Validating monitor instance...")
             
-            # Проверяем наличие основных атрибутов
-            required_attrs = ['start', 'stop']
+            # ИСПРАВЛЕНО: Проверяем наличие методов 'run' и 'stop'
+            # IntegratedCryptoMonitor использует 'run()', а не 'start()'
+            required_attrs = ['run', 'stop']
             
             for attr in required_attrs:
                 if not hasattr(self.monitor, attr):
