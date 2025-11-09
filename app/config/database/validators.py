@@ -3,9 +3,10 @@ Database Configuration Validators
 Полная система валидации конфигураций БД
 """
 
+import os
 import re
 import logging
-from typing import Any, Callable, TypeVar, Optional, List, Dict, Tuple
+from typing import Any, Callable, TypeVar, Optional, List, Dict, Tuple, Type
 from functools import wraps
 from enum import Enum
 from pathlib import Path
@@ -315,7 +316,6 @@ class BasicValidators:
         
         if isinstance(value, str):
             try:
-                # Пробуем различные варианты
                 for variant in [value, value.upper(), value.lower()]:
                     try:
                         enum_class(variant)
@@ -331,7 +331,7 @@ class BasicValidators:
             field_name,
             value,
             f"must be one of {valid_values}",
-            f"Use one of: {', '.join(valid_values)}"
+            f"Use one of: {', '.join(str(v) for v in valid_values)}"
         )
         
         return result
@@ -381,7 +381,6 @@ class NetworkValidators:
             result.add_error(field_name, value, "cannot be empty")
             return result
         
-        # Проверка на IP адрес
         try:
             ip_address(value)
             result.mark_validated(field_name)
@@ -389,7 +388,6 @@ class NetworkValidators:
         except ValueError:
             pass
         
-        # Проверка на hostname
         hostname_pattern = r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'
         
         if not re.match(hostname_pattern, value):
@@ -545,25 +543,12 @@ class DatabaseConfigValidator:
         
         result = ValidationResult()
         
-        # Валидация основных параметров
         result.merge(self._validate_connection_params())
-        
-        # Валидация пула соединений
         result.merge(self._validate_pool_config())
-        
-        # Валидация SSL
         result.merge(self._validate_ssl_config())
-        
-        # Валидация таймаутов
         result.merge(self._validate_timeout_config())
-        
-        # Валидация retry
         result.merge(self._validate_retry_config())
-        
-        # Валидация мониторинга
         result.merge(self._validate_monitoring_config())
-        
-        # Валидация связей между параметрами
         result.merge(self._validate_relationships())
         
         logger.info(
@@ -576,7 +561,6 @@ class DatabaseConfigValidator:
         """Валидация параметров подключения"""
         result = ValidationResult()
         
-        # Валидация engine
         result.merge(
             self.basic_validators.validate_enum(
                 self.config.engine,
@@ -585,7 +569,6 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Валидация host
         result.merge(
             self.network_validators.validate_hostname(
                 self.config.host,
@@ -593,7 +576,6 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Валидация port
         result.merge(
             self.network_validators.validate_port(
                 self.config.port,
@@ -601,7 +583,6 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Валидация database
         result.merge(
             self.basic_validators.validate_non_empty_string(
                 self.config.database,
@@ -611,7 +592,6 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Валидация user
         result.merge(
             self.basic_validators.validate_non_empty_string(
                 self.config.user,
@@ -621,7 +601,6 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Валидация schema (для PostgreSQL)
         if hasattr(self.config, 'schema') and self.config.schema:
             result.merge(
                 self.basic_validators.validate_non_empty_string(
@@ -640,7 +619,6 @@ class DatabaseConfigValidator:
         
         pool = self.config.pool
         
-        # Валидация размеров
         result.merge(
             self.basic_validators.validate_positive(
                 pool.min_size,
@@ -657,7 +635,6 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Проверка min <= max
         if pool.min_size > pool.max_size:
             result.add_error(
                 'pool',
@@ -666,7 +643,6 @@ class DatabaseConfigValidator:
                 f"Set min_size <= {pool.max_size} or increase max_size"
             )
         
-        # Валидация таймаутов
         result.merge(
             self.basic_validators.validate_positive(
                 pool.timeout,
@@ -694,7 +670,6 @@ class DatabaseConfigValidator:
         if not ssl.enabled:
             return result
         
-        # Валидация mode
         result.merge(
             self.basic_validators.validate_enum(
                 ssl.mode,
@@ -703,7 +678,6 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Валидация файлов сертификатов
         if ssl.ca_file:
             result.merge(
                 self.fs_validators.validate_path(
@@ -737,7 +711,6 @@ class DatabaseConfigValidator:
                 )
             )
         
-        # Проверка пары cert-key
         if bool(ssl.cert_file) != bool(ssl.key_file):
             result.add_error(
                 'ssl',
@@ -754,7 +727,6 @@ class DatabaseConfigValidator:
         
         timeouts = self.config.timeouts
         
-        # Валидация всех таймаутов
         timeout_fields = [
             ('connect_timeout', 0.1),
             ('query_timeout', 0.1),
@@ -773,7 +745,6 @@ class DatabaseConfigValidator:
                 )
             )
         
-        # Логические проверки
         if timeouts.query_timeout > timeouts.transaction_timeout:
             result.add_warning(
                 'timeouts',
@@ -793,7 +764,6 @@ class DatabaseConfigValidator:
         if not retry.enabled:
             return result
         
-        # Валидация попыток
         result.merge(
             self.basic_validators.validate_positive(
                 retry.max_attempts,
@@ -803,7 +773,6 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Валидация задержек
         result.merge(
             self.basic_validators.validate_positive(
                 retry.initial_delay,
@@ -839,7 +808,6 @@ class DatabaseConfigValidator:
         if not monitoring.enabled:
             return result
         
-        # Валидация интервала
         result.merge(
             self.basic_validators.validate_positive(
                 monitoring.interval_seconds,
@@ -848,13 +816,12 @@ class DatabaseConfigValidator:
             )
         )
         
-        # Валидация порогов
         result.merge(
             self.basic_validators.validate_range(
                 monitoring.slow_query_threshold_ms,
                 'monitoring.slow_query_threshold_ms',
                 1.0,
-                3600000.0  # 1 hour max
+                3600000.0
             )
         )
         
@@ -864,7 +831,6 @@ class DatabaseConfigValidator:
         """Валидация связей между параметрами"""
         result = ValidationResult()
         
-        # Проверка SSL для SQLite
         if str(self.config.engine.value) == 'sqlite' and self.config.ssl.enabled:
             result.add_warning(
                 'ssl',
@@ -873,7 +839,6 @@ class DatabaseConfigValidator:
                 "Disable SSL for SQLite or use a different engine"
             )
         
-        # Проверка пула для SQLite
         if str(self.config.engine.value) == 'sqlite':
             if self.config.pool.max_size > 1:
                 result.add_warning(
