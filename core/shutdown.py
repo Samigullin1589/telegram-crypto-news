@@ -339,14 +339,17 @@ class ShutdownManager:
     
     def __repr__(self) -> str:
         """Строковое представление"""
+        # ИСПРАВЛЕНО: вычисление вынесено из f-string для избежания syntax error
+        components_count = sum([
+            self.task_manager is not None,
+            self.db_initializer is not None,
+            self.monitor is not None
+        ])
+        
         return (
             f"ShutdownManager("
             f"in_progress={self.shutdown_in_progress}, "
             f"completed={self.shutdown_completed}, "
-            f"components={sum([
-                self.task_manager is not None,
-                self.db_initializer is not None,
-                self.monitor is not None
-            ])}"
+            f"components={components_count}"
             f")"
         )
