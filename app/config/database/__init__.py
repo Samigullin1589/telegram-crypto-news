@@ -1,406 +1,402 @@
 """
-Централизованный API для управления базой данных
+Database Configuration Package
+Полная система конфигурации и управления базой данных
 
-Этот модуль предоставляет простой интерфейс для работы со всей
-системой управления и оптимизации базы данных.
+Этот пакет предоставляет:
+- Конфигурацию БД с валидацией
+- Загрузку из различных источников
+- Управление соединениями
+- Мониторинг и метрики
+- Централизованное управление через DatabaseManager
+
+Examples:
+    # Базовое использование
+    >>> from app.config.database import DatabaseManager
+    >>> manager = DatabaseManager()
+    >>> await manager.initialize()
+    
+    # Использование конфигурации
+    >>> from app.config.database import DatabaseConfigBase
+    >>> config = DatabaseConfigBase.from_env()
+    
+    # Создание специфичной конфигурации
+    >>> from app.config.database import create_postgresql_config
+    >>> config = create_postgresql_config(host='localhost', database='mydb')
 """
 
-from typing import Optional, Dict, Any
+import logging
 
-from .base import DatabaseConfigBase
-from .enums import DatabaseEngine, PoolStrategy, SSLMode
+# ============================================================================
+# BASE COMPONENTS
+# ============================================================================
+
+# Enums
+from .enums import (
+    DatabaseEngine,
+    PoolStrategy,
+    SSLMode,
+    VacuumStrategy,
+    BackupType,
+    HealthStatus,
+    AlertSeverity,
+    OperationPriority
+)
+
+# Exceptions
 from .exceptions import (
     DatabaseConfigError,
+    ValidationError,
     DatabaseConnectionError,
     DatabaseValidationError
 )
-from .loader import DatabaseConfigLoader
-from .protocols import DatabaseConfigProtocol
-from .validators import DatabaseConfigValidator
 
-from .optimizer import DatabaseOptimizer
-from .components import (
-    BackupConfig,
-    ConnectionPoolConfig,
-    PragmaConfig,
-    IndexConfig,
-    PartitionConfig,
-    VacuumConfig,
-    CacheConfig,
-    DatabaseMonitor,
-    DatabaseStatistics,
-    QueryAnalyzer
+# Protocols
+from .protocols import (
+    Configurable,
+    DatabaseConfigProtocol
+)
+
+# ============================================================================
+# BASE CLASSES
+# ============================================================================
+
+from .base_classes import (
+    ConfigSerializer,
+    BaseConfig,
+    TimedConfig,
+    ValidationMixin
+)
+
+# ============================================================================
+# SUB-CONFIGURATIONS
+# ============================================================================
+
+from .sub_configs import (
+    PoolConfig,
+    SSLConfig,
+    TimeoutConfig,
+    RetryConfig,
+    MonitoringConfig
+)
+
+# ============================================================================
+# MAIN CONFIGURATION
+# ============================================================================
+
+from .database_base import DatabaseConfigBase
+
+# ============================================================================
+# BASE MODULE RE-EXPORTS (Factory Functions, Utilities)
+# ============================================================================
+
+from .base import (
+    # Factory functions
+    create_postgresql_config,
+    create_sqlite_config,
+    create_mysql_config,
+    create_config_from_engine,
+    
+    # Validation helpers
+    validate_config,
+    validate_multiple_configs,
+    check_config_compatibility,
+    
+    # Migration helpers
+    migrate_from_dict,
+    export_to_legacy_format,
+    
+    # Multi-database
+    MultiDatabaseConfig,
+    
+    # Utilities
+    get_default_config_for_environment,
+    compare_configs,
+    test_connection_params
+)
+
+# ============================================================================
+# LOADERS
+# ============================================================================
+
+from .loader import (
+    EnvironmentVariableParser,
+    EnvironmentLoader,
+    DatabaseConfigLoader
+)
+
+# ============================================================================
+# VALIDATORS
+# ============================================================================
+
+from .validators import (
+    ValidationIssue,
+    ValidationResult,
+    BasicValidators,
+    NetworkValidators,
+    FileSystemValidators,
+    DatabaseConfigValidator
+)
+
+# ============================================================================
+# MANAGER
+# ============================================================================
+
+from .manager import (
+    ConnectionPoolManager,
+    DatabaseMonitoringService,
+    DatabaseManager,
+    get_db_manager,
+    set_db_manager,
+    reset_db_manager
 )
 
 
-class DatabaseManager:
-    """
-    Главный менеджер базы данных
-    
-    Предоставляет единую точку входа для:
-    - Конфигурации БД
-    - Оптимизации
-    - Мониторинга
-    - Статистики
-    
-    Использование:
-        db_manager = DatabaseManager()
-        await db_manager.initialize()
-        
-        # Запуск оптимизации
-        results = await db_manager.run_optimization()
-        
-        # Получение статуса
-        status = db_manager.get_status()
-    """
-    
-    def __init__(
-        self,
-        config: Optional[DatabaseConfigBase] = None,
-        enable_optimization: bool = True,
-        enable_monitoring: bool = True,
-        enable_statistics: bool = True
-    ):
-        """
-        Инициализация менеджера БД
-        
-        Args:
-            config: Конфигурация БД (если None - загружается из env)
-            enable_optimization: Включить оптимизацию
-            enable_monitoring: Включить мониторинг
-            enable_statistics: Включить сбор статистики
-        """
-        # Загрузка конфигурации
-        if config is None:
-            loader = DatabaseConfigLoader()
-            config = loader.load_from_env()
-        
-        self.config = config
-        
-        # Валидация
-        validator = DatabaseConfigValidator(config)
-        validation_result = validator.validate_all()
-        
-        if not validation_result.is_valid:
-            raise DatabaseValidationError(
-                f"Database configuration is invalid: {validation_result.errors}"
-            )
-        
-        # Инициализация компонентов оптимизации
-        self.backup_config = BackupConfig(enabled=True)
-        self.pool_config = ConnectionPoolConfig(
-            min_size=config.pool.min_size,
-            max_size=config.pool.max_size
-        )
-        self.pragma_config = PragmaConfig()
-        self.index_config = IndexConfig(enabled=True)
-        self.partition_config = PartitionConfig(enabled=True)
-        self.vacuum_config = VacuumConfig(enabled=True)
-        self.cache_config = CacheConfig(enabled=True)
-        
-        # Инициализация мониторинга и статистики
-        self.monitor = DatabaseMonitor(enabled=enable_monitoring)
-        self.statistics = DatabaseStatistics(enabled=enable_statistics)
-        self.query_analyzer = QueryAnalyzer(enabled=True)
-        
-        # Главный оптимизатор
-        self.optimizer = DatabaseOptimizer(
-            enabled=enable_optimization,
-            backup_config=self.backup_config,
-            pool_config=self.pool_config,
-            pragma_config=self.pragma_config,
-            index_config=self.index_config,
-            partition_config=self.partition_config,
-            vacuum_config=self.vacuum_config,
-            cache_config=self.cache_config,
-            monitor=self.monitor,
-            statistics=self.statistics,
-            query_analyzer=self.query_analyzer
-        )
-        
-        self._initialized = False
-    
-    async def initialize(self) -> Dict[str, Any]:
-        """
-        Инициализация менеджера БД
-        
-        Returns:
-            Результаты инициализации
-        """
-        if self._initialized:
-            return {'status': 'already_initialized'}
-        
-        results = {
-            'status': 'initializing',
-            'components': {}
-        }
-        
-        # Инициализация подключения
-        # В реальности здесь будет создание пула соединений
-        results['components']['connection'] = {'status': 'ready'}
-        
-        # Инициализация мониторинга
-        if self.monitor.enabled:
-            # Расчет начальных baselines
-            baselines = self.monitor.calculate_all_baselines()
-            results['components']['monitoring'] = {
-                'status': 'ready',
-                'baselines_calculated': baselines
-            }
-        
-        # Инициализация статистики
-        if self.statistics.enabled:
-            results['components']['statistics'] = {'status': 'ready'}
-        
-        self._initialized = True
-        results['status'] = 'initialized'
-        
-        return results
-    
-    async def run_optimization(self) -> Dict[str, Any]:
-        """
-        Запуск цикла оптимизации
-        
-        Returns:
-            Результаты оптимизации
-        """
-        if not self._initialized:
-            await self.initialize()
-        
-        return await self.optimizer.run_optimization_cycle()
-    
-    def get_status(self) -> Dict[str, Any]:
-        """
-        Получение полного статуса системы
-        
-        Returns:
-            Словарь со статусом всех компонентов
-        """
-        return {
-            'initialized': self._initialized,
-            'config': {
-                'engine': self.config.engine.value,
-                'host': self.config.host,
-                'port': self.config.port,
-                'database': self.config.database
-            },
-            'optimizer': self.optimizer.get_comprehensive_status() if self._initialized else None,
-            'health': self.monitor.calculate_overall_health().value if self.monitor.enabled else 'unknown'
-        }
-    
-    def get_metrics(self) -> Dict[str, Any]:
-        """
-        Получение всех метрик
-        
-        Returns:
-            Словарь с метриками всех компонентов
-        """
-        return {
-            'backup': self.backup_config.get_metrics(),
-            'pool': self.pool_config.get_metrics(),
-            'pragma': self.pragma_config.get_metrics(),
-            'indexes': self.index_config.get_metrics(),
-            'partitions': self.partition_config.get_metrics(),
-            'vacuum': self.vacuum_config.get_metrics(),
-            'cache': self.cache_config.get_metrics(),
-            'monitoring': self.monitor.get_metrics(),
-            'statistics': self.statistics.get_metrics(),
-            'query_analyzer': self.query_analyzer.get_metrics()
-        }
-    
-    def get_recommendations(self, severity: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Получение всех рекомендаций по оптимизации
-        
-        Args:
-            severity: Фильтр по серьезности ('high', 'medium', 'low')
-            
-        Returns:
-            Словарь с рекомендациями от всех компонентов
-        """
-        recommendations = {
-            'indexes': self.index_config.get_recommendations(severity),
-            'queries': self.query_analyzer.get_all_recommendations(severity),
-            'vacuum': [],
-            'partitions': []
-        }
-        
-        # Рекомендации по VACUUM
-        if self.vacuum_config.enabled:
-            vacuum_ops = self.vacuum_config.plan_vacuum_operations()
-            recommendations['vacuum'] = [
-                {
-                    'table': f"{op.schema_name}.{op.table_name}",
-                    'strategy': op.strategy.value,
-                    'priority': op.priority.value,
-                    'estimated_duration': op.estimated_duration_seconds
-                }
-                for op in vacuum_ops[:10]  # Top 10
-            ]
-        
-        # Рекомендации по партициям
-        if self.partition_config.enabled:
-            expired = self.partition_config.get_expired_partitions()
-            to_create = self.partition_config.get_partitions_to_create()
-            
-            recommendations['partitions'] = {
-                'expired_to_drop': len(expired),
-                'new_to_create': len(to_create)
-            }
-        
-        return recommendations
-    
-    def get_alerts(self, active_only: bool = True) -> Dict[str, Any]:
-        """
-        Получение алертов
-        
-        Args:
-            active_only: Только активные алерты
-            
-        Returns:
-            Словарь с алертами
-        """
-        if not self.monitor.enabled:
-            return {'alerts': []}
-        
-        if active_only:
-            alerts = self.monitor.get_active_alerts()
-        else:
-            alerts = self.monitor.get_alert_history(hours=24)
-        
-        return {
-            'total': len(alerts),
-            'critical': len([a for a in alerts if a.severity.value == 'critical']),
-            'warning': len([a for a in alerts if a.severity.value == 'warning']),
-            'alerts': [
-                {
-                    'id': a.id,
-                    'severity': a.severity.value,
-                    'metric': a.metric_name,
-                    'message': a.message,
-                    'current_value': a.current_value,
-                    'threshold': a.threshold_value,
-                    'created_at': a.created_at,
-                    'duration_seconds': a.duration_seconds,
-                    'acknowledged': a.acknowledged
-                }
-                for a in alerts
-            ]
-        }
-    
-    async def shutdown(self) -> Dict[str, Any]:
-        """
-        Graceful shutdown менеджера БД
-        
-        Returns:
-            Результаты завершения
-        """
-        results = {
-            'status': 'shutting_down',
-            'components': {}
-        }
-        
-        # Завершение активных операций
-        if self.optimizer._active_operations:
-            results['components']['optimizer'] = {
-                'active_operations': len(self.optimizer._active_operations),
-                'status': 'waiting_for_completion'
-            }
-            
-            # Ожидание завершения (с таймаутом)
-            import asyncio
-            try:
-                await asyncio.wait_for(
-                    self._wait_for_operations(),
-                    timeout=30.0
-                )
-            except asyncio.TimeoutError:
-                results['components']['optimizer']['status'] = 'forced_shutdown'
-        
-        # Закрытие соединений
-        # В реальности здесь будет закрытие пула
-        results['components']['connection'] = {'status': 'closed'}
-        
-        self._initialized = False
-        results['status'] = 'shutdown_complete'
-        
-        return results
-    
-    async def _wait_for_operations(self) -> None:
-        """Ожидание завершения активных операций"""
-        import asyncio
-        while self.optimizer._active_operations:
-            await asyncio.sleep(1.0)
+# ============================================================================
+# PACKAGE METADATA
+# ============================================================================
 
-
-# Создание глобального инстанса (опционально)
-_global_db_manager: Optional[DatabaseManager] = None
-
-
-def get_db_manager() -> DatabaseManager:
-    """
-    Получение глобального инстанса менеджера БД
-    
-    Returns:
-        Глобальный DatabaseManager
-    """
-    global _global_db_manager
-    
-    if _global_db_manager is None:
-        _global_db_manager = DatabaseManager()
-    
-    return _global_db_manager
-
-
-def set_db_manager(manager: DatabaseManager) -> None:
-    """
-    Установка глобального инстанса менеджера БД
-    
-    Args:
-        manager: DatabaseManager для установки
-    """
-    global _global_db_manager
-    _global_db_manager = manager
-
-
+__version__ = '2.0.0'
+__author__ = 'Crypto Monitor Team'
 __all__ = [
-    # Main API
-    'DatabaseManager',
-    'get_db_manager',
-    'set_db_manager',
-    
-    # Base
-    'DatabaseConfigBase',
-    
-    # Enums
+    # ===== ENUMS =====
     'DatabaseEngine',
     'PoolStrategy',
     'SSLMode',
+    'VacuumStrategy',
+    'BackupType',
+    'HealthStatus',
+    'AlertSeverity',
+    'OperationPriority',
     
-    # Exceptions
+    # ===== EXCEPTIONS =====
     'DatabaseConfigError',
+    'ValidationError',
     'DatabaseConnectionError',
     'DatabaseValidationError',
     
-    # Loader & Validator
-    'DatabaseConfigLoader',
-    'DatabaseConfigValidator',
-    
-    # Protocols
+    # ===== PROTOCOLS =====
+    'Configurable',
     'DatabaseConfigProtocol',
     
-    # Optimizer
-    'DatabaseOptimizer',
+    # ===== BASE CLASSES =====
+    'ConfigSerializer',
+    'BaseConfig',
+    'TimedConfig',
+    'ValidationMixin',
     
-    # Components
-    'BackupConfig',
-    'ConnectionPoolConfig',
-    'PragmaConfig',
-    'IndexConfig',
-    'PartitionConfig',
-    'VacuumConfig',
-    'CacheConfig',
-    'DatabaseMonitor',
-    'DatabaseStatistics',
-    'QueryAnalyzer'
+    # ===== SUB-CONFIGURATIONS =====
+    'PoolConfig',
+    'SSLConfig',
+    'TimeoutConfig',
+    'RetryConfig',
+    'MonitoringConfig',
+    
+    # ===== MAIN CONFIGURATION =====
+    'DatabaseConfigBase',
+    
+    # ===== FACTORY FUNCTIONS =====
+    'create_postgresql_config',
+    'create_sqlite_config',
+    'create_mysql_config',
+    'create_config_from_engine',
+    
+    # ===== VALIDATION HELPERS =====
+    'validate_config',
+    'validate_multiple_configs',
+    'check_config_compatibility',
+    
+    # ===== MIGRATION HELPERS =====
+    'migrate_from_dict',
+    'export_to_legacy_format',
+    
+    # ===== MULTI-DATABASE =====
+    'MultiDatabaseConfig',
+    
+    # ===== UTILITIES =====
+    'get_default_config_for_environment',
+    'compare_configs',
+    'test_connection_params',
+    
+    # ===== LOADERS =====
+    'EnvironmentVariableParser',
+    'EnvironmentLoader',
+    'DatabaseConfigLoader',
+    
+    # ===== VALIDATORS =====
+    'ValidationIssue',
+    'ValidationResult',
+    'BasicValidators',
+    'NetworkValidators',
+    'FileSystemValidators',
+    'DatabaseConfigValidator',
+    
+    # ===== MANAGER =====
+    'ConnectionPoolManager',
+    'DatabaseMonitoringService',
+    'DatabaseManager',
+    'get_db_manager',
+    'set_db_manager',
+    'reset_db_manager',
 ]
+
+
+# ============================================================================
+# PACKAGE INITIALIZATION
+# ============================================================================
+
+logger = logging.getLogger(__name__)
+logger.debug(f"Database configuration package initialized (v{__version__})")
+logger.debug(f"Available exports: {len(__all__)} components")
+
+
+# ============================================================================
+# CONVENIENCE IMPORTS FOR QUICK ACCESS
+# ============================================================================
+
+# Shortcut для быстрого доступа к менеджеру
+db_manager = get_db_manager
+
+
+# ============================================================================
+# PACKAGE-LEVEL FUNCTIONS
+# ============================================================================
+
+def get_package_info() -> dict:
+    """
+    Получение информации о пакете
+    
+    Returns:
+        Словарь с метаданными пакета
+    """
+    return {
+        'name': 'database',
+        'version': __version__,
+        'author': __author__,
+        'components_count': len(__all__),
+        'components': __all__
+    }
+
+
+def validate_installation() -> dict:
+    """
+    Проверка корректности установки пакета
+    
+    Returns:
+        Словарь с результатами проверки
+    """
+    results = {
+        'status': 'ok',
+        'missing_components': [],
+        'import_errors': []
+    }
+    
+    # Проверка импорта всех компонентов
+    for component_name in __all__:
+        try:
+            globals()[component_name]
+        except KeyError:
+            results['missing_components'].append(component_name)
+            results['status'] = 'error'
+    
+    # Проверка основных классов
+    critical_components = [
+        'DatabaseConfigBase',
+        'DatabaseManager',
+        'DatabaseConfigLoader',
+        'DatabaseConfigValidator'
+    ]
+    
+    for component in critical_components:
+        if component in results['missing_components']:
+            results['import_errors'].append(
+                f"Critical component missing: {component}"
+            )
+    
+    return results
+
+
+# ============================================================================
+# MODULE DOCSTRING EXAMPLES
+# ============================================================================
+
+def __example_usage():
+    """
+    Примеры использования пакета
+    
+    Эта функция не выполняется, служит только для документации.
+    """
+    # Пример 1: Базовое использование менеджера
+    async def example_basic():
+        manager = DatabaseManager()
+        await manager.initialize()
+        status = manager.get_status()
+        print(status)
+        await manager.shutdown()
+    
+    # Пример 2: Создание кастомной конфигурации
+    def example_custom_config():
+        config = create_postgresql_config(
+            host='localhost',
+            port=5432,
+            database='myapp',
+            user='admin',
+            password='secret'
+        )
+        return config
+    
+    # Пример 3: Загрузка из environment
+    def example_env_config():
+        loader = DatabaseConfigLoader(prefix='DB_')
+        config = loader.load_from_env()
+        return config
+    
+    # Пример 4: Валидация конфигурации
+    def example_validation():
+        config = DatabaseConfigBase.from_env()
+        validator = DatabaseConfigValidator(config)
+        result = validator.validate_all()
+        
+        if not result.is_valid:
+            print("Validation errors:")
+            for error in result.errors:
+                print(f"  - {error}")
+        
+        return result
+    
+    # Пример 5: Множественные БД
+    def example_multi_db():
+        multi = MultiDatabaseConfig()
+        
+        # Добавление конфигураций
+        multi.add('primary', create_postgresql_config(database='main'))
+        multi.add('cache', create_sqlite_config(database=':memory:'))
+        
+        # Получение конфигурации
+        primary_config = multi.get('primary')
+        
+        return multi
+    
+    # Пример 6: Мониторинг и метрики
+    async def example_monitoring():
+        manager = DatabaseManager()
+        await manager.initialize()
+        
+        # Получение метрик
+        metrics = manager.get_metrics()
+        
+        # Получение алертов
+        alerts = manager.get_alerts(active_only=True)
+        
+        # Проверка здоровья
+        health = manager.get_health_status()
+        
+        return metrics, alerts, health
+
+
+# Автоматическая проверка при импорте (только в debug режиме)
+if __debug__:
+    _install_check = validate_installation()
+    if _install_check['status'] != 'ok':
+        logger.warning(
+            f"Package installation check failed: {_install_check}"
+        )
