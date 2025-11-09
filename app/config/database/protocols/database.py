@@ -5,7 +5,7 @@ Database Operation Protocols
 """
 
 from typing import Protocol, Any, Optional, AsyncIterator, runtime_checkable
-from contextlib import AsyncContextManager
+from collections.abc import AsyncContextManager  # ИСПРАВЛЕНО: было from contextlib
 
 
 @runtime_checkable
