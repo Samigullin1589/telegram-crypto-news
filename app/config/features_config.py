@@ -1,223 +1,204 @@
-# app/config/features_config.py
 """
-Features Configuration Module v2.0
-Улучшенная конфигурация функциональных возможностей
+Features Configuration Module v3.0
+Модульная система конфигурации функциональности
 """
 
-import os
 import logging
 from typing import Dict, Any
+
+from .features import (
+    FeatureFlags,
+    ContentLimits,
+    TimingConfig,
+    ImageConfig,
+    TradingFeatures,
+    WhaleFeatures
+)
 
 logger = logging.getLogger(__name__)
 
 
 class FeaturesConfig:
     """
-    Конфигурация функций и возможностей бота
+    Главный класс конфигурации функций
     
-    Улучшения v2.0:
-    - Trading включен по умолчанию
-    - Лучшая структура настроек
-    - Группировка связанных параметров
+    Объединяет все модули конфигурации:
+    - Флаги включения модулей
+    - Лимиты контента
+    - Настройки таймингов
+    - Конфигурация изображений
+    - Настройки торговли
+    - Настройки whale мониторинга
+    
+    Версия 3.0:
+    - Модульная архитектура
+    - Метод is_enabled() для проверки модулей
+    - Единая точка доступа ко всем настройкам
+    - Полная обратная совместимость
     """
     
     def __init__(self):
-        """Инициализация конфигурации функций"""
+        """Инициализация конфигурации"""
         
-        # Основные модули (все включены по умолчанию)
-        self.whale_enabled = self._get_bool_env('WHALE_ENABLED', True)
-        self.news_enabled = self._get_bool_env('NEWS_ENABLED', True)
-        self.analytics_enabled = self._get_bool_env('ANALYTICS_ENABLED', True)
-        self.trading_enabled = self._get_bool_env('TRADING_ENABLED', True)
-        self.hyperliquid_enabled = self._get_bool_env('HYPERLIQUID_ENABLED', False)
+        logger.info("="*80)
+        logger.info("⚙️  INITIALIZING FEATURES CONFIG v3.0")
+        logger.info("="*80)
         
-        # Интервалы обновления
-        self.fetch_interval = int(os.getenv('FETCH_INTERVAL', '300'))
-        self.news_check_interval = self.fetch_interval
-        self.whale_check_interval = int(os.getenv('WHALE_CHECK_INTERVAL', '60'))
-        self.trading_check_interval = int(os.getenv('TRADING_CHECK_INTERVAL', '300'))
+        # Инициализация модулей
+        self.flags = FeatureFlags()
+        self.content = ContentLimits()
+        self.timing = TimingConfig()
+        self.image = ImageConfig()
+        self.trading = TradingFeatures()
+        self.whale = WhaleFeatures()
         
-        # Лимиты публикаций
-        self.posts_per_hour_cap = int(os.getenv('POSTS_PER_HOUR_CAP', '10'))
-        self.whale_posts_per_hour = int(os.getenv('WHALE_POSTS_PER_HOUR', '20'))
-        self.trading_signals_per_hour = int(os.getenv('TRADING_SIGNALS_PER_HOUR', '5'))
+        # Обратная совместимость: копирование атрибутов
+        self._setup_legacy_attributes()
         
-        # Пороги уверенности
-        self.min_confidence_score = int(os.getenv('MIN_CONFIDENCE_SCORE', '70'))
-        self.min_trading_confidence = int(os.getenv('MIN_TRADING_CONFIDENCE', '75'))
-        self.min_whale_confidence = int(os.getenv('MIN_WHALE_CONFIDENCE', '60'))
+        # Финальная валидация
+        self._validate_configuration()
         
-        # Задержки
-        self.post_delay_seconds = int(os.getenv('POST_DELAY_SECONDS', '900'))
-        self.idle_delay_seconds = int(os.getenv('IDLE_DELAY_SECONDS', '300'))
-        self.rate_limit_delay_seconds = 60
+        logger.info("="*80)
+        logger.info("✅ FEATURES CONFIG INITIALIZED")
+        logger.info("="*80)
+        logger.info("")
+    
+    def _setup_legacy_attributes(self):
+        """Установка атрибутов для обратной совместимости"""
         
-        # Контент
-        self.max_article_text_length = 12000
-        self.max_summary_length = 500
-        self.max_summary_retries = 2
-        self.summary_enabled = True
+        # Флаги модулей
+        self.whale_enabled = self.flags.whale_enabled
+        self.news_enabled = self.flags.news_enabled
+        self.analytics_enabled = self.flags.analytics_enabled
+        self.trading_enabled = self.flags.trading_enabled
+        self.hyperliquid_enabled = self.flags.hyperliquid_enabled
+        
+        # Лимиты контента
+        self.posts_per_hour_cap = self.content.posts_per_hour_cap
+        self.whale_posts_per_hour = self.content.whale_posts_per_hour
+        self.trading_signals_per_hour = self.content.trading_signals_per_hour
+        self.min_confidence_score = self.content.min_confidence_score
+        self.min_trading_confidence = self.content.min_trading_confidence
+        self.min_whale_confidence = self.content.min_whale_confidence
+        self.max_article_text_length = self.content.max_article_text_length
+        self.max_summary_length = self.content.max_summary_length
+        self.max_summary_retries = self.content.max_summary_retries
+        self.summary_enabled = self.content.summary_enabled
+        
+        # Таймаут
+        self.fetch_interval = self.timing.fetch_interval
+        self.news_check_interval = self.timing.news_check_interval
+        self.whale_check_interval = self.timing.whale_check_interval
+        self.trading_check_interval = self.timing.trading_check_interval
+        self.post_delay_seconds = self.timing.post_delay_seconds
+        self.idle_delay_seconds = self.timing.idle_delay_seconds
+        self.rate_limit_delay_seconds = self.timing.rate_limit_delay_seconds
+        self.feed_fetch_timeout = self.timing.feed_fetch_timeout
+        self.blockchain_request_timeout = self.timing.blockchain_request_timeout
+        self.trading_analysis_timeout = self.timing.trading_analysis_timeout
         
         # Изображения
-        self.min_image_width = int(os.getenv('MIN_IMAGE_WIDTH', '400'))
-        self.min_image_height = int(os.getenv('MIN_IMAGE_HEIGHT', '200'))
-        self.max_image_size_mb = int(os.getenv('MAX_IMAGE_SIZE_MB', '10'))
-        self.image_quality = 85
-        self.image_compression_enabled = True
-        self.image_check_timeout = 10
-        self.image_partial_read_bytes = 8192
+        self.min_image_width = self.image.min_image_width
+        self.min_image_height = self.image.min_image_height
+        self.max_image_size_mb = self.image.max_image_size_mb
+        self.image_quality = self.image.image_quality
+        self.image_compression_enabled = self.image.image_compression_enabled
+        self.image_check_timeout = self.image.image_check_timeout
+        self.image_partial_read_bytes = self.image.image_partial_read_bytes
         
-        # Trading специфичные настройки
-        self.trading_dry_run = self._get_bool_env('TRADING_DRY_RUN', True)
-        self.trading_max_signals_per_day = int(os.getenv('TRADING_MAX_SIGNALS_PER_DAY', '10'))
-        self.trading_max_open_positions = int(os.getenv('TRADING_MAX_OPEN_POSITIONS', '5'))
-        self.trading_default_stop_loss = float(os.getenv('TRADING_DEFAULT_STOP_LOSS', '3.0'))
-        self.trading_default_take_profit = float(os.getenv('TRADING_DEFAULT_TAKE_PROFIT', '5.0'))
+        # Trading
+        self.trading_dry_run = self.trading.dry_run
+        self.trading_max_signals_per_day = self.trading.max_signals_per_day
+        self.trading_max_open_positions = self.trading.max_open_positions
+        self.trading_default_stop_loss = self.trading.default_stop_loss
+        self.trading_default_take_profit = self.trading.default_take_profit
         
-        # Whale специфичные настройки
-        self.whale_min_usd_threshold = float(os.getenv('WHALE_MIN_USD_THRESHOLD', '100000'))
-        self.whale_mega_threshold = float(os.getenv('WHALE_MEGA_THRESHOLD', '1000000'))
-        
-        # Timeout настройки
-        self.feed_fetch_timeout = 30
-        self.blockchain_request_timeout = 30
-        self.trading_analysis_timeout = 60
-        
-        # Логирование конфигурации
-        self._log_configuration()
+        # Whale
+        self.whale_min_usd_threshold = self.whale.min_usd_threshold
+        self.whale_mega_threshold = self.whale.mega_threshold
     
-    @staticmethod
-    def _get_bool_env(key: str, default: bool = False) -> bool:
+    def _validate_configuration(self):
+        """Валидация конфигурации"""
+        
+        # Проверка что хотя бы один модуль включен
+        if not self.flags.is_any_enabled():
+            logger.warning("⚠️  WARNING: All modules are disabled!")
+        
+        # Проверка критичных зависимостей
+        if self.trading_enabled and not self.whale_enabled:
+            logger.warning("⚠️  Trading enabled without whale monitoring")
+        
+        # Проверка разумности лимитов
+        if self.posts_per_hour_cap > 100:
+            logger.warning(f"⚠️  Very high post limit: {self.posts_per_hour_cap}/hour")
+        
+        if self.min_confidence_score < 50:
+            logger.warning(f"⚠️  Low confidence threshold: {self.min_confidence_score}")
+        
+        logger.info(f"✅ Configuration validated: {self.flags.get_enabled_count()}/5 modules active")
+    
+    def is_enabled(self, feature_name: str) -> bool:
         """
-        Получение boolean переменной из окружения
+        Проверка включен ли модуль
         
         Args:
-            key: Название переменной
-            default: Значение по умолчанию
+            feature_name: Название модуля
             
         Returns:
-            Boolean значение
+            bool: True если модуль включен
+            
+        Examples:
+            >>> config.is_enabled('news')
+            True
+            >>> config.is_enabled('trading')
+            True
         """
-        value = os.getenv(key, str(default)).lower()
-        return value in ('true', '1', 'yes', 'on', 'enabled')
-    
-    def _log_configuration(self):
-        """Логирование включенных функций"""
-        features = {
-            'Whale Alerts': self.whale_enabled,
-            'News': self.news_enabled,
-            'Analytics': self.analytics_enabled,
-            'Trading': self.trading_enabled,
-            'Hyperliquid': self.hyperliquid_enabled
-        }
-        
-        enabled = [name for name, status in features.items() if status]
-        disabled = [name for name, status in features.items() if not status]
-        
-        if enabled:
-            logger.info(f"✅ [FEATURES] Enabled: {', '.join(enabled)}")
-        
-        if disabled:
-            logger.debug(f"⚠️  [FEATURES] Disabled: {', '.join(disabled)}")
-        
-        if not any(features.values()):
-            logger.warning("⚠️  [FEATURES] All features are disabled!")
-        
-        # Специальные режимы
-        if self.trading_enabled and self.trading_dry_run:
-            logger.info("🧪 [TRADING] Running in DRY RUN mode")
+        return self.flags.is_enabled(feature_name)
     
     def get_enabled_features(self) -> Dict[str, bool]:
         """
-        Получение статуса всех функций
+        Получение всех модулей и их статусов
         
         Returns:
-            Dict с флагами включения
+            Dict[str, bool]: Словарь модулей
         """
-        return {
-            'whale_alerts': self.whale_enabled,
-            'news': self.news_enabled,
-            'analytics': self.analytics_enabled,
-            'trading': self.trading_enabled,
-            'hyperliquid': self.hyperliquid_enabled
-        }
+        return self.flags.get_enabled_features()
     
     def is_any_feature_enabled(self) -> bool:
         """
-        Проверка включена ли хотя бы одна функция
+        Проверка включен ли хотя бы один модуль
         
         Returns:
-            True если есть хотя бы одна активная функция
+            bool: True если есть активные модули
         """
-        return any(self.get_enabled_features().values())
+        return self.flags.is_any_enabled()
     
-    def get_content_limits(self) -> Dict[str, int]:
+    def get_content_limits(self) -> Dict[str, Any]:
         """Получение лимитов контента"""
-        return {
-            'posts_per_hour': self.posts_per_hour_cap,
-            'whale_posts_per_hour': self.whale_posts_per_hour,
-            'trading_signals_per_hour': self.trading_signals_per_hour,
-            'min_confidence': self.min_confidence_score,
-            'min_trading_confidence': self.min_trading_confidence,
-            'min_whale_confidence': self.min_whale_confidence,
-            'article_length': self.max_article_text_length,
-            'summary_length': self.max_summary_length
-        }
+        return self.content.get_all_limits()
     
     def get_image_config(self) -> Dict[str, Any]:
         """Получение конфигурации изображений"""
-        return {
-            'min_width': self.min_image_width,
-            'min_height': self.min_image_height,
-            'max_size_mb': self.max_image_size_mb,
-            'quality': self.image_quality,
-            'compression_enabled': self.image_compression_enabled,
-            'check_timeout': self.image_check_timeout
-        }
+        return self.image.to_dict()
     
     def get_timing_config(self) -> Dict[str, int]:
         """Получение конфигурации таймингов"""
-        return {
-            'fetch_interval': self.fetch_interval,
-            'news_check_interval': self.news_check_interval,
-            'whale_check_interval': self.whale_check_interval,
-            'trading_check_interval': self.trading_check_interval,
-            'post_delay': self.post_delay_seconds,
-            'idle_delay': self.idle_delay_seconds,
-            'rate_limit_delay': self.rate_limit_delay_seconds
-        }
+        return self.timing.get_all_timings()
     
     def get_trading_config(self) -> Dict[str, Any]:
-        """Получение конфигурации trading"""
-        return {
-            'enabled': self.trading_enabled,
-            'dry_run': self.trading_dry_run,
-            'max_signals_per_day': self.trading_max_signals_per_day,
-            'max_open_positions': self.trading_max_open_positions,
-            'default_stop_loss': self.trading_default_stop_loss,
-            'default_take_profit': self.trading_default_take_profit,
-            'min_confidence': self.min_trading_confidence,
-            'check_interval': self.trading_check_interval,
-            'signals_per_hour': self.trading_signals_per_hour
-        }
+        """Получение конфигурации торговли"""
+        return self.trading.to_dict()
     
     def get_whale_config(self) -> Dict[str, Any]:
-        """Получение конфигурации whale monitoring"""
-        return {
-            'enabled': self.whale_enabled,
-            'min_usd_threshold': self.whale_min_usd_threshold,
-            'mega_threshold': self.whale_mega_threshold,
-            'posts_per_hour': self.whale_posts_per_hour,
-            'min_confidence': self.min_whale_confidence,
-            'check_interval': self.whale_check_interval
-        }
+        """Получение конфигурации whale мониторинга"""
+        return self.whale.to_dict()
     
     def to_dict(self) -> Dict[str, Any]:
         """
-        Конвертация в словарь
+        Полная конфигурация в виде словаря
         
         Returns:
-            Полная конфигурация в виде словаря
+            Dict: Вся конфигурация
         """
         return {
             'enabled_features': self.get_enabled_features(),
@@ -227,6 +208,11 @@ class FeaturesConfig:
             'trading': self.get_trading_config(),
             'whale': self.get_whale_config()
         }
+    
+    def __repr__(self) -> str:
+        """Строковое представление"""
+        enabled = self.flags.get_enabled_names()
+        return f"FeaturesConfig(enabled={enabled})"
 
 
 __all__ = ['FeaturesConfig']
