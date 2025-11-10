@@ -8,7 +8,9 @@ import logging
 from typing import Optional, Any, Tuple, Dict
 from threading import Lock
 
-from .loaders import ComponentLoader
+# ИСПРАВЛЕНО: Убран импорт ComponentLoader с уровня модуля
+# from .loaders import ComponentLoader  ← УДАЛЕНО!
+
 from .status import ComponentStatusManager
 from .shutdown import ComponentShutdownManager
 
@@ -18,6 +20,9 @@ logger = logging.getLogger(__name__)
 class ComponentManager:
     """
     Менеджер жизненного цикла компонентов (Thread-safe Singleton)
+    
+    ИСПРАВЛЕНО: ComponentLoader импортируется лениво для разрыва
+    циклических зависимостей
     """
     
     _instance: Optional['ComponentManager'] = None
@@ -42,12 +47,30 @@ class ComponentManager:
         self.bot_application: Optional[Any] = None
         self.trading_system: Optional[Any] = None
         
-        self._loader = ComponentLoader()
+        # ИСПРАВЛЕНО: ComponentLoader будет создан при первом использовании
+        self._loader: Optional[Any] = None
         self._status = ComponentStatusManager()
         self._shutdown_manager = ComponentShutdownManager(timeout=10.0)
         
         self._initialized = True
         logger.debug("ComponentManager initialized")
+    
+    @property
+    def loader(self):
+        """
+        Ленивая загрузка ComponentLoader
+        
+        Импортирует ComponentLoader только при первом обращении.
+        Это предотвращает циклические зависимости при инициализации модуля.
+        
+        Returns:
+            ComponentLoader instance
+        """
+        if self._loader is None:
+            # ИСПРАВЛЕНО: Импорт только когда нужен
+            from .loaders import ComponentLoader
+            self._loader = ComponentLoader()
+        return self._loader
     
     def load_all(self) -> Tuple[bool, bool, bool, bool]:
         """
@@ -60,17 +83,27 @@ class ComponentManager:
         logger.info("📦 LOADING APPLICATION COMPONENTS")
         logger.info("="*80)
         
-        news_ok = self._load_component('news_processor', self._loader.load_news_processor)
-        whale_ok = self._load_component('whale_scheduler', self._loader.load_whale_scheduler)
-        bot_ok = self._load_component('bot_application', self._loader.load_bot_application)
-        trading_ok = self._load_component('trading_system', self._loader.load_trading_system)
+        # ИСПРАВЛЕНО: Используем self.loader вместо self._loader
+        news_ok = self._load_component('news_processor', self.loader.load_news_processor)
+        whale_ok = self._load_component('whale_scheduler', self.loader.load_whale_scheduler)
+        bot_ok = self._load_component('bot_application', self.loader.load_bot_application)
+        trading_ok = self._load_component('trading_system', self.loader.load_trading_system)
         
         self._status.print_status()
         
         return (news_ok, whale_ok, bot_ok, trading_ok)
     
     def _load_component(self, component_name: str, loader_func: callable) -> bool:
-        """Универсальный метод загрузки компонента"""
+        """
+        Универсальный метод загрузки компонента
+        
+        Args:
+            component_name: Название компонента
+            loader_func: Функция загрузки компонента
+            
+        Returns:
+            True если компонент загружен успешно
+        """
         try:
             instance = loader_func()
             setattr(self, component_name, instance)
@@ -85,7 +118,7 @@ class ComponentManager:
             return instance is not None
             
         except Exception as e:
-            logger.error(f"Критическая ошибка загрузки {component_name}: {e}")
+            logger.error(f"Критическая ошибка загрузки {component_name}: {e}", exc_info=True)
             setattr(self, component_name, None)
             self._status.update(
                 name=component_name,
@@ -135,3 +168,24 @@ class ComponentManager:
             'trading_system': self.trading_system
         }
         await self._shutdown_manager.stop_all(components)
+    
+    async def cleanup(self) -> None:
+        """
+        Очистка ресурсов менеджера
+        
+        Освобождает все ресурсы и сбрасывает состояние
+        """
+        try:
+            logger.debug("Cleaning up ComponentManager...")
+            
+            # Очищаем ссылки на компоненты
+            self.news_processor = None
+            self.whale_scheduler = None
+            self.bot_application = None
+            self.trading_system = None
+            self._loader = None
+            
+            logger.debug("✅ ComponentManager cleanup completed")
+        
+        except Exception as e:
+            logger.error(f"❌ Error during ComponentManager cleanup: {e}", exc_info=True)
