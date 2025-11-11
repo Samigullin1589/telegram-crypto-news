@@ -1,3 +1,4 @@
+# core/application.py
 """
 Main Application Module v4.0
 Главный модуль приложения с упрощенной архитектурой
@@ -30,7 +31,7 @@ from .tasks.manager import TaskManager
 from .health_server import HealthServer
 
 # Импорт lifecycle менеджера
-from .application.lifecycle import ApplicationLifecycle
+from .app_lifecycle.lifecycle import ApplicationLifecycle
 
 logger = logging.getLogger(__name__)
 
