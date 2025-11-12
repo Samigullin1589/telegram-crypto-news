@@ -1,6 +1,6 @@
-# core/initialization/monitor.py
+# file: core/initialization/monitor.py
 """
-Monitor Initializer - Production Ready v5.1
+Monitor Initializer - Production Ready v5.2
 ============================================
 
 Инициализация системы мониторинга с интеграцией IntegratedCryptoMonitor v5.0.
@@ -13,13 +13,13 @@ Components:
 - MonitorValidator: Валидация монитора
 - MonitorInitializer: Координация полной инициализации
 
-Architecture v5.1:
+Architecture v5.2:
 ------------------
 - Интеграция с двухэтапной инициализацией Monitor v5.0
 - MonitorInitializer полностью инициализирует монитор (включая async initialize())
 - Production-grade error handling
 - Comprehensive validation
-- FIXED: Улучшена валидация db_manager (опциональные методы)
+- FIXED v5.2: Исправлена валидация DatabaseManager с @asynccontextmanager методами
 """
 
 from typing import Optional, Any, Dict, TYPE_CHECKING
@@ -184,6 +184,8 @@ class MonitorDependencyChecker:
         """
         Валидация database manager
         
+        FIXED v5.2: Корректная проверка DatabaseManager с @asynccontextmanager методами
+        
         Args:
             db_manager: Database manager для проверки
             
@@ -194,29 +196,55 @@ class MonitorDependencyChecker:
             logger.warning("[MONITOR-DEPS] DB manager is None")
             return True  # Опционально
         
-        # Проверяем основные методы (хотя бы один должен быть)
-        # get_session или close или shutdown
-        has_get_session = hasattr(db_manager, 'get_session') and callable(getattr(db_manager, 'get_session'))
-        has_close = hasattr(db_manager, 'close') and callable(getattr(db_manager, 'close'))
-        has_shutdown = hasattr(db_manager, 'shutdown') and callable(getattr(db_manager, 'shutdown'))
+        # Проверяем класс DatabaseManager
+        class_name = type(db_manager).__name__
         
-        if not (has_get_session or has_close or has_shutdown):
+        if class_name != 'DatabaseManager':
+            logger.warning(
+                f"[MONITOR-DEPS] Expected DatabaseManager, got {class_name}"
+            )
+        
+        # Проверяем наличие ключевых методов DatabaseManager
+        # close, shutdown, get_session, initialize
+        required_methods = {
+            'close': 'Graceful shutdown alias',
+            'shutdown': 'Graceful shutdown',
+            'get_session': 'Session context manager',
+            'get_status': 'Status retrieval'
+        }
+        
+        missing_methods = []
+        available_methods = []
+        
+        for method_name, description in required_methods.items():
+            if hasattr(db_manager, method_name):
+                available_methods.append(method_name)
+                logger.debug(f"[MONITOR-DEPS] ✅ Method '{method_name}': {description}")
+            else:
+                missing_methods.append(method_name)
+                logger.warning(f"[MONITOR-DEPS] ⚠️  Missing method '{method_name}': {description}")
+        
+        # Требуем хотя бы shutdown или close для graceful shutdown
+        has_shutdown_method = ('shutdown' in available_methods or 'close' in available_methods)
+        
+        if not has_shutdown_method:
             logger.error(
-                "[MONITOR-DEPS] DB manager missing required methods "
-                "(get_session, close, or shutdown)"
+                "[MONITOR-DEPS] DB manager missing shutdown/close methods. "
+                "Cannot perform graceful shutdown."
             )
             return False
         
-        # Логируем какие методы доступны
-        methods_available = []
-        if has_get_session:
-            methods_available.append('get_session')
-        if has_close:
-            methods_available.append('close')
-        if has_shutdown:
-            methods_available.append('shutdown')
+        # Логируем итоговый статус
+        logger.info(
+            f"[MONITOR-DEPS] ✅ DB manager valid ({class_name}), "
+            f"methods: {', '.join(available_methods)}"
+        )
         
-        logger.debug(f"[MONITOR-DEPS] ✅ DB manager valid, methods: {', '.join(methods_available)}")
+        if missing_methods:
+            logger.debug(
+                f"[MONITOR-DEPS] Optional methods not found: {', '.join(missing_methods)}"
+            )
+        
         return True
 
 
@@ -233,79 +261,74 @@ class MonitorFactory:
         Инициализация фабрики
         
         Args:
-            config: Конфигурация
-            db_manager: Database manager
+            config: Конфигурация приложения
+            db_manager: Database manager (опционально)
         """
         self.config = config
         self.db_manager = db_manager
-        logger.debug("[MONITOR-FACTORY] Factory initialized")
+        
+        logger.debug("[MONITOR-FACTORY] MonitorFactory initialized")
     
     def create_monitor(self) -> Optional['IntegratedCryptoMonitor']:
         """
-        Создание IntegratedCryptoMonitor
+        Создание монитора
+        
+        Создаёт IntegratedCryptoMonitor через __init__.
+        Async инициализация (monitor.initialize()) выполняется отдельно.
         
         Returns:
             IntegratedCryptoMonitor или None при ошибке
         """
         try:
-            logger.info("[MONITOR-FACTORY] Creating IntegratedCryptoMonitor...")
-            
-            # Lazy import
             from core.monitor import IntegratedCryptoMonitor
             
-            # Получаем max_memory из конфигурации если есть
-            max_memory = 450  # default
-            if hasattr(self.config, 'MAX_MEMORY_MB'):
-                max_memory = self.config.MAX_MEMORY_MB
+            logger.debug("[MONITOR-FACTORY] Creating IntegratedCryptoMonitor...")
             
-            # Создаём монитор (только __init__, без async initialize)
-            monitor = IntegratedCryptoMonitor(max_memory_mb=max_memory)
+            # Создание монитора через __init__ (sync)
+            monitor = IntegratedCryptoMonitor(
+                config=self.config,
+                db_manager=self.db_manager
+            )
             
-            if monitor is None:
-                logger.error("[MONITOR-FACTORY] ❌ Failed to create monitor")
-                return None
+            logger.info("[MONITOR-FACTORY] ✅ Monitor created successfully")
             
-            logger.info("[MONITOR-FACTORY] ✅ Monitor instance created")
             return monitor
         
         except ImportError as e:
-            logger.error(f"[MONITOR-FACTORY] ❌ Import failed: {e}", exc_info=True)
+            logger.error(f"[MONITOR-FACTORY] ❌ Failed to import IntegratedCryptoMonitor: {e}")
             return None
         
         except Exception as e:
-            logger.error(f"[MONITOR-FACTORY] ❌ Creation failed: {e}", exc_info=True)
+            logger.error(f"[MONITOR-FACTORY] ❌ Failed to create monitor: {e}", exc_info=True)
             return None
 
 
 class MonitorValidator:
     """
-    Валидатор созданного монитора
+    Валидатор монитора
     
-    Проверяет:
-    - Структуру монитора
-    - Наличие методов
-    - Callable методов
+    Проверяет корректность созданного монитора
     """
     
     def __init__(self):
         """Инициализация валидатора"""
-        logger.debug("[MONITOR-VAL] Validator initialized")
+        logger.debug("[MONITOR-VAL] MonitorValidator initialized")
     
     def validate(self, monitor: Optional['IntegratedCryptoMonitor']) -> bool:
         """
         Валидация монитора
         
         Args:
-            monitor: Монитор для валидации
+            monitor: Монитор для проверки
             
         Returns:
             bool: True если валиден
         """
+        if monitor is None:
+            logger.error("[MONITOR-VAL] Monitor is None")
+            return False
+        
         try:
-            if monitor is None:
-                logger.error("[MONITOR-VAL] ❌ Monitor is None")
-                return False
-            
             logger.debug("[MONITOR-VAL] Validating monitor...")
             
             if not self._validate_methods(monitor):
@@ -348,7 +371,7 @@ class MonitorValidator:
 
 class MonitorInitializer:
     """
-    Инициализатор системы мониторинга v5.1
+    Инициализатор системы мониторинга v5.2
     
     Полностью инициализирует IntegratedCryptoMonitor:
     1. Валидация конфигурации
