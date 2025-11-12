@@ -1,4 +1,4 @@
-# core/initialization/__init__.py
+# file: core/initialization/__init__.py
 """
 Initialization Module
 =====================
@@ -93,7 +93,18 @@ async def initialize_database() -> Any:
     
     try:
         initializer = DatabaseInitializer()
-        db_manager = await initializer.initialize()
+        
+        # ИСПРАВЛЕНО: initialize() возвращает bool, нужно получить manager отдельно
+        success = await initializer.initialize()
+        
+        if not success:
+            raise RuntimeError("Database initialization returned False")
+        
+        # Получаем инициализированный DatabaseManager
+        db_manager = initializer.get_manager()
+        
+        if db_manager is None:
+            raise RuntimeError("DatabaseManager is None after successful initialization")
         
         logger.debug("Database initialization completed successfully")
         return db_manager
@@ -155,4 +166,4 @@ __all__ = [
 ]
 
 
-__version__ = '4.5.0'
+__version__ = '4.5.1'
