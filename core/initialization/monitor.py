@@ -89,22 +89,28 @@ class MonitorConfigValidator:
         return True
     
     def _validate_required_attributes(self, config: Any) -> bool:
-        """Проверка обязательных атрибутов"""
+        """
+        Проверка обязательных атрибутов конфигурации
+        
+        Args:
+            config: Объект конфигурации
+            
+        Returns:
+            bool: True если все атрибуты присутствуют
+        """
         try:
-            # Telegram config
+            # Проверяем только telegram config
+            # Database НЕ проверяем - он уже инициализирован на шаге 2
+            
+            if not hasattr(config, 'telegram'):
+                logger.error("[MONITOR-CONFIG] Missing telegram config")
+                return False
+            
             if not hasattr(config.telegram, 'bot_token'):
                 logger.error("[MONITOR-CONFIG] Missing telegram.bot_token")
                 return False
             
-            # Database config - поддерживаем и db_path и database_url
-            has_db_path = hasattr(config.database, 'db_path')
-            has_db_url = hasattr(config.database, 'database_url')
-            
-            if not (has_db_path or has_db_url):
-                logger.error("[MONITOR-CONFIG] Missing database path/url")
-                return False
-            
-            logger.debug("[MONITOR-CONFIG] ✅ Required attributes present")
+            logger.debug("[MONITOR-CONFIG] ✅ All required attributes present")
             return True
         
         except Exception as e:
