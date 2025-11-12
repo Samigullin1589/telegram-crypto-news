@@ -1,42 +1,26 @@
 # core/monitor.py
 """
-Integrated Crypto Monitor - Production Ready v5.0
-==================================================
+Integrated Crypto Monitor v5.2
+===============================
 
-Главная система мониторинга криптовалют с полным разделением ответственности.
+Production-Ready система мониторинга криптовалют.
 
-Architecture Changes v5.0:
---------------------------
-- Двухэтапная инициализация (sync __init__ + async initialize)
-- Полное разделение core и business компонентов
-- Устранение всех циклических зависимостей
-- Модульная архитектура с четким разделением ответственности
-- Production-grade error handling и recovery
+ИСПРАВЛЕНО v5.2:
+- Правильное создание shutdown_task ДО wait()
+- Корректная проверка завершенных задач
+- Убран двойной cleanup (только через stop())
+- Все методы существуют и работают
 
-Components:
------------
-- Core Layer: Rate limiter, resource monitor, health monitor
-- Business Layer: News, whale, trading, bot (lazy-loaded)
-- Infrastructure Layer: HTTP server, task manager, statistics
-
-Initialization Flow:
---------------------
-1. __init__: Создание core компонентов (без внешних зависимостей)
-2. initialize(): Async загрузка business компонентов
-3. run(): Запуск всех сервисов и задач
-4. stop(): Graceful shutdown
-
-This module coordinates:
-- Resource monitoring and rate limiting
-- HTTP server for health checks
-- Business components lifecycle
-- Graceful shutdown protocol
+Architecture v5.2:
+------------------
+- Core: Rate limiter, resource monitor, health monitor, statistics
+- Business: News, whale, trading, bot (lazy-loaded через ComponentManager)
+- Infrastructure: HTTP server, direct task launching, shutdown coordination
 """
 
 import asyncio
 import logging
-import os
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List, Set
 from datetime import datetime
 
 from core.rate_limiter import ChainRateLimiter
@@ -45,23 +29,19 @@ from core.health_monitor import SystemHealthMonitor
 from core.http_server import HTTPServer
 from core.bot_patcher import BotHandlerPatcher
 from core.statistics import SystemStatistics, StatisticsReporter
-from core.tasks import TaskManager
 
 logger = logging.getLogger(__name__)
 
 
 class MonitorCore:
     """
-    Core компоненты монитора (без внешних зависимостей)
+    Core компоненты монитора без внешних зависимостей
     
-    Отвечает за:
-    - Rate limiting
-    - Resource monitoring
-    - Health checks
-    - Statistics collection
-    
-    Эти компоненты безопасны для создания в __init__
-    так как не имеют циклических зависимостей.
+    Components:
+    - Rate limiter: Управление rate limits для blockchain APIs
+    - Resource monitor: Мониторинг памяти, CPU, GC
+    - Health monitor: Health checks системы
+    - Statistics: Сбор и хранение статистики
     """
     
     def __init__(self, max_memory_mb: int = 450):
@@ -69,19 +49,24 @@ class MonitorCore:
         Инициализация core компонентов
         
         Args:
-            max_memory_mb: Максимальный объем памяти в MB
+            max_memory_mb: Лимит памяти в MB
         """
-        logger.debug("Initializing MonitorCore...")
+        logger.debug("[CORE] Initializing MonitorCore...")
         
         self.rate_limiter = ChainRateLimiter()
         self.resource_monitor = ResourceMonitor(max_memory_mb=max_memory_mb)
         self.health_monitor = SystemHealthMonitor()
         self.statistics = SystemStatistics()
         
-        logger.debug("✅ MonitorCore initialized")
+        logger.debug("[CORE] ✅ MonitorCore initialized")
     
     def get_stats(self) -> Dict[str, Any]:
-        """Получить статистику core компонентов"""
+        """
+        Получить статистику всех core компонентов
+        
+        Returns:
+            Dict со статистикой health, resources, rate_limiting
+        """
         return {
             'health': self.health_monitor.get_stats(),
             'resources': self.resource_monitor.get_stats(),
@@ -91,62 +76,56 @@ class MonitorCore:
 
 class MonitorBusinessLayer:
     """
-    Business компоненты монитора (с lazy loading)
+    Business компоненты с lazy loading
     
-    Отвечает за:
-    - News processing
-    - Whale monitoring
-    - Trading system
-    - Telegram bot
-    
-    Компоненты загружаются асинхронно через initialize()
-    для предотвращения циклических зависимостей.
+    Components (loaded via ComponentManager):
+    - News processor: Обработка и публикация новостей
+    - Whale scheduler: Мониторинг крупных транзакций
+    - Trading system: Генерация торговых сигналов
+    - Bot application: Telegram bot интерфейс
     """
     
     def __init__(self):
-        """Инициализация business layer"""
+        """Инициализация business layer (без загрузки компонентов)"""
         self._component_manager: Optional[Any] = None
         self._initialized = False
-        logger.debug("MonitorBusinessLayer created (not initialized)")
+        logger.debug("[BUSINESS] MonitorBusinessLayer created")
     
     async def initialize(self) -> bool:
         """
-        Асинхронная инициализация business компонентов
+        Асинхронная инициализация и загрузка business компонентов
         
         Returns:
-            bool: True если инициализация успешна
+            bool: True если успешно
         """
         if self._initialized:
-            logger.debug("Business layer already initialized")
+            logger.debug("[BUSINESS] Already initialized")
             return True
         
         try:
-            logger.info("Initializing business layer...")
+            logger.info("[BUSINESS] Initializing business layer...")
             
-            # Lazy import ComponentManager
+            # Lazy import ComponentManager для избежания циклических зависимостей
             from core.components import ComponentManager
             
             self._component_manager = ComponentManager()
-            
-            # Загружаем компоненты
             self._component_manager.load_all()
             
-            # Проверяем что загрузилось
             status = self._component_manager.get_status_dict()
-            active_count = status.get('total_active', 0)
+            active = status.get('total_active', 0)
             
             self._initialized = True
-            logger.info(f"✅ Business layer initialized ({active_count} components active)")
+            logger.info(f"[BUSINESS] ✅ Business layer initialized ({active} components active)")
             
             return True
         
         except Exception as e:
-            logger.error(f"❌ Failed to initialize business layer: {e}", exc_info=True)
+            logger.error(f"[BUSINESS] ❌ Init failed: {e}", exc_info=True)
             return False
     
     @property
     def component_manager(self) -> Optional[Any]:
-        """Получить component manager (может быть None если не инициализирован)"""
+        """Получить component manager (может быть None)"""
         return self._component_manager
     
     @property
@@ -156,22 +135,25 @@ class MonitorBusinessLayer:
     
     def has_component(self, name: str) -> bool:
         """
-        Проверить наличие компонента
+        Проверить наличие и готовность компонента
         
         Args:
             name: Имя компонента (news, whale, trading, bot)
+            
+        Returns:
+            bool: True если компонент загружен
         """
         if not self._component_manager:
             return False
         
-        component_map = {
+        checks = {
             'news': lambda: self._component_manager.news_processor is not None,
             'whale': lambda: self._component_manager.whale_scheduler is not None,
             'trading': lambda: self._component_manager.has_trading(),
             'bot': lambda: self._component_manager.bot_application is not None
         }
         
-        checker = component_map.get(name)
+        checker = checks.get(name)
         if not checker:
             return False
         
@@ -185,35 +167,32 @@ class MonitorBusinessLayer:
         if self._component_manager:
             try:
                 await self._component_manager.stop_all()
-                logger.info("✅ Business components stopped")
+                logger.info("[BUSINESS] ✅ All components stopped")
             except Exception as e:
-                logger.error(f"❌ Error stopping business components: {e}", exc_info=True)
+                logger.error(f"[BUSINESS] ❌ Stop error: {e}", exc_info=True)
     
     async def cleanup(self) -> None:
         """Очистить ресурсы business компонентов"""
         if self._component_manager:
             try:
                 await self._component_manager.cleanup()
-                logger.info("✅ Business layer cleaned up")
+                logger.info("[BUSINESS] ✅ Cleanup complete")
             except Exception as e:
-                logger.error(f"❌ Error cleaning up business layer: {e}", exc_info=True)
+                logger.error(f"[BUSINESS] ❌ Cleanup error: {e}", exc_info=True)
 
 
 class MonitorInfrastructure:
     """
-    Infrastructure компоненты монитора
+    Infrastructure компоненты v5.2
     
-    Отвечает за:
-    - HTTP server (health checks, metrics, webhooks)
-    - Task manager (координация async задач)
+    Responsibilities:
+    - HTTP server management
+    - Direct business task launching
     - Shutdown coordination
+    - Task lifecycle management
     """
     
-    def __init__(
-        self,
-        core: MonitorCore,
-        business: MonitorBusinessLayer
-    ):
+    def __init__(self, core: MonitorCore, business: MonitorBusinessLayer):
         """
         Инициализация infrastructure
         
@@ -224,16 +203,16 @@ class MonitorInfrastructure:
         self.core = core
         self.business = business
         
-        # HTTP server (создается сразу)
+        # HTTP server
         self.http_server: Optional[HTTPServer] = None
-        
-        # Task manager (создается при запуске)
-        self.task_manager: Optional[TaskManager] = None
         
         # Shutdown coordination
         self.shutdown_event = asyncio.Event()
         
-        logger.debug("MonitorInfrastructure created")
+        # Running tasks storage
+        self._running_tasks: List[asyncio.Task] = []
+        
+        logger.debug("[INFRA] MonitorInfrastructure created")
     
     async def initialize_http_server(self) -> bool:
         """
@@ -243,17 +222,17 @@ class MonitorInfrastructure:
             bool: True если успешно
         """
         try:
-            logger.info("Initializing HTTP server...")
+            logger.info("[INFRA] Initializing HTTP server...")
             
-            # Получаем bot application если доступен
+            # Получаем bot app если доступен
             bot_app = None
             if self.business.component_manager:
                 try:
                     bot_app = self.business.component_manager.bot_application
-                except Exception as e:
-                    logger.debug(f"Bot application not available: {e}")
+                except Exception:
+                    pass
             
-            # Создаем HTTP сервер
+            # Создаем HTTP server
             self.http_server = HTTPServer(
                 health_monitor=self.core.health_monitor,
                 resource_monitor=self.core.resource_monitor,
@@ -261,11 +240,11 @@ class MonitorInfrastructure:
                 bot_application=bot_app
             )
             
-            logger.info("✅ HTTP server initialized")
+            logger.info("[INFRA] ✅ HTTP server initialized")
             return True
         
         except Exception as e:
-            logger.error(f"❌ Failed to initialize HTTP server: {e}", exc_info=True)
+            logger.error(f"[INFRA] ❌ HTTP init failed: {e}", exc_info=True)
             return False
     
     async def start_http_server(self) -> bool:
@@ -276,17 +255,17 @@ class MonitorInfrastructure:
             bool: True если успешно
         """
         if not self.http_server:
-            logger.error("HTTP server not initialized")
+            logger.error("[INFRA] HTTP server not initialized")
             return False
         
         try:
-            logger.info("Starting HTTP server...")
+            logger.info("[INFRA] Starting HTTP server...")
             await self.http_server.start()
-            logger.info("✅ HTTP server started")
+            logger.info("[INFRA] ✅ HTTP server started")
             return True
         
         except Exception as e:
-            logger.error(f"❌ Failed to start HTTP server: {e}", exc_info=True)
+            logger.error(f"[INFRA] ❌ HTTP start failed: {e}", exc_info=True)
             return False
     
     async def stop_http_server(self) -> None:
@@ -294,143 +273,329 @@ class MonitorInfrastructure:
         if self.http_server:
             try:
                 await self.http_server.stop()
-                logger.info("✅ HTTP server stopped")
+                logger.info("[INFRA] ✅ HTTP server stopped")
             except Exception as e:
-                logger.error(f"❌ Error stopping HTTP server: {e}", exc_info=True)
+                logger.error(f"[INFRA] ❌ HTTP stop error: {e}", exc_info=True)
     
-    async def initialize_task_manager(self) -> bool:
+    async def start_business_tasks(self) -> bool:
         """
-        Инициализация task manager
+        Запуск всех business задач напрямую
+        
+        Запускает как asyncio.Task:
+        - News processor
+        - Whale scheduler
+        - Trading system
+        - Bot application
         
         Returns:
-            bool: True если успешно
+            bool: True если хотя бы одна задача запущена
         """
         if not self.business.component_manager:
-            logger.error("Cannot initialize task manager: business layer not initialized")
+            logger.error("[INFRA] Component manager not available")
             return False
         
         try:
-            logger.info("Initializing task manager...")
+            logger.info("="*80)
+            logger.info("[INFRA] 🎯 STARTING BUSINESS TASKS")
+            logger.info("="*80)
             
-            self.task_manager = TaskManager(
-                components=self.business.component_manager,
-                health_monitor=self.core.health_monitor,
-                resource_monitor=self.core.resource_monitor,
-                statistics=self.core.statistics,
-                shutdown_event=self.shutdown_event
-            )
+            cm = self.business.component_manager
+            started = []
             
-            logger.info("✅ Task manager initialized")
-            return True
+            # News processor
+            if cm.news_processor:
+                try:
+                    task = asyncio.create_task(
+                        self._run_news_processor(cm.news_processor),
+                        name="NewsProcessor"
+                    )
+                    self._running_tasks.append(task)
+                    started.append('news')
+                    logger.info("[INFRA] ✅ News task started")
+                except Exception as e:
+                    logger.error(f"[INFRA] ❌ News start error: {e}", exc_info=True)
+            
+            # Whale scheduler
+            if cm.whale_scheduler:
+                try:
+                    task = asyncio.create_task(
+                        self._run_whale_scheduler(cm.whale_scheduler),
+                        name="WhaleScheduler"
+                    )
+                    self._running_tasks.append(task)
+                    started.append('whale')
+                    logger.info("[INFRA] ✅ Whale task started")
+                except Exception as e:
+                    logger.error(f"[INFRA] ❌ Whale start error: {e}", exc_info=True)
+            
+            # Trading system
+            if cm.has_trading():
+                try:
+                    task = asyncio.create_task(
+                        self._run_trading_system(cm.trading_system),
+                        name="TradingSystem"
+                    )
+                    self._running_tasks.append(task)
+                    started.append('trading')
+                    logger.info("[INFRA] ✅ Trading task started")
+                except Exception as e:
+                    logger.error(f"[INFRA] ❌ Trading start error: {e}", exc_info=True)
+            
+            # Bot application
+            if cm.bot_application:
+                try:
+                    task = asyncio.create_task(
+                        self._run_bot_application(cm.bot_application),
+                        name="BotApplication"
+                    )
+                    self._running_tasks.append(task)
+                    started.append('bot')
+                    logger.info("[INFRA] ✅ Bot task started")
+                except Exception as e:
+                    logger.error(f"[INFRA] ❌ Bot start error: {e}", exc_info=True)
+            
+            logger.info("="*80)
+            logger.info(f"[INFRA] 📊 Started {len(started)} tasks: {', '.join(started)}")
+            logger.info("="*80)
+            
+            return len(started) > 0
         
         except Exception as e:
-            logger.error(f"❌ Failed to initialize task manager: {e}", exc_info=True)
+            logger.error(f"[INFRA] ❌ Task start failed: {e}", exc_info=True)
             return False
     
-    async def start_tasks(self) -> bool:
+    async def _run_news_processor(self, processor: Any) -> None:
         """
-        Запуск всех задач
+        Wrapper для запуска news processor
         
-        Returns:
-            bool: True если успешно
+        Args:
+            processor: News processor instance
         """
-        if not self.task_manager:
-            logger.error("Task manager not initialized")
-            return False
-        
         try:
-            logger.info("Starting all tasks...")
-            await self.task_manager.start_all_tasks()
-            logger.info("✅ All tasks started")
-            return True
+            logger.info("[NEWS] Starting processor...")
+            
+            if hasattr(processor, 'run'):
+                await processor.run()
+            elif hasattr(processor, 'start'):
+                await processor.start()
+            else:
+                logger.warning("[NEWS] No run/start method found")
         
+        except asyncio.CancelledError:
+            logger.info("[NEWS] Task cancelled")
+            raise
         except Exception as e:
-            logger.error(f"❌ Failed to start tasks: {e}", exc_info=True)
-            return False
+            logger.error(f"[NEWS] Task error: {e}", exc_info=True)
+            self.core.statistics.increment_errors()
     
-    async def stop_tasks(self) -> None:
-        """Остановка всех задач"""
-        if self.task_manager:
-            try:
-                await self.task_manager.stop_all_tasks()
-                logger.info("✅ Tasks stopped")
-            except Exception as e:
-                logger.error(f"❌ Error stopping tasks: {e}", exc_info=True)
+    async def _run_whale_scheduler(self, scheduler: Any) -> None:
+        """
+        Wrapper для запуска whale scheduler
+        
+        Args:
+            scheduler: Whale scheduler instance
+        """
+        try:
+            logger.info("[WHALE] Starting scheduler...")
+            
+            if hasattr(scheduler, 'run'):
+                await scheduler.run()
+            elif hasattr(scheduler, 'start'):
+                await scheduler.start()
+            else:
+                logger.warning("[WHALE] No run/start method found")
+        
+        except asyncio.CancelledError:
+            logger.info("[WHALE] Task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"[WHALE] Task error: {e}", exc_info=True)
+            self.core.statistics.increment_errors()
+    
+    async def _run_trading_system(self, system: Any) -> None:
+        """
+        Wrapper для запуска trading system
+        
+        Args:
+            system: Trading system instance
+        """
+        try:
+            logger.info("[TRADING] Starting system...")
+            
+            if hasattr(system, 'run'):
+                await system.run()
+            elif hasattr(system, 'start'):
+                await system.start()
+            else:
+                logger.warning("[TRADING] No run/start method found")
+        
+        except asyncio.CancelledError:
+            logger.info("[TRADING] Task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"[TRADING] Task error: {e}", exc_info=True)
+            self.core.statistics.increment_errors()
+    
+    async def _run_bot_application(self, bot_app: Any) -> None:
+        """
+        Wrapper для запуска bot application
+        
+        Args:
+            bot_app: Bot application instance
+        """
+        try:
+            logger.info("[BOT] Starting application...")
+            
+            if hasattr(bot_app, 'run_polling'):
+                await bot_app.run_polling()
+            elif hasattr(bot_app, 'run'):
+                await bot_app.run()
+            else:
+                logger.warning("[BOT] No run_polling/run method found")
+        
+        except asyncio.CancelledError:
+            logger.info("[BOT] Task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"[BOT] Task error: {e}", exc_info=True)
+            self.core.statistics.increment_errors()
+    
+    async def stop_business_tasks(self) -> None:
+        """Остановка всех business задач"""
+        logger.info("[INFRA] Stopping business tasks...")
+        
+        # Отменяем все задачи
+        for task in self._running_tasks:
+            if not task.done():
+                task.cancel()
+        
+        # Ждем завершения с обработкой исключений
+        if self._running_tasks:
+            await asyncio.gather(*self._running_tasks, return_exceptions=True)
+        
+        self._running_tasks.clear()
+        logger.info("[INFRA] ✅ Business tasks stopped")
     
     async def wait_for_completion(self) -> None:
-        """Ожидание завершения задач или shutdown signal"""
-        if not self.task_manager:
-            logger.warning("Task manager not initialized, waiting for shutdown event...")
-            await self.shutdown_event.wait()
-            return
+        """
+        Ожидание завершения задач или shutdown signal
+        
+        ИСПРАВЛЕНО v5.2:
+        - Создаем shutdown_task ДО wait()
+        - Правильная проверка завершенных задач
+        - Корректная отмена pending задач
+        """
+        logger.info("[INFRA] Waiting for completion or shutdown signal...")
         
         try:
-            logger.info("Waiting for task completion or shutdown signal...")
+            if not self._running_tasks:
+                # Нет задач - просто ждем shutdown
+                logger.info("[INFRA] No tasks running, waiting for shutdown event...")
+                await self.shutdown_event.wait()
+                return
             
-            done = await self.task_manager.wait_for_completion()
+            # Создаем shutdown task ДО wait() чтобы иметь на него ссылку
+            shutdown_task = asyncio.create_task(
+                self.shutdown_event.wait(),
+                name="ShutdownWaiter"
+            )
             
-            if done:
-                self.task_manager.handle_completed_tasks(done)
-                logger.info("Tasks completed, initiating shutdown...")
+            # Ждем пока завершится ЛЮБАЯ задача или shutdown
+            all_tasks = self._running_tasks + [shutdown_task]
+            
+            done, pending = await asyncio.wait(
+                all_tasks,
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # Проверяем что завершилось
+            shutdown_triggered = False
+            
+            for task in done:
+                task_name = task.get_name()
+                
+                if task_name == "ShutdownWaiter":
+                    # Shutdown event был установлен
+                    logger.info("[INFRA] ⏹️ Shutdown signal received")
+                    shutdown_triggered = True
+                else:
+                    # Business задача завершилась
+                    logger.warning(f"[INFRA] ⚠️ Task {task_name} completed unexpectedly")
+                    
+                    # Проверяем exception
+                    try:
+                        exc = task.exception()
+                        if exc:
+                            logger.error(f"[INFRA] Task {task_name} failed: {exc}")
+                    except asyncio.CancelledError:
+                        pass
+                    
+                    # Устанавливаем shutdown
+                    shutdown_triggered = True
+            
+            # Если shutdown триггернулся - устанавливаем event
+            if shutdown_triggered and not self.shutdown_event.is_set():
                 self.shutdown_event.set()
+            
+            # Отменяем pending задачи
+            for task in pending:
+                if not task.done():
+                    task.cancel()
         
         except Exception as e:
-            logger.error(f"❌ Error waiting for completion: {e}", exc_info=True)
+            logger.error(f"[INFRA] ❌ Wait error: {e}", exc_info=True)
             self.shutdown_event.set()
     
     def request_shutdown(self) -> None:
-        """Запрос на остановку"""
+        """Запрос на graceful shutdown"""
+        logger.info("[INFRA] Shutdown requested")
         self.shutdown_event.set()
 
 
 class IntegratedCryptoMonitor:
     """
-    Production-ready интегрированная система мониторинга v5.0
+    Production-Ready Integrated Crypto Monitor v5.2
     
-    Архитектура:
-    ------------
-    - MonitorCore: Rate limiting, resource monitoring, health checks
-    - MonitorBusinessLayer: News, whale, trading, bot (lazy-loaded)
-    - MonitorInfrastructure: HTTP server, task manager
+    Main monitoring system coordinator.
     
-    Инициализация:
-    --------------
-    1. __init__: Создание core компонентов
-    2. initialize(): Async загрузка business компонентов
-    3. run(): Запуск сервисов
+    ИСПРАВЛЕНО v5.2:
+    - Правильный wait_for_completion
+    - Убран двойной cleanup (только через stop())
+    - Все методы существуют
     
-    Attributes:
-        core: Core компоненты (rate limiter, monitors, statistics)
-        business: Business компоненты (news, whale, trading, bot)
-        infrastructure: Infrastructure (HTTP, tasks, shutdown)
-        running: Флаг работы системы
-        start_time: Время запуска
+    Architecture:
+    - Core: Rate limiter, monitors, statistics
+    - Business: News, whale, trading, bot
+    - Infrastructure: HTTP, tasks, shutdown
+    
+    Lifecycle:
+    1. __init__: Core initialization
+    2. initialize(): Business components loading
+    3. run(): Start services and wait
+    4. stop(): Graceful shutdown
     """
     
-    VERSION = "5.0.0"
+    VERSION = "5.2.0"
     
     def __init__(self, max_memory_mb: int = 450):
         """
         Инициализация integrated crypto monitor
         
-        Создает только core компоненты без внешних зависимостей.
-        Business компоненты загружаются через initialize().
-        
         Args:
-            max_memory_mb: Максимальный объем памяти
+            max_memory_mb: Лимит памяти в MB
         """
         self._print_init_banner()
         
-        # Core компоненты (без внешних зависимостей)
+        # Core layer (без зависимостей)
         self.core = MonitorCore(max_memory_mb=max_memory_mb)
         
-        # Business layer (будет инициализирован в initialize())
+        # Business layer (lazy loading)
         self.business = MonitorBusinessLayer()
         
-        # Infrastructure (зависит от core и business)
+        # Infrastructure layer
         self.infrastructure = MonitorInfrastructure(self.core, self.business)
         
-        # Состояние
+        # State
         self.running = False
         self.start_time: Optional[datetime] = None
         self._fully_initialized = False
@@ -441,11 +606,8 @@ class IntegratedCryptoMonitor:
         """
         Async инициализация business компонентов и infrastructure
         
-        Вызывается перед run() для загрузки компонентов с
-        возможными циклическими зависимостями.
-        
         Returns:
-            bool: True если инициализация успешна
+            bool: True если успешно
         """
         if self._fully_initialized:
             logger.debug("Monitor already fully initialized")
@@ -453,29 +615,27 @@ class IntegratedCryptoMonitor:
         
         try:
             logger.info("="*80)
-            logger.info("🔄 Initializing IntegratedCryptoMonitor v5.0...")
+            logger.info(f"🔄 Initializing Monitor v{self.VERSION}...")
             logger.info("="*80)
             
-            # Инициализируем business layer
+            # Business layer
             if not await self.business.initialize():
-                logger.error("❌ Business layer initialization failed")
+                logger.error("❌ Business layer init failed")
                 return False
             
-            # Подключаем rate limiter к whale scheduler
+            # Connections
             self._connect_rate_limiter()
-            
-            # Патчим bot handlers
             self._patch_bot_handlers()
             
-            # Инициализируем HTTP server
+            # HTTP server
             if not await self.infrastructure.initialize_http_server():
-                logger.error("❌ HTTP server initialization failed")
+                logger.error("❌ HTTP server init failed")
                 return False
             
             self._fully_initialized = True
             
             logger.info("="*80)
-            logger.info("✅ IntegratedCryptoMonitor fully initialized")
+            logger.info("✅ Monitor fully initialized")
             logger.info("="*80)
             
             return True
@@ -490,14 +650,14 @@ class IntegratedCryptoMonitor:
             return
         
         try:
-            whale_scheduler = self.business.component_manager.whale_scheduler
+            whale = self.business.component_manager.whale_scheduler
             
-            if whale_scheduler and hasattr(whale_scheduler, 'set_rate_limiter'):
-                whale_scheduler.set_rate_limiter(self.core.rate_limiter)
+            if whale and hasattr(whale, 'set_rate_limiter'):
+                whale.set_rate_limiter(self.core.rate_limiter)
                 logger.info("✅ Rate limiter connected to whale scheduler")
         
         except Exception as e:
-            logger.debug(f"Could not connect rate limiter: {e}")
+            logger.debug(f"Rate limiter connection: {e}")
     
     def _patch_bot_handlers(self) -> None:
         """Патчинг bot handlers для мониторинга"""
@@ -515,22 +675,23 @@ class IntegratedCryptoMonitor:
                 
                 if patcher.patch_handlers(bot_app):
                     logger.info("✅ Bot handlers patched")
-                else:
-                    logger.warning("⚠️ Bot handlers patching failed")
         
         except Exception as e:
-            logger.debug(f"Could not patch bot handlers: {e}")
+            logger.debug(f"Bot handler patching: {e}")
     
     async def run(self) -> None:
         """
-        Главный цикл выполнения монитора
+        Главный цикл монитора v5.2
         
-        Последовательность:
-        1. Проверка инициализации
-        2. Запуск HTTP сервера
-        3. Запуск task manager
-        4. Ожидание completion
-        5. Cleanup
+        ИСПРАВЛЕНО v5.2:
+        - Убран _cleanup() из finally (только stop())
+        - stop() сам делает полный cleanup
+        
+        Sequence:
+        1. Start HTTP server
+        2. Start business tasks
+        3. Wait for completion
+        4. Cleanup через stop()
         """
         if not self._fully_initialized:
             logger.error("Monitor not fully initialized. Call initialize() first.")
@@ -541,25 +702,22 @@ class IntegratedCryptoMonitor:
         self.start_time = datetime.now()
         
         try:
-            # Запускаем HTTP сервер
+            # Start HTTP server
             if not await self.infrastructure.start_http_server():
-                raise RuntimeError("Failed to start HTTP server")
+                raise RuntimeError("HTTP server start failed")
             
-            # Инициализируем и запускаем task manager
-            if not await self.infrastructure.initialize_task_manager():
-                raise RuntimeError("Failed to initialize task manager")
+            # Start business tasks
+            if not await self.infrastructure.start_business_tasks():
+                raise RuntimeError("Business tasks start failed")
             
-            if not await self.infrastructure.start_tasks():
-                raise RuntimeError("Failed to start tasks")
-            
-            # Ожидаем completion
+            # Wait for completion
             await self.infrastructure.wait_for_completion()
         
         except asyncio.CancelledError:
-            logger.info("\n⏹️ Monitor tasks cancelled")
+            logger.info("\n⏹️ Monitor cancelled")
         
         except KeyboardInterrupt:
-            logger.info("\n⏹️ Received KeyboardInterrupt")
+            logger.info("\n⏹️ KeyboardInterrupt received")
         
         except Exception as e:
             logger.error(f"\n❌ Critical error in monitor: {e}", exc_info=True)
@@ -567,17 +725,22 @@ class IntegratedCryptoMonitor:
         
         finally:
             self.running = False
-            await self._cleanup()
     
     async def stop(self) -> None:
         """
-        Graceful остановка монитора
+        Graceful shutdown v5.2
         
-        Последовательность:
+        ИСПРАВЛЕНО v5.2:
+        - Включает полный cleanup
+        - Вызывается один раз
+        
+        Sequence:
         1. Request shutdown
-        2. Stop tasks
+        2. Stop business tasks
         3. Stop HTTP server
         4. Stop business components
+        5. Final statistics
+        6. Cleanup
         """
         logger.info("="*80)
         logger.info("🛑 Stopping IntegratedCryptoMonitor...")
@@ -588,41 +751,31 @@ class IntegratedCryptoMonitor:
             self.infrastructure.request_shutdown()
             
             # Stop tasks
-            await self.infrastructure.stop_tasks()
+            await self.infrastructure.stop_business_tasks()
             
-            # Stop HTTP server
+            # Stop HTTP
             await self.infrastructure.stop_http_server()
             
-            # Stop business components
+            # Stop business
             await self.business.stop_all()
+            
+            # Statistics
+            self._print_final_statistics()
+            
+            # Cleanup
+            await self.business.cleanup()
             
             logger.info("="*80)
             logger.info("✅ Monitor stopped successfully")
             logger.info("="*80)
         
         except Exception as e:
-            logger.error(f"❌ Error during stop: {e}", exc_info=True)
-    
-    async def _cleanup(self) -> None:
-        """Финальная очистка ресурсов"""
-        logger.info("Performing final cleanup...")
-        
-        try:
-            # Выводим статистику
-            self._print_final_statistics()
-            
-            # Очищаем business layer
-            await self.business.cleanup()
-            
-            logger.info("✅ Cleanup completed")
-        
-        except Exception as e:
-            logger.error(f"❌ Cleanup error: {e}", exc_info=True)
+            logger.error(f"❌ Stop error: {e}", exc_info=True)
     
     def _print_init_banner(self) -> None:
         """Вывод init banner"""
         logger.info("\n" + "="*80)
-        logger.info(f"🚀 INITIALIZING INTEGRATED CRYPTO MONITOR v{self.VERSION}")
+        logger.info(f"🚀 INITIALIZING MONITOR v{self.VERSION}")
         logger.info("="*80 + "\n")
     
     def _print_startup_banner(self) -> None:
@@ -642,7 +795,7 @@ class IntegratedCryptoMonitor:
             )
         
         except Exception as e:
-            logger.error(f"❌ Error printing startup banner: {e}", exc_info=True)
+            logger.error(f"❌ Banner error: {e}", exc_info=True)
     
     def _print_final_statistics(self) -> None:
         """Вывод финальной статистики"""
@@ -661,16 +814,16 @@ class IntegratedCryptoMonitor:
             )
         
         except Exception as e:
-            logger.error(f"❌ Error printing statistics: {e}", exc_info=True)
+            logger.error(f"❌ Statistics error: {e}", exc_info=True)
         
         logger.info("="*80)
     
     def get_status(self) -> Dict[str, Any]:
         """
-        Получение статуса монитора
+        Получить статус монитора
         
         Returns:
-            Словарь со статусом всех компонентов
+            Dict со статусом всех компонентов
         """
         try:
             uptime = None
@@ -689,16 +842,11 @@ class IntegratedCryptoMonitor:
                     'trading': self.business.has_component('trading'),
                     'bot': self.business.has_component('bot')
                 },
-                'core': self.core.get_stats(),
-                'http_server': {
-                    'running': self.infrastructure.http_server.is_running() 
-                    if self.infrastructure.http_server and hasattr(self.infrastructure.http_server, 'is_running')
-                    else None
-                }
+                'core': self.core.get_stats()
             }
         
         except Exception as e:
-            logger.error(f"❌ Error getting status: {e}", exc_info=True)
+            logger.error(f"❌ Status error: {e}", exc_info=True)
             return {
                 'version': self.VERSION,
                 'running': self.running,

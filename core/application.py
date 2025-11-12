@@ -1,26 +1,12 @@
 # core/application.py
 """
-Main Application Module v5.0
-Главный модуль приложения с интеграцией Monitor v5.0
+Main Application Module v5.1
+Интеграция с IntegratedCryptoMonitor v5.0
 
-Этот модуль является главной точкой входа для всего приложения.
-Интегрирован с IntegratedCryptoMonitor v5.0 с двухэтапной инициализацией.
-
-Архитектура v5.0:
-------------------
-- Синхронизация с Monitor v5.0 (двухэтапная инициализация)
-- Правильная последовательность инициализации компонентов
-- Production-grade error handling
-- Полное разделение ответственности
-
-Компоненты:
------------
-- Config: Конфигурация приложения
-- DatabaseManager: Управление БД
-- IntegratedCryptoMonitor v5.0: Система мониторинга
-- ShutdownManager: Graceful shutdown
-- HealthServer: Health check endpoint
-- ApplicationLifecycle: Управление жизненным циклом
+ИСПРАВЛЕНО v5.1:
+- Убран отдельный TaskManager (используется monitor.infrastructure.task_manager)
+- Упрощенная инициализация
+- Правильная интеграция с Monitor v5.0
 """
 
 import sys
@@ -28,43 +14,23 @@ import logging
 import asyncio
 from typing import Optional, Any, Dict
 
-# Импорт модулей инициализации
 from .initialization import (
     validate_environment,
     initialize_database,
     initialize_monitor
 )
 
-# Импорт компонентов системы
 from .shutdown import ShutdownManager
 from .health_server import HealthServer
-
-# Импорт lifecycle менеджера
 from .app_lifecycle.lifecycle import ApplicationLifecycle
 
 logger = logging.getLogger(__name__)
 
 
 class ApplicationComponents:
-    """
-    Контейнер для компонентов приложения
-    
-    Централизованное хранение всех компонентов для:
-    - Упрощенного доступа
-    - Валидации готовности
-    - Получения статуса
-    
-    Attributes:
-        config: Конфигурация приложения
-        db_manager: Database manager
-        monitor: IntegratedCryptoMonitor v5.0
-        shutdown_manager: Менеджер graceful shutdown
-        health_server: HTTP health check сервер
-        lifecycle: Lifecycle менеджер
-    """
+    """Контейнер компонентов приложения"""
     
     def __init__(self):
-        """Инициализация пустого контейнера"""
         self.config: Optional[Any] = None
         self.db_manager: Optional[Any] = None
         self.monitor: Optional[Any] = None
@@ -73,12 +39,7 @@ class ApplicationComponents:
         self.lifecycle: Optional[ApplicationLifecycle] = None
     
     def is_fully_initialized(self) -> bool:
-        """
-        Проверка полной инициализации всех компонентов
-        
-        Returns:
-            bool: True если все компоненты инициализированы
-        """
+        """Проверка полной инициализации"""
         return all([
             self.config is not None,
             self.db_manager is not None,
@@ -88,12 +49,7 @@ class ApplicationComponents:
         ])
     
     def get_missing_components(self) -> list:
-        """
-        Получить список неинициализированных компонентов
-        
-        Returns:
-            list: Имена компонентов которые не инициализированы
-        """
+        """Получить список неинициализированных компонентов"""
         components = {
             'config': self.config,
             'db_manager': self.db_manager,
@@ -101,441 +57,212 @@ class ApplicationComponents:
             'shutdown_manager': self.shutdown_manager,
             'health_server': self.health_server
         }
-        
-        return [name for name, component in components.items() if component is None]
-    
-    def get_status_dict(self) -> Dict[str, Any]:
-        """
-        Получить статус всех компонентов
-        
-        Returns:
-            dict: Статус каждого компонента
-        """
-        return {
-            'config': self.config is not None,
-            'db_manager': self.db_manager is not None,
-            'monitor': self.monitor is not None,
-            'shutdown_manager': self.shutdown_manager is not None,
-            'health_server': self.health_server is not None,
-            'lifecycle': self.lifecycle is not None
-        }
+        return [name for name, comp in components.items() if comp is None]
 
 
 class ComponentInitializer:
-    """
-    Инициализатор компонентов приложения
-    
-    Отвечает за последовательную инициализацию всех компонентов
-    с proper error handling и логированием.
-    
-    Последовательность инициализации:
-    1. Environment validation (config)
-    2. Database initialization
-    3. Monitor creation (v5.0 - только __init__)
-    4. Monitor async initialization
-    5. Shutdown manager
-    6. Health server
-    """
+    """Инициализатор компонентов"""
     
     def __init__(self, components: ApplicationComponents):
-        """
-        Инициализация initializer
-        
-        Args:
-            components: Контейнер компонентов для заполнения
-        """
         self.components = components
-        self._initialization_step = 0
-        self._total_steps = 6
+        self._step = 0
+        self._total = 5
     
     async def initialize_all(self) -> bool:
-        """
-        Инициализация всех компонентов
-        
-        Returns:
-            bool: True если все компоненты успешно инициализированы
-        """
-        self._print_initialization_header()
+        """Инициализация всех компонентов"""
+        self._print_header()
         
         try:
-            # Step 1: Environment validation
-            if not await self._initialize_environment():
+            if not await self._init_environment():
+                return False
+            if not await self._init_database():
+                return False
+            if not await self._init_monitor():
+                return False
+            if not await self._init_shutdown_manager():
+                return False
+            if not await self._init_health_server():
                 return False
             
-            # Step 2: Database initialization
-            if not await self._initialize_database():
-                return False
-            
-            # Step 3: Monitor creation
-            if not await self._initialize_monitor():
-                return False
-            
-            # Step 4: Monitor async initialization
-            if not await self._initialize_monitor_async():
-                return False
-            
-            # Step 5: Shutdown manager
-            if not await self._initialize_shutdown_manager():
-                return False
-            
-            # Step 6: Health server
-            if not await self._initialize_health_server():
-                return False
-            
-            self._print_initialization_success()
+            self._print_success()
             return True
-        
         except Exception as e:
-            self._print_initialization_failure(e)
+            self._print_failure(e)
             return False
     
-    async def _initialize_environment(self) -> bool:
-        """
-        Step 1: Валидация окружения и загрузка конфигурации
-        
-        Returns:
-            bool: True если успешно
-        """
-        self._initialization_step = 1
-        self._print_step_header("Environment validation")
-        
+    async def _init_environment(self) -> bool:
+        """Step 1: Environment"""
+        self._step = 1
+        self._print_step("Environment validation")
         try:
             self.components.config = validate_environment()
-            
             if not self.components.config:
-                logger.error("❌ Configuration validation failed")
+                logger.error("❌ Config validation failed")
                 return False
-            
-            logger.info("✅ Environment validated successfully")
+            logger.info("✅ Environment validated")
             logger.info("")
             return True
-        
         except Exception as e:
-            logger.error(f"❌ Environment validation failed: {e}", exc_info=True)
+            logger.error(f"❌ Environment error: {e}", exc_info=True)
             return False
     
-    async def _initialize_database(self) -> bool:
-        """
-        Step 2: Инициализация базы данных
-        
-        Returns:
-            bool: True если успешно
-        """
-        self._initialization_step = 2
-        self._print_step_header("Database initialization")
-        
+    async def _init_database(self) -> bool:
+        """Step 2: Database"""
+        self._step = 2
+        self._print_step("Database initialization")
         try:
             self.components.db_manager = await initialize_database()
-            
             if not self.components.db_manager:
-                logger.error("❌ Database initialization failed")
+                logger.error("❌ Database init failed")
                 return False
-            
-            logger.info("✅ Database initialized successfully")
+            logger.info("✅ Database initialized")
             logger.info("")
             return True
-        
         except Exception as e:
-            logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
+            logger.error(f"❌ Database error: {e}", exc_info=True)
             return False
     
-    async def _initialize_monitor(self) -> bool:
-        """
-        Step 3: Создание IntegratedCryptoMonitor
-        
-        ВАЖНО: Это только создание объекта (__init__), 
-        без async инициализации компонентов.
-        
-        Returns:
-            bool: True если успешно
-        """
-        self._initialization_step = 3
-        self._print_step_header("Monitor creation")
-        
+    async def _init_monitor(self) -> bool:
+        """Step 3: Monitor"""
+        self._step = 3
+        self._print_step("Monitor initialization")
         try:
-            # Вызываем функцию из initialization/__init__.py
-            # которая создаст MonitorInitializer и вызовет await initialize()
             self.components.monitor = await initialize_monitor(
                 self.components.config,
                 self.components.db_manager
             )
-            
             if not self.components.monitor:
-                logger.error("❌ Monitor creation failed")
+                logger.error("❌ Monitor init failed")
                 return False
-            
-            logger.info("✅ Monitor created successfully")
+            logger.info("✅ Monitor initialized")
             logger.info("")
             return True
-        
         except Exception as e:
-            logger.error(f"❌ Monitor creation failed: {e}", exc_info=True)
+            logger.error(f"❌ Monitor error: {e}", exc_info=True)
             return False
     
-    async def _initialize_monitor_async(self) -> bool:
-        """
-        Step 4: Async инициализация монитора
-        
-        Вызывает monitor.initialize() для загрузки:
-        - Business компонентов (news, whale, trading, bot)
-        - HTTP server
-        - Rate limiter connections
-        
-        Returns:
-            bool: True если успешно
-        """
-        self._initialization_step = 4
-        self._print_step_header("Monitor async initialization")
-        
-        try:
-            # Monitor уже создан и инициализирован через initialize_monitor()
-            # который внутри вызывает MonitorInitializer.initialize()
-            # Проверяем что монитор полностью готов
-            
-            if not hasattr(self.components.monitor, 'get_status'):
-                logger.error("❌ Monitor missing get_status method")
-                return False
-            
-            # Получаем статус монитора
-            status = self.components.monitor.get_status()
-            
-            if not status.get('fully_initialized', False):
-                logger.error("❌ Monitor not fully initialized")
-                logger.error(f"Monitor status: {status}")
-                return False
-            
-            logger.info("✅ Monitor fully initialized")
-            logger.info(f"   Active components: {status.get('components', {})}")
-            logger.info("")
-            return True
-        
-        except Exception as e:
-            logger.error(f"❌ Monitor async initialization failed: {e}", exc_info=True)
-            return False
-    
-    async def _initialize_shutdown_manager(self) -> bool:
-        """
-        Step 5: Создание shutdown manager
-        
-        Returns:
-            bool: True если успешно
-        """
-        self._initialization_step = 5
-        self._print_step_header("Shutdown manager initialization")
-        
+    async def _init_shutdown_manager(self) -> bool:
+        """Step 4: Shutdown manager"""
+        self._step = 4
+        self._print_step("Shutdown manager")
         try:
             self.components.shutdown_manager = ShutdownManager(
                 monitor=self.components.monitor,
                 db_manager=self.components.db_manager
             )
-            
-            if not self.components.shutdown_manager:
-                logger.error("❌ Shutdown manager creation failed")
-                return False
-            
-            logger.info("✅ Shutdown manager created successfully")
+            logger.info("✅ Shutdown manager created")
             logger.info("")
             return True
-        
         except Exception as e:
-            logger.error(f"❌ Shutdown manager creation failed: {e}", exc_info=True)
+            logger.error(f"❌ Shutdown manager error: {e}", exc_info=True)
             return False
     
-    async def _initialize_health_server(self) -> bool:
-        """
-        Step 6: Создание health server
-        
-        Returns:
-            bool: True если успешно
-        """
-        self._initialization_step = 6
-        self._print_step_header("Health server initialization")
-        
+    async def _init_health_server(self) -> bool:
+        """Step 5: Health server"""
+        self._step = 5
+        self._print_step("Health server")
         try:
             self.components.health_server = HealthServer(
                 monitor=self.components.monitor,
                 config=self.components.config
             )
-            
-            if not self.components.health_server:
-                logger.error("❌ Health server creation failed")
-                return False
-            
-            logger.info("✅ Health server created successfully")
+            logger.info("✅ Health server created")
             logger.info("")
             return True
-        
         except Exception as e:
-            logger.error(f"❌ Health server creation failed: {e}", exc_info=True)
+            logger.error(f"❌ Health server error: {e}", exc_info=True)
             return False
     
-    def _print_initialization_header(self) -> None:
-        """Вывод заголовка инициализации"""
+    def _print_header(self):
         logger.info("")
         logger.info("="*80)
         logger.info("📋 COMPONENTS INITIALIZATION SEQUENCE")
         logger.info("="*80)
         logger.info("")
     
-    def _print_step_header(self, step_name: str) -> None:
-        """Вывод заголовка шага"""
-        logger.info(f"Step {self._initialization_step}/{self._total_steps}: {step_name}")
+    def _print_step(self, name: str):
+        logger.info(f"Step {self._step}/{self._total}: {name}")
         logger.info("-" * 80)
     
-    def _print_initialization_success(self) -> None:
-        """Вывод сообщения об успешной инициализации"""
+    def _print_success(self):
         logger.info("="*80)
-        logger.info("✅ ALL COMPONENTS INITIALIZED SUCCESSFULLY")
+        logger.info("✅ ALL COMPONENTS INITIALIZED")
         logger.info("="*80)
         logger.info("")
     
-    def _print_initialization_failure(self, error: Exception) -> None:
-        """Вывод сообщения об ошибке инициализации"""
+    def _print_failure(self, error: Exception):
         logger.error("="*80)
-        logger.error("❌ COMPONENT INITIALIZATION FAILED")
+        logger.error("❌ INITIALIZATION FAILED")
         logger.error("="*80)
         logger.error(f"Error: {error}", exc_info=True)
 
 
 class Application:
     """
-    Главный класс приложения - CryptoCompass Monitoring System v5.0
+    Главный класс приложения v5.1
     
-    Интегрирован с IntegratedCryptoMonitor v5.0 с двухэтапной инициализацией.
-    
-    Responsibilities:
-    -----------------
-    - Управление жизненным циклом приложения
-    - Координация между компонентами
-    - Обработка критических ошибок
-    - Graceful shutdown
-    
-    Архитектура v5.0:
-    -----------------
-    - Синхронизация с Monitor v5.0
-    - Модульная структура с четким разделением
-    - Production-grade error handling
-    - Comprehensive logging
-    
-    Компоненты:
-    -----------
-    - Config: Конфигурация приложения
-    - DatabaseManager: Управление БД
-    - IntegratedCryptoMonitor v5.0: Система мониторинга
-    - ShutdownManager: Graceful shutdown
-    - HealthServer: HTTP health check endpoint
-    - ApplicationLifecycle: Управление жизненным циклом
+    ИСПРАВЛЕНО v5.1:
+    - Убран дублирующий TaskManager
+    - Monitor полностью управляет задачами
+    - Упрощенная архитектура
     """
     
-    VERSION = "5.0.0"
+    VERSION = "5.1.0"
     
     def __init__(self):
-        """
-        Инициализация контейнера приложения
-        
-        Создает контейнер для компонентов.
-        Реальная инициализация в _initialize_components().
-        """
         self.components = ApplicationComponents()
         logger.debug("Application container created")
     
     def run(self) -> None:
-        """
-        Главная точка входа для запуска приложения (синхронная)
-        
-        Запускает асинхронное приложение через asyncio.run()
-        
-        Exit codes:
-        - 0: нормальное завершение
-        - 1: критическая ошибка
-        """
-        self._print_application_header()
+        """Главная точка входа"""
+        self._print_header()
         
         try:
             asyncio.run(self.async_run())
-            
             logger.info("Application exited normally")
             sys.exit(0)
-        
         except KeyboardInterrupt:
-            logger.info("⚠️  Received keyboard interrupt (Ctrl+C)")
-            logger.info("Application stopped by user")
+            logger.info("⚠️ Keyboard interrupt")
             sys.exit(0)
-        
         except Exception as e:
             self._print_critical_error(e)
             sys.exit(1)
     
     async def async_run(self) -> None:
-        """
-        Асинхронный запуск приложения
-        
-        Последовательность:
-        1. Инициализация компонентов
-        2. Создание lifecycle менеджера
-        3. Запуск приложения
-        4. Graceful shutdown
-        """
+        """Асинхронный запуск"""
         try:
-            # Инициализация компонентов
             if not await self._initialize_components():
                 raise RuntimeError("Component initialization failed")
             
-            # Создание lifecycle менеджера
             self._create_lifecycle_manager()
             
-            # Запуск приложения
             await self.components.lifecycle.run_until_stopped()
-        
         except asyncio.CancelledError:
-            logger.info("⚠️  Application task cancelled")
+            logger.info("⚠️ Cancelled")
             raise
-        
         except Exception as e:
-            logger.error("❌ Critical error in async_run", exc_info=True)
+            logger.error("❌ Critical error", exc_info=True)
             raise
     
     async def _initialize_components(self) -> bool:
-        """
-        Инициализация всех компонентов приложения
-        
-        Использует ComponentInitializer для последовательной
-        инициализации с proper error handling.
-        
-        Returns:
-            bool: True если все компоненты инициализированы
-        """
+        """Инициализация компонентов"""
         initializer = ComponentInitializer(self.components)
-        
         success = await initializer.initialize_all()
         
         if not success:
             missing = self.components.get_missing_components()
-            logger.error(f"❌ Initialization failed. Missing components: {missing}")
+            logger.error(f"❌ Missing: {missing}")
             return False
         
         return True
     
     def _create_lifecycle_manager(self) -> None:
-        """
-        Создание lifecycle менеджера
-        
-        Lifecycle менеджер управляет полным жизненным циклом:
-        - Валидация готовности
-        - Запуск фоновых задач
-        - Мониторинг работы
-        - Graceful shutdown
-        
-        Raises:
-            RuntimeError: Если не все компоненты инициализированы
-        """
-        logger.info("Creating application lifecycle manager...")
+        """Создание lifecycle manager"""
+        logger.info("Creating lifecycle manager...")
         
         if not self.components.is_fully_initialized():
             missing = self.components.get_missing_components()
-            error_msg = f"Cannot create lifecycle manager: missing components: {missing}"
-            logger.error(f"❌ {error_msg}")
-            raise RuntimeError(error_msg)
+            raise RuntimeError(f"Missing components: {missing}")
         
         try:
             self.components.lifecycle = ApplicationLifecycle(
@@ -545,69 +272,49 @@ class Application:
                 shutdown_manager=self.components.shutdown_manager,
                 health_server=self.components.health_server
             )
-            
-            logger.info("✅ Lifecycle manager created successfully")
-        
+            logger.info("✅ Lifecycle manager created")
         except Exception as e:
-            logger.error(f"❌ Failed to create lifecycle manager: {e}", exc_info=True)
-            raise RuntimeError(f"Lifecycle manager creation failed: {e}") from e
+            logger.error(f"❌ Lifecycle creation failed: {e}", exc_info=True)
+            raise
     
     def get_status(self) -> Dict[str, Any]:
-        """
-        Получение статуса приложения
-        
-        Returns:
-            dict: Статус всех компонентов
-        """
+        """Получить статус"""
         if self.components.lifecycle:
             return self.components.lifecycle.get_status()
-        
         return {
             'version': self.VERSION,
             'running': False,
-            'initialized': False,
-            'components': self.components.get_status_dict(),
-            'error': 'Application not started'
+            'error': 'Not started'
         }
     
-    def _print_application_header(self) -> None:
-        """Вывод заголовка приложения"""
+    def _print_header(self):
         logger.info("="*80)
         logger.info(f"🚀 CRYPTO COMPASS v{self.VERSION}")
-        logger.info("   Integrated Cryptocurrency Monitoring System")
         logger.info("="*80)
     
-    def _print_critical_error(self, error: Exception) -> None:
-        """Вывод критической ошибки"""
+    def _print_critical_error(self, error: Exception):
         logger.error("="*80)
-        logger.error("❌ CRITICAL ERROR IN APPLICATION")
+        logger.error("❌ CRITICAL ERROR")
         logger.error("="*80)
         logger.error(f"Error: {error}", exc_info=True)
         logger.error("="*80)
     
     def __repr__(self) -> str:
-        """Строковое представление"""
         status = "running" if (
             self.components.lifecycle and 
             self.components.lifecycle.is_running
         ) else "stopped"
-        return f"Application(v{self.VERSION}, status={status})"
+        return f"Application(v{self.VERSION}, {status})"
 
 
 def main() -> None:
-    """
-    Главная точка входа для запуска приложения
-    
-    Создает и запускает Application.
-    Все ошибки обрабатываются внутри Application.run()
-    """
-    logger.info("Starting CryptoCompass application...")
-    
+    """Точка входа"""
+    logger.info("Starting application...")
     try:
         app = Application()
         app.run()
     except Exception as e:
-        logger.critical(f"Failed to start application: {e}", exc_info=True)
+        logger.critical(f"Failed to start: {e}", exc_info=True)
         sys.exit(1)
 
 
