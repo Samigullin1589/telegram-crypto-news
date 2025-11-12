@@ -279,10 +279,7 @@ class MonitorFactory:
             
             logger.debug("[MONITOR-FACTORY] Creating IntegratedCryptoMonitor...")
             
-            monitor = IntegratedCryptoMonitor(
-                config=self.config,
-                db_manager=self.db_manager
-            )
+            monitor = IntegratedCryptoMonitor()
             
             logger.info("[MONITOR-FACTORY] ✅ Monitor created successfully")
             
