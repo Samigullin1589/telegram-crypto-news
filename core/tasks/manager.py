@@ -1,3 +1,4 @@
+# file: core/tasks/manager.py
 """
 Task Manager Module v3.0
 Управление всеми фоновыми задачами приложения
@@ -215,7 +216,7 @@ class TaskManager:
     async def _start_whale_task(self, results: Dict[str, Any]):
         """Запуск whale task"""
         try:
-            logger.info("🐋 Starting whale monitoring task...")
+            logger.info("🐋 Starting whale task...")
             
             scheduler = self.monitor.component_manager.whale_scheduler
             self.whale_task = await start_whale_task(scheduler, self.config)
@@ -235,12 +236,28 @@ class TaskManager:
             logger.error(f"❌ Error starting whale task: {e}", exc_info=True)
     
     async def _start_trading_task(self, results: Dict[str, Any]):
-        """Запуск trading task"""
+        """
+        Запуск trading task
+        
+        ИСПРАВЛЕНО: Передаём правильные параметры в start_trading_task()
+        """
         try:
             logger.info("📈 Starting trading task...")
             
-            system = self.monitor.component_manager.trading_system
-            self.trading_task = await start_trading_task(system, self.config)
+            # ИСПРАВЛЕНИЕ: Передаём все необходимые параметры
+            trading_system = self.monitor.component_manager.trading_system
+            health_monitor = self.monitor.health_monitor
+            resource_monitor = self.monitor.resource_monitor
+            statistics = self.monitor.statistics
+            shutdown_event = self.monitor.shutdown_event
+            
+            self.trading_task = await start_trading_task(
+                trading_system=trading_system,
+                health_monitor=health_monitor,
+                resource_monitor=resource_monitor,
+                statistics=statistics,
+                shutdown_event=shutdown_event
+            )
             
             if self.trading_task:
                 results['trading'] = {'status': 'started', 'task_id': id(self.trading_task)}
@@ -257,12 +274,26 @@ class TaskManager:
             logger.error(f"❌ Error starting trading task: {e}", exc_info=True)
     
     async def _start_bot_task(self, results: Dict[str, Any]):
-        """Запуск bot task"""
+        """
+        Запуск bot task
+        
+        ИСПРАВЛЕНО: Передаём правильные параметры в start_bot_task()
+        """
         try:
             logger.info("🤖 Starting bot task...")
             
+            # ИСПРАВЛЕНИЕ: Передаём все необходимые параметры
             bot_app = self.monitor.component_manager.bot_app
-            self.bot_task = await start_bot_task(bot_app, self.config)
+            health_monitor = self.monitor.health_monitor
+            statistics = self.monitor.statistics
+            shutdown_event = self.monitor.shutdown_event
+            
+            self.bot_task = await start_bot_task(
+                bot_application=bot_app,
+                health_monitor=health_monitor,
+                statistics=statistics,
+                shutdown_event=shutdown_event
+            )
             
             if self.bot_task:
                 results['bot'] = {'status': 'started', 'task_id': id(self.bot_task)}
