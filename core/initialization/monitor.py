@@ -1,9 +1,9 @@
 # core/initialization/monitor.py
 """
-Monitor Initializer - Production Ready
-=======================================
+Monitor Initializer - Production Ready v5.0
+============================================
 
-Инициализация системы мониторинга с полным разделением ответственности.
+Инициализация системы мониторинга с интеграцией IntegratedCryptoMonitor v5.0.
 
 Components:
 -----------
@@ -11,28 +11,19 @@ Components:
 - MonitorDependencyChecker: Проверка зависимостей
 - MonitorFactory: Создание монитора
 - MonitorValidator: Валидация монитора
-- MonitorInitializer: Координация инициализации
+- MonitorInitializer: Координация полной инициализации
 
-Architecture:
--------------
-Обеспечивает:
-- Корректное создание и настройку IntegratedCryptoMonitor
-- Проверку зависимостей перед инициализацией
-- Валидацию конфигурации и параметров
-- Graceful shutdown с освобождением ресурсов
-
-Production Ready:
------------------
-- Полная обработка ошибок
-- Dependency injection
-- Валидация всех компонентов
-- Детальное логирование
+Architecture v5.0:
+------------------
+- Интеграция с двухэтапной инициализацией Monitor v5.0
+- MonitorInitializer полностью инициализирует монитор (включая async initialize())
+- Production-grade error handling
+- Comprehensive validation
 """
 
-from typing import Optional, Any, Dict, List, TYPE_CHECKING
+from typing import Optional, Any, Dict, TYPE_CHECKING
 from core.logging_config import get_logger
 
-# TYPE_CHECKING для избежания циклического импорта
 if TYPE_CHECKING:
     from core.monitor import IntegratedCryptoMonitor
     from app.config import Config
@@ -44,11 +35,10 @@ class MonitorConfigValidator:
     """
     Валидатор конфигурации монитора
     
-    Responsibilities:
-    -----------------
-    - Проверка наличия config объекта
-    - Валидация структуры конфигурации
-    - Проверка обязательных параметров
+    Проверяет:
+    - Наличие config объекта
+    - Структуру конфигурации
+    - Обязательные параметры
     """
     
     def __init__(self):
@@ -60,7 +50,7 @@ class MonitorConfigValidator:
         Валидация конфигурации
         
         Args:
-            config: Объект конфигурации для валидации
+            config: Объект конфигурации
             
         Returns:
             bool: True если конфигурация валидна
@@ -70,14 +60,12 @@ class MonitorConfigValidator:
                 logger.error("[MONITOR-CONFIG] Config is None")
                 return False
             
-            logger.debug("[MONITOR-CONFIG] Validating config object...")
+            logger.debug("[MONITOR-CONFIG] Validating config...")
             
-            # Проверяем что это объект Config
             if not self._is_config_object(config):
                 logger.error("[MONITOR-CONFIG] Invalid config type")
                 return False
             
-            # Проверяем обязательные атрибуты
             if not self._validate_required_attributes(config):
                 return False
             
@@ -89,48 +77,34 @@ class MonitorConfigValidator:
             return False
     
     def _is_config_object(self, config: Any) -> bool:
-        """
-        Проверка что объект является Config
-        
-        Args:
-            config: Объект для проверки
-            
-        Returns:
-            bool: True если объект Config
-        """
-        # Проверяем наличие основных атрибутов Config
+        """Проверка типа config объекта"""
         required_attrs = ['telegram', 'database', 'features']
         
         for attr in required_attrs:
             if not hasattr(config, attr):
-                logger.error(f"[MONITOR-CONFIG] Config missing attribute: {attr}")
+                logger.error(f"[MONITOR-CONFIG] Missing attribute: {attr}")
                 return False
         
-        logger.debug("[MONITOR-CONFIG] ✅ Config object type valid")
+        logger.debug("[MONITOR-CONFIG] ✅ Config type valid")
         return True
     
     def _validate_required_attributes(self, config: Any) -> bool:
-        """
-        Проверка обязательных атрибутов конфигурации
-        
-        Args:
-            config: Объект конфигурации
-            
-        Returns:
-            bool: True если все атрибуты присутствуют
-        """
+        """Проверка обязательных атрибутов"""
         try:
-            # Проверяем telegram config
+            # Telegram config
             if not hasattr(config.telegram, 'bot_token'):
                 logger.error("[MONITOR-CONFIG] Missing telegram.bot_token")
                 return False
             
-            # Проверяем database config
-            if not hasattr(config.database, 'database_url'):
-                logger.error("[MONITOR-CONFIG] Missing database.database_url")
+            # Database config - поддерживаем и db_path и database_url
+            has_db_path = hasattr(config.database, 'db_path')
+            has_db_url = hasattr(config.database, 'database_url')
+            
+            if not (has_db_path or has_db_url):
+                logger.error("[MONITOR-CONFIG] Missing database path/url")
                 return False
             
-            logger.debug("[MONITOR-CONFIG] ✅ All required attributes present")
+            logger.debug("[MONITOR-CONFIG] ✅ Required attributes present")
             return True
         
         except Exception as e:
@@ -142,11 +116,10 @@ class MonitorDependencyChecker:
     """
     Проверка зависимостей монитора
     
-    Responsibilities:
-    -----------------
-    - Проверка наличия необходимых модулей
-    - Валидация database manager
-    - Проверка доступности компонентов
+    Проверяет:
+    - Наличие необходимых модулей
+    - Валидность database manager
+    - Доступность компонентов
     """
     
     def __init__(self):
@@ -158,19 +131,17 @@ class MonitorDependencyChecker:
         Проверка всех зависимостей
         
         Args:
-            db_manager: Database manager для проверки (опционально)
+            db_manager: Database manager (опционально)
             
         Returns:
             bool: True если все зависимости доступны
         """
         try:
-            logger.debug("[MONITOR-DEPS] Checking all dependencies...")
+            logger.debug("[MONITOR-DEPS] Checking dependencies...")
             
-            # Проверка модулей
             if not self._check_required_modules():
                 return False
             
-            # Проверка database manager если передан
             if db_manager is not None:
                 if not self._validate_db_manager(db_manager):
                     return False
@@ -179,16 +150,11 @@ class MonitorDependencyChecker:
             return True
         
         except Exception as e:
-            logger.error(f"[MONITOR-DEPS] ❌ Dependency check error: {e}", exc_info=True)
+            logger.error(f"[MONITOR-DEPS] ❌ Check error: {e}", exc_info=True)
             return False
     
     def _check_required_modules(self) -> bool:
-        """
-        Проверка необходимых модулей
-        
-        Returns:
-            bool: True если все модули доступны
-        """
+        """Проверка наличия модулей"""
         required_modules = [
             'core.monitor',
             'core.logging_config',
@@ -198,36 +164,27 @@ class MonitorDependencyChecker:
         for module_name in required_modules:
             try:
                 __import__(module_name)
-                logger.debug(f"[MONITOR-DEPS] ✅ Module available: {module_name}")
+                logger.debug(f"[MONITOR-DEPS] ✅ Module: {module_name}")
             except ImportError as e:
-                logger.error(f"[MONITOR-DEPS] ❌ Module unavailable: {module_name} - {e}")
+                logger.error(f"[MONITOR-DEPS] ❌ Missing: {module_name} - {e}")
                 return False
         
         return True
     
     def _validate_db_manager(self, db_manager: Any) -> bool:
-        """
-        Валидация database manager
-        
-        Args:
-            db_manager: Database manager для проверки
-            
-        Returns:
-            bool: True если db_manager валиден
-        """
+        """Валидация database manager"""
         if db_manager is None:
-            logger.warning("[MONITOR-DEPS] Database manager is None (may be optional)")
+            logger.warning("[MONITOR-DEPS] DB manager is None (optional)")
             return True
         
-        # Проверяем основные методы database manager
         required_methods = ['get_session', 'close']
         
         for method in required_methods:
             if not hasattr(db_manager, method):
-                logger.error(f"[MONITOR-DEPS] DB manager missing method: {method}")
+                logger.error(f"[MONITOR-DEPS] Missing method: {method}")
                 return False
         
-        logger.debug("[MONITOR-DEPS] ✅ Database manager valid")
+        logger.debug("[MONITOR-DEPS] ✅ DB manager valid")
         return True
 
 
@@ -235,11 +192,8 @@ class MonitorFactory:
     """
     Фабрика для создания монитора
     
-    Responsibilities:
-    -----------------
-    - Создание IntegratedCryptoMonitor
-    - Инъекция зависимостей
-    - Обработка ошибок создания
+    Создаёт IntegratedCryptoMonitor через __init__
+    (без async инициализации)
     """
     
     def __init__(self, config: Any, db_manager: Optional[Any] = None):
@@ -247,8 +201,8 @@ class MonitorFactory:
         Инициализация фабрики
         
         Args:
-            config: Объект конфигурации
-            db_manager: Database manager (опционально)
+            config: Конфигурация
+            db_manager: Database manager
         """
         self.config = config
         self.db_manager = db_manager
@@ -264,32 +218,30 @@ class MonitorFactory:
         try:
             logger.info("[MONITOR-FACTORY] Creating IntegratedCryptoMonitor...")
             
-            # Lazy import для избежания циклического импорта
+            # Lazy import
             from core.monitor import IntegratedCryptoMonitor
             
-            # Создаем монитор
-            # IntegratedCryptoMonitor не требует аргументов в __init__
-            monitor = IntegratedCryptoMonitor()
+            # Получаем max_memory из конфигурации если есть
+            max_memory = 450  # default
+            if hasattr(self.config, 'MAX_MEMORY_MB'):
+                max_memory = self.config.MAX_MEMORY_MB
+            
+            # Создаём монитор (только __init__, без async initialize)
+            monitor = IntegratedCryptoMonitor(max_memory_mb=max_memory)
             
             if monitor is None:
-                logger.error("[MONITOR-FACTORY] ❌ Failed to create monitor instance")
+                logger.error("[MONITOR-FACTORY] ❌ Failed to create monitor")
                 return None
             
-            logger.info("[MONITOR-FACTORY] ✅ Monitor instance created successfully")
+            logger.info("[MONITOR-FACTORY] ✅ Monitor instance created")
             return monitor
         
         except ImportError as e:
-            logger.error(
-                f"[MONITOR-FACTORY] ❌ Failed to import IntegratedCryptoMonitor: {e}",
-                exc_info=True
-            )
+            logger.error(f"[MONITOR-FACTORY] ❌ Import failed: {e}", exc_info=True)
             return None
         
         except Exception as e:
-            logger.error(
-                f"[MONITOR-FACTORY] ❌ Monitor creation failed: {e}",
-                exc_info=True
-            )
+            logger.error(f"[MONITOR-FACTORY] ❌ Creation failed: {e}", exc_info=True)
             return None
 
 
@@ -297,11 +249,10 @@ class MonitorValidator:
     """
     Валидатор созданного монитора
     
-    Responsibilities:
-    -----------------
-    - Проверка структуры монитора
-    - Валидация методов
-    - Проверка готовности к работе
+    Проверяет:
+    - Структуру монитора
+    - Наличие методов
+    - Callable методов
     """
     
     def __init__(self):
@@ -316,20 +267,18 @@ class MonitorValidator:
             monitor: Монитор для валидации
             
         Returns:
-            bool: True если монитор валиден
+            bool: True если валиден
         """
         try:
             if monitor is None:
                 logger.error("[MONITOR-VAL] ❌ Monitor is None")
                 return False
             
-            logger.debug("[MONITOR-VAL] Validating monitor instance...")
+            logger.debug("[MONITOR-VAL] Validating monitor...")
             
-            # Проверка обязательных методов
             if not self._validate_methods(monitor):
                 return False
             
-            # Проверка callable методов
             if not self._validate_callable(monitor):
                 return False
             
@@ -341,175 +290,142 @@ class MonitorValidator:
             return False
     
     def _validate_methods(self, monitor: 'IntegratedCryptoMonitor') -> bool:
-        """
-        Проверка наличия обязательных методов
-        
-        Args:
-            monitor: Монитор для проверки
-            
-        Returns:
-            bool: True если все методы присутствуют
-        """
-        # IntegratedCryptoMonitor использует 'run()' и 'stop()'
-        required_methods = ['run', 'stop']
+        """Проверка наличия методов"""
+        required_methods = ['initialize', 'run', 'stop', 'get_status']
         
         for method in required_methods:
             if not hasattr(monitor, method):
-                logger.error(f"[MONITOR-VAL] ❌ Monitor missing method: {method}")
+                logger.error(f"[MONITOR-VAL] ❌ Missing method: {method}")
                 return False
-            logger.debug(f"[MONITOR-VAL] ✅ Monitor has method: {method}")
+            logger.debug(f"[MONITOR-VAL] ✅ Has method: {method}")
         
         return True
     
     def _validate_callable(self, monitor: 'IntegratedCryptoMonitor') -> bool:
-        """
-        Проверка что методы callable
-        
-        Args:
-            monitor: Монитор для проверки
-            
-        Returns:
-            bool: True если методы callable
-        """
-        required_methods = ['run', 'stop']
+        """Проверка callable методов"""
+        required_methods = ['initialize', 'run', 'stop', 'get_status']
         
         for method in required_methods:
             if not callable(getattr(monitor, method)):
-                logger.error(f"[MONITOR-VAL] ❌ Method not callable: {method}")
+                logger.error(f"[MONITOR-VAL] ❌ Not callable: {method}")
                 return False
-            logger.debug(f"[MONITOR-VAL] ✅ Method callable: {method}")
+            logger.debug(f"[MONITOR-VAL] ✅ Callable: {method}")
         
         return True
 
 
 class MonitorInitializer:
     """
-    Инициализатор системы мониторинга
+    Инициализатор системы мониторинга v5.0
     
-    Координирует инициализацию IntegratedCryptoMonitor с использованием
-    валидаторов, checker'ов и factory.
-    
-    Responsibilities:
-    -----------------
-    - Координация процесса инициализации
-    - Валидация конфигурации и зависимостей
-    - Создание и проверка монитора
-    - Управление жизненным циклом
+    Полностью инициализирует IntegratedCryptoMonitor:
+    1. Валидация конфигурации
+    2. Проверка зависимостей
+    3. Создание монитора (__init__)
+    4. Async инициализация (monitor.initialize())
+    5. Валидация готовности
     
     Attributes:
-        config: Объект конфигурации
-        db_manager: Database manager (опционально)
-        monitor: Инстанс IntegratedCryptoMonitor после инициализации
+        config: Конфигурация
+        db_manager: Database manager
+        monitor: Инстанс IntegratedCryptoMonitor
     """
     
     def __init__(self, config: Any, db_manager: Optional[Any] = None):
         """
-        Инициализация monitor initializer
+        Инициализация initializer
         
         Args:
-            config: Объект конфигурации приложения
-            db_manager: Database manager (опционально)
+            config: Конфигурация приложения
+            db_manager: Database manager
         """
         self.config = config
         self.db_manager = db_manager
         self.monitor: Optional['IntegratedCryptoMonitor'] = None
-        self._initialized: bool = False
+        self._initialized = False
         
-        # Инициализация компонентов
+        # Компоненты инициализации
         self.config_validator = MonitorConfigValidator()
         self.dependency_checker = MonitorDependencyChecker()
         self.monitor_validator = MonitorValidator()
         
         logger.debug("[MONITOR-INIT] MonitorInitializer created")
     
-    def initialize(self) -> bool:
+    async def initialize(self) -> Optional['IntegratedCryptoMonitor']:
         """
-        Инициализация системы мониторинга
+        Полная инициализация монитора
         
-        Выполняет полный цикл инициализации:
+        Выполняет все шаги:
         1. Валидация конфигурации
         2. Проверка зависимостей
-        3. Создание IntegratedCryptoMonitor
-        4. Валидация монитора
+        3. Создание монитора
+        4. Async инициализация монитора
+        5. Валидация монитора
         
         Returns:
-            bool: True если инициализация успешна
+            IntegratedCryptoMonitor или None при ошибке
         """
-        if self._initialized:
-            logger.debug("[MONITOR-INIT] Monitor already initialized")
-            return True
+        if self._initialized and self.monitor is not None:
+            logger.debug("[MONITOR-INIT] Already initialized")
+            return self.monitor
         
         try:
             logger.info("[MONITOR-INIT] Starting monitor initialization...")
             
             # Шаг 1: Валидация конфигурации
             if not self._validate_configuration():
-                return False
+                return None
             
             # Шаг 2: Проверка зависимостей
             if not self._check_dependencies():
-                return False
+                return None
             
-            # Шаг 3: Создание монитора
+            # Шаг 3: Создание монитора (sync __init__)
             if not self._create_monitor():
-                return False
+                return None
             
-            # Шаг 4: Валидация монитора
+            # Шаг 4: Async инициализация монитора
+            if not await self._initialize_monitor_async():
+                return None
+            
+            # Шаг 5: Валидация монитора
             if not self._validate_monitor():
-                return False
+                return None
             
             self._initialized = True
-            logger.info("[MONITOR-INIT] ✅ Monitor initialized successfully")
+            logger.info("[MONITOR-INIT] ✅ Monitor fully initialized")
             
-            return True
+            return self.monitor
         
         except Exception as e:
-            logger.error(
-                f"[MONITOR-INIT] ❌ Initialization failed: {e}",
-                exc_info=True
-            )
-            return False
+            logger.error(f"[MONITOR-INIT] ❌ Initialization failed: {e}", exc_info=True)
+            return None
     
     def _validate_configuration(self) -> bool:
-        """
-        Валидация конфигурации
-        
-        Returns:
-            bool: True если конфигурация валидна
-        """
-        logger.debug("[MONITOR-INIT] Step 1/4: Validating configuration...")
+        """Step 1: Валидация конфигурации"""
+        logger.debug("[MONITOR-INIT] Step 1/5: Validating configuration...")
         
         if not self.config_validator.validate(self.config):
-            logger.error("[MONITOR-INIT] ❌ Configuration validation failed")
+            logger.error("[MONITOR-INIT] ❌ Configuration invalid")
             return False
         
         logger.info("[MONITOR-INIT] ✅ Configuration validated")
         return True
     
     def _check_dependencies(self) -> bool:
-        """
-        Проверка зависимостей
-        
-        Returns:
-            bool: True если все зависимости доступны
-        """
-        logger.debug("[MONITOR-INIT] Step 2/4: Checking dependencies...")
+        """Step 2: Проверка зависимостей"""
+        logger.debug("[MONITOR-INIT] Step 2/5: Checking dependencies...")
         
         if not self.dependency_checker.check_all(self.db_manager):
-            logger.error("[MONITOR-INIT] ❌ Dependency check failed")
+            logger.error("[MONITOR-INIT] ❌ Dependencies check failed")
             return False
         
         logger.info("[MONITOR-INIT] ✅ Dependencies checked")
         return True
     
     def _create_monitor(self) -> bool:
-        """
-        Создание монитора
-        
-        Returns:
-            bool: True если монитор создан успешно
-        """
-        logger.debug("[MONITOR-INIT] Step 3/4: Creating monitor...")
+        """Step 3: Создание монитора (sync __init__)"""
+        logger.debug("[MONITOR-INIT] Step 3/5: Creating monitor...")
         
         factory = MonitorFactory(self.config, self.db_manager)
         self.monitor = factory.create_monitor()
@@ -521,14 +437,32 @@ class MonitorInitializer:
         logger.info("[MONITOR-INIT] ✅ Monitor created")
         return True
     
-    def _validate_monitor(self) -> bool:
-        """
-        Валидация созданного монитора
+    async def _initialize_monitor_async(self) -> bool:
+        """Step 4: Async инициализация монитора"""
+        logger.debug("[MONITOR-INIT] Step 4/5: Async initializing monitor...")
         
-        Returns:
-            bool: True если монитор валиден
-        """
-        logger.debug("[MONITOR-INIT] Step 4/4: Validating monitor...")
+        if self.monitor is None:
+            logger.error("[MONITOR-INIT] ❌ Monitor is None")
+            return False
+        
+        try:
+            # Вызываем monitor.initialize() для загрузки business компонентов
+            success = await self.monitor.initialize()
+            
+            if not success:
+                logger.error("[MONITOR-INIT] ❌ Monitor async initialization failed")
+                return False
+            
+            logger.info("[MONITOR-INIT] ✅ Monitor async initialized")
+            return True
+        
+        except Exception as e:
+            logger.error(f"[MONITOR-INIT] ❌ Async init error: {e}", exc_info=True)
+            return False
+    
+    def _validate_monitor(self) -> bool:
+        """Step 5: Валидация монитора"""
+        logger.debug("[MONITOR-INIT] Step 5/5: Validating monitor...")
         
         if not self.monitor_validator.validate(self.monitor):
             logger.error("[MONITOR-INIT] ❌ Monitor validation failed")
@@ -538,30 +472,15 @@ class MonitorInitializer:
         return True
     
     def get_monitor(self) -> Optional['IntegratedCryptoMonitor']:
-        """
-        Получение инициализированного монитора
-        
-        Returns:
-            IntegratedCryptoMonitor или None если не инициализирован
-        """
+        """Получить инициализированный монитор"""
         return self.monitor
     
     def is_initialized(self) -> bool:
-        """
-        Проверка состояния инициализации
-        
-        Returns:
-            bool: True если инициализация завершена успешно
-        """
+        """Проверить статус инициализации"""
         return self._initialized
     
     def get_status(self) -> Dict[str, Any]:
-        """
-        Получение статуса инициализатора
-        
-        Returns:
-            Dict[str, Any]: Информация о состоянии
-        """
+        """Получить статус initializer"""
         return {
             'initialized': self._initialized,
             'has_monitor': self.monitor is not None,
@@ -571,11 +490,7 @@ class MonitorInitializer:
         }
     
     async def shutdown(self) -> None:
-        """
-        Graceful shutdown монитора
-        
-        Корректно останавливает и освобождает ресурсы монитора.
-        """
+        """Graceful shutdown монитора"""
         if not self.monitor:
             logger.debug("[MONITOR-INIT] No monitor to shutdown")
             return
@@ -583,9 +498,7 @@ class MonitorInitializer:
         try:
             logger.info("[MONITOR-INIT] Shutting down monitor...")
             
-            # Проверяем наличие метода stop
             if hasattr(self.monitor, 'stop'):
-                # Проверяем является ли метод async
                 import asyncio
                 if asyncio.iscoroutinefunction(self.monitor.stop):
                     await self.monitor.stop()
@@ -595,7 +508,7 @@ class MonitorInitializer:
             self._initialized = False
             self.monitor = None
             
-            logger.info("[MONITOR-INIT] ✅ Monitor shut down successfully")
+            logger.info("[MONITOR-INIT] ✅ Monitor shut down")
         
         except Exception as e:
             logger.error(f"[MONITOR-INIT] ❌ Shutdown error: {e}", exc_info=True)
@@ -605,8 +518,7 @@ class MonitorInitializer:
         return (
             f"MonitorInitializer("
             f"initialized={self._initialized}, "
-            f"has_monitor={self.monitor is not None}, "
-            f"has_config={self.config is not None}"
+            f"has_monitor={self.monitor is not None}"
             f")"
         )
 

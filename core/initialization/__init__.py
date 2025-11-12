@@ -130,6 +130,9 @@ async def initialize_monitor(config: Any, db_manager: Any) -> Any:
         initializer = MonitorInitializer(config, db_manager)
         monitor = await initializer.initialize()
         
+        if monitor is None:
+            raise RuntimeError("Monitor initialization returned None")
+        
         logger.debug("Monitor initialization completed successfully")
         return monitor
         
