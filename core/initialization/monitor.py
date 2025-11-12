@@ -70,11 +70,11 @@ class MonitorConfigValidator:
             if not self._validate_required_attributes(config):
                 return False
             
-            logger.info("[MONITOR-CONFIG]  Config validation passed")
+            logger.info("[MONITOR-CONFIG] ✅ Config validation passed")
             return True
         
         except Exception as e:
-            logger.error(f"[MONITOR-CONFIG]  Validation error: {e}", exc_info=True)
+            logger.error(f"[MONITOR-CONFIG] ❌ Validation error: {e}", exc_info=True)
             return False
     
     def _is_config_object(self, config: Any) -> bool:
@@ -86,7 +86,7 @@ class MonitorConfigValidator:
                 logger.error(f"[MONITOR-CONFIG] Missing attribute: {attr}")
                 return False
         
-        logger.debug("[MONITOR-CONFIG]  Config type valid")
+        logger.debug("[MONITOR-CONFIG] ✅ Config type valid")
         return True
     
     def _validate_required_attributes(self, config: Any) -> bool:
@@ -111,11 +111,11 @@ class MonitorConfigValidator:
                 logger.error("[MONITOR-CONFIG] Missing telegram.bot_token")
                 return False
             
-            logger.debug("[MONITOR-CONFIG]  All required attributes present")
+            logger.debug("[MONITOR-CONFIG] ✅ All required attributes present")
             return True
         
         except Exception as e:
-            logger.error(f"[MONITOR-CONFIG]  Attribute validation error: {e}")
+            logger.error(f"[MONITOR-CONFIG] ❌ Attribute validation error: {e}")
             return False
 
 
@@ -155,11 +155,11 @@ class MonitorDependencyChecker:
             else:
                 logger.debug("[MONITOR-DEPS] No db_manager provided (optional)")
             
-            logger.info("[MONITOR-DEPS]  All dependencies available")
+            logger.info("[MONITOR-DEPS] ✅ All dependencies available")
             return True
         
         except Exception as e:
-            logger.error(f"[MONITOR-DEPS]  Check error: {e}", exc_info=True)
+            logger.error(f"[MONITOR-DEPS] ❌ Check error: {e}", exc_info=True)
             return False
     
     def _check_required_modules(self) -> bool:
@@ -173,9 +173,9 @@ class MonitorDependencyChecker:
         for module_name in required_modules:
             try:
                 __import__(module_name)
-                logger.debug(f"[MONITOR-DEPS]  Module: {module_name}")
+                logger.debug(f"[MONITOR-DEPS] ✅ Module: {module_name}")
             except ImportError as e:
-                logger.error(f"[MONITOR-DEPS]  Missing: {module_name} - {e}")
+                logger.error(f"[MONITOR-DEPS] ❌ Missing: {module_name} - {e}")
                 return False
         
         return True
@@ -216,10 +216,10 @@ class MonitorDependencyChecker:
         for method_name, description in required_methods.items():
             if hasattr(db_manager, method_name):
                 available_methods.append(method_name)
-                logger.debug(f"[MONITOR-DEPS]  Method '{method_name}': {description}")
+                logger.debug(f"[MONITOR-DEPS] ✅ Method '{method_name}': {description}")
             else:
                 missing_methods.append(method_name)
-                logger.warning(f"[MONITOR-DEPS]   Missing method '{method_name}': {description}")
+                logger.warning(f"[MONITOR-DEPS] ⚠️  Missing method '{method_name}': {description}")
         
         has_shutdown_method = ('shutdown' in available_methods or 'close' in available_methods)
         
@@ -231,7 +231,7 @@ class MonitorDependencyChecker:
             return False
         
         logger.info(
-            f"[MONITOR-DEPS]  DB manager valid ({class_name}), "
+            f"[MONITOR-DEPS] ✅ DB manager valid ({class_name}), "
             f"methods: {', '.join(available_methods)}"
         )
         
@@ -284,16 +284,16 @@ class MonitorFactory:
                 db_manager=self.db_manager
             )
             
-            logger.info("[MONITOR-FACTORY]  Monitor created successfully")
+            logger.info("[MONITOR-FACTORY] ✅ Monitor created successfully")
             
             return monitor
         
         except ImportError as e:
-            logger.error(f"[MONITOR-FACTORY]  Failed to import IntegratedCryptoMonitor: {e}")
+            logger.error(f"[MONITOR-FACTORY] ❌ Failed to import IntegratedCryptoMonitor: {e}")
             return None
         
         except Exception as e:
-            logger.error(f"[MONITOR-FACTORY]  Failed to create monitor: {e}", exc_info=True)
+            logger.error(f"[MONITOR-FACTORY] ❌ Failed to create monitor: {e}", exc_info=True)
             return None
 
 
@@ -331,11 +331,11 @@ class MonitorValidator:
             if not self._validate_callable(monitor):
                 return False
             
-            logger.info("[MONITOR-VAL]  Monitor validation passed")
+            logger.info("[MONITOR-VAL] ✅ Monitor validation passed")
             return True
         
         except Exception as e:
-            logger.error(f"[MONITOR-VAL]  Validation error: {e}", exc_info=True)
+            logger.error(f"[MONITOR-VAL] ❌ Validation error: {e}", exc_info=True)
             return False
     
     def _validate_methods(self, monitor: 'IntegratedCryptoMonitor') -> bool:
@@ -344,9 +344,9 @@ class MonitorValidator:
         
         for method in required_methods:
             if not hasattr(monitor, method):
-                logger.error(f"[MONITOR-VAL]  Missing method: {method}")
+                logger.error(f"[MONITOR-VAL] ❌ Missing method: {method}")
                 return False
-            logger.debug(f"[MONITOR-VAL]  Has method: {method}")
+            logger.debug(f"[MONITOR-VAL] ✅ Has method: {method}")
         
         return True
     
@@ -356,9 +356,9 @@ class MonitorValidator:
         
         for method in required_methods:
             if not callable(getattr(monitor, method)):
-                logger.error(f"[MONITOR-VAL]  Not callable: {method}")
+                logger.error(f"[MONITOR-VAL] ❌ Not callable: {method}")
                 return False
-            logger.debug(f"[MONITOR-VAL]  Callable: {method}")
+            logger.debug(f"[MONITOR-VAL] ✅ Callable: {method}")
         
         return True
 
@@ -436,12 +436,12 @@ class MonitorInitializer:
                 return None
             
             self._initialized = True
-            logger.info("[MONITOR-INIT]  Monitor fully initialized")
+            logger.info("[MONITOR-INIT] ✅ Monitor fully initialized")
             
             return self.monitor
         
         except Exception as e:
-            logger.error(f"[MONITOR-INIT]  Initialization failed: {e}", exc_info=True)
+            logger.error(f"[MONITOR-INIT] ❌ Initialization failed: {e}", exc_info=True)
             return None
     
     def _validate_configuration(self) -> bool:
@@ -449,10 +449,10 @@ class MonitorInitializer:
         logger.debug("[MONITOR-INIT] Step 1/5: Validating configuration...")
         
         if not self.config_validator.validate(self.config):
-            logger.error("[MONITOR-INIT]  Configuration invalid")
+            logger.error("[MONITOR-INIT] ❌ Configuration invalid")
             return False
         
-        logger.info("[MONITOR-INIT]  Configuration validated")
+        logger.info("[MONITOR-INIT] ✅ Configuration validated")
         return True
     
     def _check_dependencies(self) -> bool:
@@ -460,10 +460,10 @@ class MonitorInitializer:
         logger.debug("[MONITOR-INIT] Step 2/5: Checking dependencies...")
         
         if not self.dependency_checker.check_all(self.db_manager):
-            logger.error("[MONITOR-INIT]  Dependencies check failed")
+            logger.error("[MONITOR-INIT] ❌ Dependencies check failed")
             return False
         
-        logger.info("[MONITOR-INIT]  Dependencies checked")
+        logger.info("[MONITOR-INIT] ✅ Dependencies checked")
         return True
     
     def _create_monitor(self) -> bool:
@@ -474,10 +474,10 @@ class MonitorInitializer:
         self.monitor = factory.create_monitor()
         
         if self.monitor is None:
-            logger.error("[MONITOR-INIT]  Monitor creation failed")
+            logger.error("[MONITOR-INIT] ❌ Monitor creation failed")
             return False
         
-        logger.info("[MONITOR-INIT]  Monitor created")
+        logger.info("[MONITOR-INIT] ✅ Monitor created")
         return True
     
     async def _initialize_monitor_async(self) -> bool:
@@ -485,21 +485,21 @@ class MonitorInitializer:
         logger.debug("[MONITOR-INIT] Step 4/5: Async initializing monitor...")
         
         if self.monitor is None:
-            logger.error("[MONITOR-INIT]  Monitor is None")
+            logger.error("[MONITOR-INIT] ❌ Monitor is None")
             return False
         
         try:
             success = await self.monitor.initialize()
             
             if not success:
-                logger.error("[MONITOR-INIT]  Monitor async initialization failed")
+                logger.error("[MONITOR-INIT] ❌ Monitor async initialization failed")
                 return False
             
-            logger.info("[MONITOR-INIT]  Monitor async initialized")
+            logger.info("[MONITOR-INIT] ✅ Monitor async initialized")
             return True
         
         except Exception as e:
-            logger.error(f"[MONITOR-INIT]  Async init error: {e}", exc_info=True)
+            logger.error(f"[MONITOR-INIT] ❌ Async init error: {e}", exc_info=True)
             return False
     
     def _validate_monitor(self) -> bool:
@@ -507,10 +507,10 @@ class MonitorInitializer:
         logger.debug("[MONITOR-INIT] Step 5/5: Validating monitor...")
         
         if not self.monitor_validator.validate(self.monitor):
-            logger.error("[MONITOR-INIT]  Monitor validation failed")
+            logger.error("[MONITOR-INIT] ❌ Monitor validation failed")
             return False
         
-        logger.info("[MONITOR-INIT]  Monitor validated")
+        logger.info("[MONITOR-INIT] ✅ Monitor validated")
         return True
     
     def get_monitor(self) -> Optional['IntegratedCryptoMonitor']:
@@ -550,10 +550,10 @@ class MonitorInitializer:
             self._initialized = False
             self.monitor = None
             
-            logger.info("[MONITOR-INIT]  Monitor shut down")
+            logger.info("[MONITOR-INIT] ✅ Monitor shut down")
         
         except Exception as e:
-            logger.error(f"[MONITOR-INIT]  Shutdown error: {e}", exc_info=True)
+            logger.error(f"[MONITOR-INIT] ❌ Shutdown error: {e}", exc_info=True)
     
     def __repr__(self) -> str:
         """Строковое представление"""
