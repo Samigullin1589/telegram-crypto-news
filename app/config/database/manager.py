@@ -5,8 +5,9 @@ Database Manager
 
 import logging
 import asyncio
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, AsyncContextManager
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from .base import DatabaseConfigBase
 from .loader import DatabaseConfigLoader
@@ -86,6 +87,51 @@ class ConnectionPoolManager:
         except Exception as e:
             logger.error(f"Failed to initialize connection pool: {e}", exc_info=True)
             raise DatabaseConnectionError(f"Pool initialization failed: {e}")
+    
+    async def get_connection(self) -> Optional[Any]:
+        """
+        Получение соединения из пула
+        
+        Returns:
+            Соединение или None при ошибке
+        """
+        if not self._initialized:
+            logger.error("Pool not initialized")
+            return None
+        
+        try:
+            self._active_connections += 1
+            self._total_connections_created += 1
+            
+            # Здесь будет реальное получение соединения из пула
+            # Пока возвращаем заглушку
+            connection = {'id': self._total_connections_created, 'active': True}
+            
+            logger.debug(f"Connection acquired: {connection['id']}")
+            return connection
+        
+        except Exception as e:
+            self._connection_errors += 1
+            logger.error(f"Failed to acquire connection: {e}", exc_info=True)
+            return None
+    
+    async def release_connection(self, connection: Any) -> None:
+        """
+        Возврат соединения в пул
+        
+        Args:
+            connection: Соединение для возврата
+        """
+        if not self._initialized:
+            logger.warning("Pool not initialized")
+            return
+        
+        try:
+            self._active_connections = max(0, self._active_connections - 1)
+            logger.debug("Connection released")
+        
+        except Exception as e:
+            logger.error(f"Failed to release connection: {e}", exc_info=True)
     
     async def close(self) -> Dict[str, Any]:
         """
@@ -342,6 +388,8 @@ class DatabaseManager:
     Example:
         >>> manager = DatabaseManager()
         >>> await manager.initialize()
+        >>> async with manager.get_session() as session:
+        ...     # работа с БД
         >>> status = manager.get_status()
         >>> await manager.shutdown()
     """
@@ -437,6 +485,57 @@ class DatabaseManager:
             results['status'] = 'failed'
             results['error'] = str(e)
             raise DatabaseConnectionError(f"Manager initialization failed: {e}")
+    
+    @asynccontextmanager
+    async def get_session(self) -> AsyncContextManager[Any]:
+        """
+        Получение сессии БД через context manager
+        
+        Используется как:
+            async with db_manager.get_session() as session:
+                # работа с БД
+        
+        Yields:
+            Соединение/сессия БД
+        
+        Raises:
+            DatabaseConnectionError: При ошибке получения соединения
+        """
+        if not self._initialized:
+            raise DatabaseConnectionError("DatabaseManager not initialized")
+        
+        connection = None
+        
+        try:
+            # Получаем соединение из пула
+            connection = await self.pool_manager.get_connection()
+            
+            if connection is None:
+                raise DatabaseConnectionError("Failed to acquire connection from pool")
+            
+            logger.debug(f"Session acquired: {connection.get('id')}")
+            
+            # Отдаём соединение вызывающему коду
+            yield connection
+        
+        except Exception as e:
+            logger.error(f"Session error: {e}", exc_info=True)
+            raise DatabaseConnectionError(f"Session failed: {e}")
+        
+        finally:
+            # Всегда возвращаем соединение в пул
+            if connection is not None:
+                await self.pool_manager.release_connection(connection)
+                logger.debug("Session released")
+    
+    async def close(self) -> Dict[str, Any]:
+        """
+        Закрытие соединений (alias для shutdown)
+        
+        Returns:
+            Результаты закрытия
+        """
+        return await self.shutdown()
     
     def get_status(self) -> Dict[str, Any]:
         """

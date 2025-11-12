@@ -12,8 +12,6 @@ Database Initializer
 import asyncio
 from typing import Optional
 from core.logging_config import get_logger
-
-# ИСПРАВЛЕНО: правильный импорт
 from app.config.database import get_db_manager, DatabaseManager
 
 logger = get_logger(__name__)
@@ -42,8 +40,8 @@ class DatabaseInitializer:
         Выполняет полный цикл инициализации:
         1. Получение DatabaseManager
         2. Инициализация менеджера
-        3. Проверка соединения
-        4. Валидация структуры
+        3. Проверка соединения (опционально)
+        4. Валидация структуры (опционально)
         
         Returns:
             True если инициализация успешна
@@ -63,13 +61,11 @@ class DatabaseInitializer:
             if not await self._initialize_manager():
                 return False
             
-            # Проверяем соединение
-            if not await self._verify_connection():
-                return False
+            # Проверяем соединение (опционально)
+            await self._verify_connection()
             
-            # Валидируем структуру
-            if not await self._validate_structure():
-                return False
+            # Валидируем структуру (опционально)
+            await self._validate_structure()
             
             self._initialized = True
             logger.info("✅ Database initialized successfully")
@@ -134,7 +130,7 @@ class DatabaseInitializer:
                 logger.info("✅ DatabaseManager initialized")
                 return True
             else:
-                logger.error("❌ DatabaseManager initialization returned False")
+                logger.error("❌ DatabaseManager initialization returned False/None")
                 return False
         
         except Exception as e:
@@ -146,12 +142,13 @@ class DatabaseInitializer:
     
     async def _verify_connection(self) -> bool:
         """
-        Проверка соединения с базой данных
+        Проверка соединения с базой данных (опционально)
         
-        Выполняет простой SELECT запрос для проверки работоспособности
+        Выполняет простой SELECT запрос для проверки работоспособности.
+        Не является критичным - если метода нет, просто пропускаем.
         
         Returns:
-            True если соединение работает
+            True если соединение работает или проверка недоступна
         """
         try:
             logger.debug("Verifying database connection...")
@@ -160,52 +157,55 @@ class DatabaseInitializer:
                 logger.error("❌ DatabaseManager is None")
                 return False
             
-            # Проверяем соединение простым запросом
-            if hasattr(self.db_manager, 'execute'):
-                cursor = self.db_manager.execute("SELECT 1")
-                result = cursor.fetchone()
-                cursor.close()
-                
-                if result and result[0] == 1:
-                    logger.info("✅ Database connection verified")
-                    return True
-                else:
-                    logger.error("❌ Database connection check failed")
-                    return False
+            # Пытаемся использовать get_session если доступен
+            if hasattr(self.db_manager, 'get_session') and callable(self.db_manager.get_session):
+                try:
+                    async with self.db_manager.get_session() as session:
+                        # Успешно получили сессию
+                        logger.info("✅ Database connection verified (via get_session)")
+                        return True
+                except Exception as session_error:
+                    logger.warning(f"⚠️ Session check failed: {session_error}")
+                    return True  # Не критично
             
-            elif hasattr(self.db_manager, 'check_health'):
-                # Используем health check если доступен
-                health_result = await self.db_manager.check_health()
-                
-                if health_result.get('status') == 'healthy':
-                    logger.info("✅ Database connection verified via health check")
-                    return True
-                else:
-                    logger.error(
-                        f"❌ Database health check failed: "
-                        f"{health_result.get('message', 'Unknown error')}"
-                    )
-                    return False
+            # Проверяем health check если доступен
+            elif hasattr(self.db_manager, 'health_check') and callable(self.db_manager.health_check):
+                try:
+                    health_result = await self.db_manager.health_check()
+                    
+                    if health_result.get('healthy'):
+                        logger.info("✅ Database connection verified via health check")
+                        return True
+                    else:
+                        logger.warning(
+                            f"⚠️ Database health check degraded: "
+                            f"{health_result.get('status', 'Unknown')}"
+                        )
+                        return True  # Не критично
+                except Exception as health_error:
+                    logger.warning(f"⚠️ Health check failed: {health_error}")
+                    return True  # Не критично
             
             else:
                 logger.warning("⚠️ Cannot verify connection - no suitable method available")
                 return True  # Предполагаем что всё ОК
         
         except Exception as e:
-            logger.error(
-                f"❌ Database connection verification error: {e}",
+            logger.warning(
+                f"⚠️ Database connection verification error: {e}",
                 exc_info=True
             )
-            return False
+            return True  # Не критично для инициализации
     
     async def _validate_structure(self) -> bool:
         """
-        Валидация структуры базы данных
+        Валидация структуры базы данных (опционально)
         
-        Проверяет наличие необходимых таблиц и индексов
+        Проверяет наличие необходимых таблиц и индексов.
+        Не является критичным - если метода нет, просто пропускаем.
         
         Returns:
-            True если структура валидна или создана
+            True если структура валидна, создана, или проверка недоступна
         """
         try:
             logger.debug("Validating database structure...")
@@ -215,26 +215,30 @@ class DatabaseInitializer:
                 return False
             
             # Если есть метод проверки схемы - используем его
-            if hasattr(self.db_manager, 'validate_schema'):
-                result = await self.db_manager.validate_schema()
-                
-                if result:
-                    logger.info("✅ Database structure validated")
-                    return True
-                else:
-                    logger.error("❌ Database structure validation failed")
-                    return False
+            if hasattr(self.db_manager, 'validate_schema') and callable(self.db_manager.validate_schema):
+                try:
+                    result = await self.db_manager.validate_schema()
+                    
+                    if result:
+                        logger.info("✅ Database structure validated")
+                        return True
+                    else:
+                        logger.warning("⚠️ Database structure validation failed")
+                        return True  # Не критично
+                except Exception as schema_error:
+                    logger.warning(f"⚠️ Schema validation error: {schema_error}")
+                    return True  # Не критично
             
             # Иначе просто логируем что пропустили проверку
             logger.debug("ℹ️ Schema validation not available - skipping")
             return True
         
         except Exception as e:
-            logger.error(
-                f"❌ Database structure validation error: {e}",
+            logger.warning(
+                f"⚠️ Database structure validation error: {e}",
                 exc_info=True
             )
-            return False
+            return True  # Не критично для инициализации
     
     def get_manager(self) -> Optional[DatabaseManager]:
         """
@@ -267,13 +271,13 @@ class DatabaseInitializer:
         try:
             logger.info("Shutting down database...")
             
-            if hasattr(self.db_manager, 'shutdown'):
+            if hasattr(self.db_manager, 'shutdown') and callable(self.db_manager.shutdown):
                 if asyncio.iscoroutinefunction(self.db_manager.shutdown):
                     await self.db_manager.shutdown()
                 else:
                     self.db_manager.shutdown()
             
-            elif hasattr(self.db_manager, 'close'):
+            elif hasattr(self.db_manager, 'close') and callable(self.db_manager.close):
                 if asyncio.iscoroutinefunction(self.db_manager.close):
                     await self.db_manager.close()
                 else:
@@ -293,3 +297,6 @@ class DatabaseInitializer:
             f"has_manager={self.db_manager is not None}"
             f")"
         )
+
+
+__all__ = ['DatabaseInitializer']

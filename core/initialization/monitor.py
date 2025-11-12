@@ -1,6 +1,6 @@
 # core/initialization/monitor.py
 """
-Monitor Initializer - Production Ready v5.0
+Monitor Initializer - Production Ready v5.1
 ============================================
 
 Инициализация системы мониторинга с интеграцией IntegratedCryptoMonitor v5.0.
@@ -13,12 +13,13 @@ Components:
 - MonitorValidator: Валидация монитора
 - MonitorInitializer: Координация полной инициализации
 
-Architecture v5.0:
+Architecture v5.1:
 ------------------
 - Интеграция с двухэтапной инициализацией Monitor v5.0
 - MonitorInitializer полностью инициализирует монитор (включая async initialize())
 - Production-grade error handling
 - Comprehensive validation
+- FIXED: Улучшена валидация db_manager (опциональные методы)
 """
 
 from typing import Optional, Any, Dict, TYPE_CHECKING
@@ -124,7 +125,7 @@ class MonitorDependencyChecker:
     
     Проверяет:
     - Наличие необходимых модулей
-    - Валидность database manager
+    - Валидность database manager (опционально)
     - Доступность компонентов
     """
     
@@ -151,6 +152,8 @@ class MonitorDependencyChecker:
             if db_manager is not None:
                 if not self._validate_db_manager(db_manager):
                     return False
+            else:
+                logger.debug("[MONITOR-DEPS] No db_manager provided (optional)")
             
             logger.info("[MONITOR-DEPS] ✅ All dependencies available")
             return True
@@ -178,19 +181,42 @@ class MonitorDependencyChecker:
         return True
     
     def _validate_db_manager(self, db_manager: Any) -> bool:
-        """Валидация database manager"""
+        """
+        Валидация database manager
+        
+        Args:
+            db_manager: Database manager для проверки
+            
+        Returns:
+            bool: True если валиден
+        """
         if db_manager is None:
-            logger.warning("[MONITOR-DEPS] DB manager is None (optional)")
-            return True
+            logger.warning("[MONITOR-DEPS] DB manager is None")
+            return True  # Опционально
         
-        required_methods = ['get_session', 'close']
+        # Проверяем основные методы (хотя бы один должен быть)
+        # get_session или close или shutdown
+        has_get_session = hasattr(db_manager, 'get_session') and callable(getattr(db_manager, 'get_session'))
+        has_close = hasattr(db_manager, 'close') and callable(getattr(db_manager, 'close'))
+        has_shutdown = hasattr(db_manager, 'shutdown') and callable(getattr(db_manager, 'shutdown'))
         
-        for method in required_methods:
-            if not hasattr(db_manager, method):
-                logger.error(f"[MONITOR-DEPS] Missing method: {method}")
-                return False
+        if not (has_get_session or has_close or has_shutdown):
+            logger.error(
+                "[MONITOR-DEPS] DB manager missing required methods "
+                "(get_session, close, or shutdown)"
+            )
+            return False
         
-        logger.debug("[MONITOR-DEPS] ✅ DB manager valid")
+        # Логируем какие методы доступны
+        methods_available = []
+        if has_get_session:
+            methods_available.append('get_session')
+        if has_close:
+            methods_available.append('close')
+        if has_shutdown:
+            methods_available.append('shutdown')
+        
+        logger.debug(f"[MONITOR-DEPS] ✅ DB manager valid, methods: {', '.join(methods_available)}")
         return True
 
 
@@ -322,7 +348,7 @@ class MonitorValidator:
 
 class MonitorInitializer:
     """
-    Инициализатор системы мониторинга v5.0
+    Инициализатор системы мониторинга v5.1
     
     Полностью инициализирует IntegratedCryptoMonitor:
     1. Валидация конфигурации
@@ -333,7 +359,7 @@ class MonitorInitializer:
     
     Attributes:
         config: Конфигурация
-        db_manager: Database manager
+        db_manager: Database manager (опционально)
         monitor: Инстанс IntegratedCryptoMonitor
     """
     
@@ -343,7 +369,7 @@ class MonitorInitializer:
         
         Args:
             config: Конфигурация приложения
-            db_manager: Database manager
+            db_manager: Database manager (опционально)
         """
         self.config = config
         self.db_manager = db_manager
