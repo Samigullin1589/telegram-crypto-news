@@ -1,9 +1,17 @@
 # core/monitor.py
 """
-Integrated Crypto Monitor v5.2
+Integrated Crypto Monitor v5.3
 ===============================
 
 Production-Ready система мониторинга криптовалют.
+
+ИСПРАВЛЕНО v5.3:
+- MonitorBusinessLayer.initialize() проверяет результат load_all()
+- Требуется хотя бы 1 успешно загруженный компонент
+- Детальное логирование статуса каждого компонента
+- Защита от запуска с пустым component_manager в start_business_tasks()
+- Информативные ошибки в monitor.run() при неудачной инициализации
+- Корректная обработка исключений в monitor.run()
 
 ИСПРАВЛЕНО v5.2:
 - Правильное создание shutdown_task ДО wait()
@@ -11,7 +19,7 @@ Production-Ready система мониторинга криптовалют.
 - Убран двойной cleanup (только через stop())
 - Все методы существуют и работают
 
-Architecture v5.2:
+Architecture v5.3:
 ------------------
 - Core: Rate limiter, resource monitor, health monitor, statistics
 - Business: News, whale, trading, bot (lazy-loaded через ComponentManager)
@@ -94,31 +102,72 @@ class MonitorBusinessLayer:
     async def initialize(self) -> bool:
         """
         Асинхронная инициализация и загрузка business компонентов
-        
+
+        ИСПРАВЛЕНО v5.3:
+        - Проверка результата load_all()
+        - Детальное логирование загруженных компонентов
+        - Tolerance к частичной загрузке (требуется хотя бы 1 компонент)
+
         Returns:
-            bool: True если успешно
+            bool: True если успешно загружен хотя бы один компонент
         """
         if self._initialized:
             logger.debug("[BUSINESS] Already initialized")
             return True
-        
+
         try:
             logger.info("[BUSINESS] Initializing business layer...")
-            
+
             # Lazy import ComponentManager для избежания циклических зависимостей
             from core.components import ComponentManager
-            
+
             self._component_manager = ComponentManager()
-            self._component_manager.load_all()
-            
-            status = self._component_manager.get_status_dict()
-            active = status.get('total_active', 0)
-            
+
+            # ИСПРАВЛЕНО v5.3: Проверяем результат load_all()
+            news_ok, whale_ok, bot_ok, trading_ok = self._component_manager.load_all()
+
+            # Подсчет успешно загруженных
+            loaded_count = sum([news_ok, whale_ok, bot_ok, trading_ok])
+            total_count = 4
+
+            # Логирование детального статуса
+            logger.info(f"[BUSINESS] Components loaded: {loaded_count}/{total_count}")
+            if news_ok:
+                logger.info("[BUSINESS]   ✅ News processor")
+            else:
+                logger.warning("[BUSINESS]   ⚠️  News processor (failed/disabled)")
+
+            if whale_ok:
+                logger.info("[BUSINESS]   ✅ Whale scheduler")
+            else:
+                logger.warning("[BUSINESS]   ⚠️  Whale scheduler (failed/disabled)")
+
+            if bot_ok:
+                logger.info("[BUSINESS]   ✅ Bot application")
+            else:
+                logger.warning("[BUSINESS]   ⚠️  Bot application (failed/disabled)")
+
+            if trading_ok:
+                logger.info("[BUSINESS]   ✅ Trading system")
+            else:
+                logger.warning("[BUSINESS]   ⚠️  Trading system (failed/disabled)")
+
+            # ИСПРАВЛЕНО v5.3: Требуем хотя бы ОДИН успешно загруженный компонент
+            if loaded_count == 0:
+                logger.error("[BUSINESS] ❌ No components loaded! Cannot proceed.")
+                return False
+
+            if loaded_count < total_count:
+                logger.warning(
+                    f"[BUSINESS] ⚠️  Partial initialization: "
+                    f"{loaded_count}/{total_count} components active"
+                )
+
             self._initialized = True
-            logger.info(f"[BUSINESS] ✅ Business layer initialized ({active} components active)")
-            
+            logger.info(f"[BUSINESS] ✅ Business layer initialized ({loaded_count} components active)")
+
             return True
-        
+
         except Exception as e:
             logger.error(f"[BUSINESS] ❌ Init failed: {e}", exc_info=True)
             return False
@@ -280,28 +329,55 @@ class MonitorInfrastructure:
     async def start_business_tasks(self) -> bool:
         """
         Запуск всех business задач напрямую
-        
+
+        ИСПРАВЛЕНО v5.3:
+        - Детальная проверка component_manager
+        - Защита от пустого component_manager
+        - Логирование причин неудачи запуска
+
         Запускает как asyncio.Task:
         - News processor
         - Whale scheduler
         - Trading system
         - Bot application
-        
+
         Returns:
             bool: True если хотя бы одна задача запущена
         """
         if not self.business.component_manager:
-            logger.error("[INFRA] Component manager not available")
+            logger.error("[INFRA] ❌ Component manager not available")
             return False
-        
+
+        # ИСПРАВЛЕНО v5.3: Проверяем что component_manager инициализирован
+        cm = self.business.component_manager
+        available_components = []
+
+        if cm.news_processor:
+            available_components.append('news')
+        if cm.whale_scheduler:
+            available_components.append('whale')
+        if cm.has_trading():
+            available_components.append('trading')
+        if cm.bot_application:
+            available_components.append('bot')
+
+        if not available_components:
+            logger.error(
+                "[INFRA] ❌ No components available in component_manager! "
+                "Business layer initialization may have failed."
+            )
+            return False
+
+        logger.debug(f"[INFRA] Available components: {', '.join(available_components)}")
+
         try:
             logger.info("="*80)
             logger.info("[INFRA] 🎯 STARTING BUSINESS TASKS")
             logger.info("="*80)
-            
-            cm = self.business.component_manager
+
             started = []
-            
+            failed = []
+
             # News processor
             if cm.news_processor:
                 try:
@@ -313,8 +389,9 @@ class MonitorInfrastructure:
                     started.append('news')
                     logger.info("[INFRA] ✅ News task started")
                 except Exception as e:
+                    failed.append('news')
                     logger.error(f"[INFRA] ❌ News start error: {e}", exc_info=True)
-            
+
             # Whale scheduler
             if cm.whale_scheduler:
                 try:
@@ -326,8 +403,9 @@ class MonitorInfrastructure:
                     started.append('whale')
                     logger.info("[INFRA] ✅ Whale task started")
                 except Exception as e:
+                    failed.append('whale')
                     logger.error(f"[INFRA] ❌ Whale start error: {e}", exc_info=True)
-            
+
             # Trading system
             if cm.has_trading():
                 try:
@@ -339,8 +417,9 @@ class MonitorInfrastructure:
                     started.append('trading')
                     logger.info("[INFRA] ✅ Trading task started")
                 except Exception as e:
+                    failed.append('trading')
                     logger.error(f"[INFRA] ❌ Trading start error: {e}", exc_info=True)
-            
+
             # Bot application
             if cm.bot_application:
                 try:
@@ -352,14 +431,20 @@ class MonitorInfrastructure:
                     started.append('bot')
                     logger.info("[INFRA] ✅ Bot task started")
                 except Exception as e:
+                    failed.append('bot')
                     logger.error(f"[INFRA] ❌ Bot start error: {e}", exc_info=True)
-            
+
             logger.info("="*80)
-            logger.info(f"[INFRA] 📊 Started {len(started)} tasks: {', '.join(started)}")
+            logger.info(f"[INFRA] 📊 Started {len(started)} tasks: {', '.join(started) if started else 'NONE'}")
+            if failed:
+                logger.warning(f"[INFRA] ⚠️  Failed {len(failed)} tasks: {', '.join(failed)}")
             logger.info("="*80)
-            
+
+            if len(started) == 0:
+                logger.error("[INFRA] ❌ CRITICAL: No tasks started! Monitor cannot run.")
+
             return len(started) > 0
-        
+
         except Exception as e:
             logger.error(f"[INFRA] ❌ Task start failed: {e}", exc_info=True)
             return False
@@ -554,28 +639,35 @@ class MonitorInfrastructure:
 
 class IntegratedCryptoMonitor:
     """
-    Production-Ready Integrated Crypto Monitor v5.2
-    
+    Production-Ready Integrated Crypto Monitor v5.3
+
     Main monitoring system coordinator.
-    
+
+    ИСПРАВЛЕНО v5.3:
+    - MonitorBusinessLayer.initialize() проверяет результат load_all()
+    - Требуется хотя бы 1 успешно загруженный компонент
+    - Детальное логирование статуса каждого компонента
+    - Защита от запуска с пустым component_manager
+    - Информативные ошибки при неудачной инициализации
+
     ИСПРАВЛЕНО v5.2:
     - Правильный wait_for_completion
     - Убран двойной cleanup (только через stop())
     - Все методы существуют
-    
+
     Architecture:
     - Core: Rate limiter, monitors, statistics
     - Business: News, whale, trading, bot
     - Infrastructure: HTTP, tasks, shutdown
-    
+
     Lifecycle:
     1. __init__: Core initialization
     2. initialize(): Business components loading
     3. run(): Start services and wait
     4. stop(): Graceful shutdown
     """
-    
-    VERSION = "5.2.0"
+
+    VERSION = "5.3.0"
     
     def __init__(self, max_memory_mb: int = 450):
         """
@@ -681,48 +773,84 @@ class IntegratedCryptoMonitor:
     
     async def run(self) -> None:
         """
-        Главный цикл монитора v5.2
-        
+        Главный цикл монитора v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - Детальная проверка готовности перед запуском
+        - Защита от запуска с неинициализированными компонентами
+        - Информативное логирование причин неудачи
+
         ИСПРАВЛЕНО v5.2:
         - Убран _cleanup() из finally (только stop())
         - stop() сам делает полный cleanup
-        
+
         Sequence:
-        1. Start HTTP server
-        2. Start business tasks
-        3. Wait for completion
-        4. Cleanup через stop()
+        1. Validate full initialization
+        2. Start HTTP server
+        3. Start business tasks
+        4. Wait for completion
+        5. Cleanup через stop()
         """
+        # ИСПРАВЛЕНО v5.3: Детальная проверка готовности
         if not self._fully_initialized:
+            logger.error("="*80)
+            logger.error("❌ MONITOR START FAILED")
+            logger.error("="*80)
             logger.error("Monitor not fully initialized. Call initialize() first.")
+            logger.error(f"Business initialized: {self.business.is_initialized}")
+
+            if self.business.component_manager:
+                status = self.business.component_manager.get_status_dict()
+                logger.error(f"Components active: {status.get('total_active', 0)}")
+            else:
+                logger.error("Component manager: NOT AVAILABLE")
+
+            logger.error("="*80)
             return
-        
+
+        # ИСПРАВЛЕНО v5.3: Проверка что есть компоненты для запуска
+        if not self.business.component_manager:
+            logger.error("="*80)
+            logger.error("❌ MONITOR START FAILED")
+            logger.error("="*80)
+            logger.error("Component manager not available. Cannot start business tasks.")
+            logger.error("="*80)
+            return
+
         self._print_startup_banner()
         self.running = True
         self.start_time = datetime.now()
-        
+
         try:
             # Start HTTP server
+            logger.info("[MONITOR] Starting HTTP server...")
             if not await self.infrastructure.start_http_server():
                 raise RuntimeError("HTTP server start failed")
-            
+
             # Start business tasks
+            logger.info("[MONITOR] Starting business tasks...")
             if not await self.infrastructure.start_business_tasks():
-                raise RuntimeError("Business tasks start failed")
-            
+                raise RuntimeError(
+                    "Business tasks start failed - no tasks started. "
+                    "Check component initialization logs above."
+                )
+
             # Wait for completion
+            logger.info("[MONITOR] Entering main loop...")
             await self.infrastructure.wait_for_completion()
-        
+
         except asyncio.CancelledError:
             logger.info("\n⏹️ Monitor cancelled")
-        
+
         except KeyboardInterrupt:
             logger.info("\n⏹️ KeyboardInterrupt received")
-        
+
         except Exception as e:
             logger.error(f"\n❌ Critical error in monitor: {e}", exc_info=True)
             self.core.statistics.increment_errors()
-        
+            # ИСПРАВЛЕНО v5.3: Выбрасываем исключение дальше чтобы lifecycle мог его обработать
+            raise
+
         finally:
             self.running = False
     
