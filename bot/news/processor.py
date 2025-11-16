@@ -1,7 +1,11 @@
 # bot/news/processor.py
 """
-News Processor v6.1 - Fixed Configuration Access
+News Processor v6.2 - Fixed Component Loader Compatibility
 Исправленный процессор с правильным доступом к конфигурации
+
+ИСПРАВЛЕНО v6.2:
+- Добавлены методы process() и run() для совместимости с ComponentLoader
+- Оба метода являются алиасами для run_cycle()
 """
 
 import logging
@@ -163,28 +167,46 @@ class NewsProcessor:
     async def run_cycle(self):
         """
         Выполнение одного цикла обработки новостей
-        
+
         Этапы:
         1. Инициализация БД (если не инициализирована)
         2. Загрузка baseline (если не загружен)
         3. Выполнение цикла обработки
         """
-        
+
         if not self.is_initialized:
             self.logger.log_warning("Processor not initialized, skipping cycle")
             return
-        
+
         # Инициализация БД при первом запуске
         if not self.state.database_initialized:
             await self.initialize_database()
-        
+
         # Загрузка baseline при первом запуске
         if not self.state.baseline_loaded:
             await self.load_baseline()
             return  # Первый запуск только для baseline
-        
+
         # Выполнение цикла
         await self.cycle_processor.run_cycle()
+
+    async def process(self):
+        """
+        Алиас для run_cycle() - обратная совместимость
+
+        ИСПРАВЛЕНО v6.2: Добавлен метод для совместимости с ComponentLoader
+        который ожидает наличие метода process()
+        """
+        await self.run_cycle()
+
+    async def run(self):
+        """
+        Алиас для run_cycle() - обратная совместимость
+
+        ИСПРАВЛЕНО v6.2: Добавлен метод для совместимости с ComponentLoader
+        который ожидает наличие метода run()
+        """
+        await self.run_cycle()
     
     def get_status(self) -> Dict[str, Any]:
         """

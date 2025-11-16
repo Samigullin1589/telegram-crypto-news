@@ -37,6 +37,7 @@ class ConfigInitializer:
         from .features_config import FeaturesConfig
         from .database_config import DatabaseConfig
         from .rate_limiting_config import RateLimitingConfig
+        from .trading_config import TradingConfig
         from .config_validator import ConfigValidator
         from .config_printer import ConfigPrinter
         
@@ -60,6 +61,7 @@ class ConfigInitializer:
         from .database_config import DatabaseConfig
         from .database.enums import DatabaseEngine
         from .rate_limiting_config import RateLimitingConfig
+        from .trading_config import TradingConfig
         
         logger.debug("Инициализация конфигурационных модулей...")
         
@@ -103,7 +105,10 @@ class ConfigInitializer:
         
         config_instance.rate_limiting = RateLimitingConfig()
         logger.debug("✓ RateLimitingConfig")
-        
+
+        config_instance.trading = TradingConfig()
+        logger.debug("✓ TradingConfig")
+
         logger.debug("Все модули инициализированы")
     
     def _initialize_helpers(self, config_instance: 'Config'):

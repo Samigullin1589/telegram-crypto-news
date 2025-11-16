@@ -1,11 +1,14 @@
 # app/config/__init__.py
 """
-Configuration Package v3.1
+Configuration Package v3.2
 Модульная система конфигурации с улучшенной архитектурой
+
+ИСПРАВЛЕНО v3.2:
+- Добавлен TradingConfig для поддержки config.trading
 
 Основные компоненты:
 - Config: Главный класс конфигурации (Singleton)
-- Субмодули: api, base, blockchain, database, features, feeds, paths, rate_limiting, telegram
+- Субмодули: api, base, blockchain, database, features, feeds, paths, rate_limiting, telegram, trading
 - Валидаторы: Модульная система валидации
 - Printer: Красивый вывод конфигурации
 """
@@ -34,6 +37,7 @@ from .blockchain_config import BlockchainConfig
 from .features_config import FeaturesConfig
 from .database_config import DatabaseConfig
 from .rate_limiting_config import RateLimitingConfig
+from .trading_config import TradingConfig
 from .config_validator import ConfigValidator
 from .config_printer import ConfigPrinter
 
@@ -64,10 +68,10 @@ except Exception as e:
 class Config(metaclass=SingletonMeta):
     """
     Главный класс конфигурации системы
-    
+
     Реализует паттерн Singleton для обеспечения единственного
     экземпляра конфигурации во всем приложении.
-    
+
     Attributes:
         base: BaseConfig - базовые настройки
         paths: PathsConfig - пути к файлам
@@ -78,6 +82,7 @@ class Config(metaclass=SingletonMeta):
         features: FeaturesConfig - функциональные модули
         database: DatabaseConfig - база данных
         rate_limiting: RateLimitingConfig - rate limiting
+        trading: TradingConfig - торговая система
         validator: ConfigValidator - валидатор
         printer: ConfigPrinter - принтер
         news: FeedsConfig - алиас для feeds (обратная совместимость)
@@ -217,6 +222,7 @@ __all__ = [
     'FeaturesConfig',
     'DatabaseConfig',
     'RateLimitingConfig',
+    'TradingConfig',
     'ConfigValidator',
     'ConfigPrinter',
 ]
