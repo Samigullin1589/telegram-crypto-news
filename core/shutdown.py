@@ -1,7 +1,13 @@
 # core/shutdown.py
 """
-Shutdown Manager
+Shutdown Manager v5.3
 Graceful остановка приложения
+
+ИСПРАВЛЕНО v5.3:
+- Совместимость с IntegratedCryptoMonitor v5.3
+- Работа с DatabaseManager напрямую (не через DatabaseInitializer)
+- Убрана зависимость от устаревшего TaskManager
+- Monitor сам управляет своими задачами через infrastructure
 
 Выполняет:
 - Координацию остановки всех компонентов
@@ -11,10 +17,8 @@ Graceful остановка приложения
 """
 
 import asyncio
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Any, TYPE_CHECKING
 from core.logging_config import get_logger
-from core.tasks.manager import TaskManager
-from core.initialization.database import DatabaseInitializer
 
 # ИСПРАВЛЕНО: TYPE_CHECKING для избежания циклического импорта
 if TYPE_CHECKING:
@@ -25,108 +29,110 @@ logger = get_logger(__name__)
 
 class ShutdownManager:
     """
-    Менеджер graceful shutdown приложения
-    
+    Менеджер graceful shutdown приложения v5.3
+
+    ИСПРАВЛЕНО v5.3:
+    - Совместимость с IntegratedCryptoMonitor v5.3
+    - Monitor управляет своими задачами через infrastructure
+    - Работа с DatabaseManager напрямую
+
     Координирует остановку всех компонентов системы в правильном порядке,
     обеспечивая корректное освобождение ресурсов и сохранение данных.
-    
+
     Порядок остановки:
-    1. Остановка фоновых задач (TaskManager)
-    2. Остановка мониторинга (IntegratedCryptoMonitor)
-    3. Закрытие соединений с БД (DatabaseManager)
-    
+    1. Остановка мониторинга (IntegratedCryptoMonitor)
+       - Monitor.stop() сам останавливает business tasks и HTTP server
+    2. Закрытие соединений с БД (DatabaseManager)
+
     Attributes:
-        task_manager: Менеджер фоновых задач
-        db_initializer: Инициализатор базы данных
         monitor: Система мониторинга (опционально)
+        db_manager: Менеджер БД (опционально)
         shutdown_timeout: Максимальное время на shutdown каждого компонента
         shutdown_in_progress: Флаг выполнения shutdown
     """
-    
+
     # Таймауты для каждого этапа (в секундах)
-    DEFAULT_TASK_SHUTDOWN_TIMEOUT = 30
     DEFAULT_MONITOR_SHUTDOWN_TIMEOUT = 15
     DEFAULT_DATABASE_SHUTDOWN_TIMEOUT = 10
-    
+
     def __init__(
         self,
-        task_manager: TaskManager,
-        db_initializer: DatabaseInitializer,
         monitor: Optional['IntegratedCryptoMonitor'] = None,
-        task_shutdown_timeout: int = DEFAULT_TASK_SHUTDOWN_TIMEOUT,
+        db_manager: Optional[Any] = None,
         monitor_shutdown_timeout: int = DEFAULT_MONITOR_SHUTDOWN_TIMEOUT,
         database_shutdown_timeout: int = DEFAULT_DATABASE_SHUTDOWN_TIMEOUT
     ):
         """
-        Инициализация shutdown manager
-        
+        Инициализация shutdown manager v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - Убраны устаревшие task_manager и db_initializer
+        - Прямая работа с monitor и db_manager
+
         Args:
-            task_manager: Менеджер задач для остановки
-            db_initializer: Инициализатор БД для закрытия соединений
             monitor: Монитор для остановки (опционально)
-            task_shutdown_timeout: Таймаут остановки задач (секунды)
+            db_manager: Database manager для закрытия соединений (опционально)
             monitor_shutdown_timeout: Таймаут остановки монитора (секунды)
             database_shutdown_timeout: Таймаут закрытия БД (секунды)
         """
-        self.task_manager = task_manager
-        self.db_initializer = db_initializer
         self.monitor = monitor
-        
+        self.db_manager = db_manager
+
         # Таймауты
-        self.task_shutdown_timeout = task_shutdown_timeout
         self.monitor_shutdown_timeout = monitor_shutdown_timeout
         self.database_shutdown_timeout = database_shutdown_timeout
-        
+
         # Состояние
         self.shutdown_in_progress = False
         self.shutdown_completed = False
-        
+
         logger.debug(
-            f"ShutdownManager initialized with timeouts: "
-            f"tasks={task_shutdown_timeout}s, "
+            f"ShutdownManager v5.3 initialized with timeouts: "
             f"monitor={monitor_shutdown_timeout}s, "
             f"database={database_shutdown_timeout}s"
         )
     
     async def shutdown(self) -> bool:
         """
-        Выполнение полного graceful shutdown
-        
+        Выполнение полного graceful shutdown v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - Monitor.stop() сам останавливает business tasks и HTTP server
+        - Убран _stop_tasks() (задачи управляются Monitor.infrastructure)
+        - Упрощенная последовательность: monitor → database
+
         Останавливает все компоненты системы в правильном порядке
         с соблюдением таймаутов и обработкой ошибок.
-        
+
         Returns:
             True если все компоненты остановлены успешно
         """
         if self.shutdown_in_progress:
             logger.warning("⚠️ Shutdown already in progress, skipping duplicate call")
             return False
-        
+
         if self.shutdown_completed:
             logger.warning("⚠️ Shutdown already completed")
             return True
-        
+
         self.shutdown_in_progress = True
-        
+
         logger.info("="*80)
-        logger.info("🛑 Starting graceful shutdown sequence...")
+        logger.info("🛑 Starting graceful shutdown sequence v5.3...")
         logger.info("="*80)
-        
+
         shutdown_success = True
-        
+
         try:
-            # Шаг 1: Останавливаем фоновые задачи
-            if not await self._stop_tasks():
-                shutdown_success = False
-            
-            # Шаг 2: Останавливаем мониторинг
+            # Шаг 1: Останавливаем мониторинг
+            # Monitor.stop() сам останавливает business tasks и HTTP server
             if not await self._stop_monitor():
                 shutdown_success = False
-            
-            # Шаг 3: Закрываем базу данных
+
+            # Шаг 2: Закрываем базу данных
             if not await self._close_database():
                 shutdown_success = False
-            
+
             if shutdown_success:
                 logger.info("="*80)
                 logger.info("✅ Graceful shutdown completed successfully")
@@ -135,83 +141,49 @@ class ShutdownManager:
                 logger.warning("="*80)
                 logger.warning("⚠️ Shutdown completed with some errors")
                 logger.warning("="*80)
-            
+
             self.shutdown_completed = True
             return shutdown_success
-        
+
         except Exception as e:
             logger.error(
                 f"❌ Critical error during shutdown sequence: {e}",
                 exc_info=True
             )
             return False
-        
+
         finally:
             self.shutdown_in_progress = False
     
-    async def _stop_tasks(self) -> bool:
-        """
-        Остановка всех фоновых задач
-        
-        Останавливает TaskManager с соблюдением таймаута.
-        
-        Returns:
-            True если задачи остановлены успешно
-        """
-        try:
-            logger.info("📋 Step 1/3: Stopping background tasks...")
-            
-            if not self.task_manager:
-                logger.warning("⚠️ TaskManager is None, skipping")
-                return True
-            
-            # Останавливаем задачи с таймаутом
-            try:
-                await asyncio.wait_for(
-                    self.task_manager.stop_all(),
-                    timeout=self.task_shutdown_timeout
-                )
-                logger.info("✅ Background tasks stopped successfully")
-                return True
-            
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"❌ Task shutdown timeout ({self.task_shutdown_timeout}s) exceeded"
-                )
-                return False
-        
-        except Exception as e:
-            logger.error(
-                f"❌ Error stopping background tasks: {e}",
-                exc_info=True
-            )
-            return False
-    
     async def _stop_monitor(self) -> bool:
         """
-        Остановка системы мониторинга
-        
+        Остановка системы мониторинга v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - Monitor.stop() теперь останавливает business tasks и HTTP server
+        - Упрощенная логика вызова
+
         Останавливает IntegratedCryptoMonitor с соблюдением таймаута.
-        
+
         Returns:
             True если монитор остановлен успешно
         """
         try:
-            logger.info("📊 Step 2/3: Stopping monitor...")
-            
+            logger.info("📊 Step 1/2: Stopping monitor...")
+
             if not self.monitor:
                 logger.info("ℹ️ Monitor is not set, skipping")
                 return True
-            
+
             # Проверяем наличие метода stop
             if not hasattr(self.monitor, 'stop'):
                 logger.warning("⚠️ Monitor has no stop method, skipping")
                 return True
-            
+
             # Останавливаем монитор с таймаутом
             try:
                 stop_coro = self.monitor.stop()
-                
+
                 if asyncio.iscoroutine(stop_coro):
                     await asyncio.wait_for(
                         stop_coro,
@@ -220,46 +192,45 @@ class ShutdownManager:
                 else:
                     # Если stop не async, вызываем напрямую
                     self.monitor.stop()
-                
+
                 logger.info("✅ Monitor stopped successfully")
                 return True
-            
+
             except asyncio.TimeoutError:
                 logger.error(
                     f"❌ Monitor shutdown timeout ({self.monitor_shutdown_timeout}s) exceeded"
                 )
                 return False
-        
+
         except Exception as e:
             logger.error(
                 f"❌ Error stopping monitor: {e}",
                 exc_info=True
             )
             return False
-    
+
     async def _close_database(self) -> bool:
         """
-        Закрытие соединений с базой данных
-        
-        Корректно закрывает DatabaseManager с соблюдением таймаута.
-        
+        Закрытие соединений с базой данных v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - Работа с DatabaseManager напрямую (не через DatabaseInitializer)
+        - Поддержка sync/async методов close/shutdown
+
+        Закрывает DatabaseManager с соблюдением таймаута.
+
         Returns:
             True если БД закрыта успешно
         """
         try:
-            logger.info("💾 Step 3/3: Closing database connections...")
-            
-            if not self.db_initializer:
-                logger.warning("⚠️ DatabaseInitializer is None, skipping")
+            logger.info("💾 Step 2/2: Closing database connections...")
+
+            if not self.db_manager:
+                logger.info("ℹ️ Database manager is not set, skipping")
                 return True
-            
-            db_manager = self.db_initializer.get_manager()
-            
-            if not db_manager:
-                logger.info("ℹ️ DatabaseManager is not initialized, skipping")
-                return True
-            
-            # Проверяем состояние БД
+
+            # Проверяем инициализацию БД (опционально)
+            db_manager = self.db_manager
             if hasattr(db_manager, 'is_initialized'):
                 if not db_manager.is_initialized:
                     logger.info("ℹ️ Database is not initialized, skipping")
@@ -268,7 +239,7 @@ class ShutdownManager:
                 if not db_manager._initialized:
                     logger.info("ℹ️ Database is not initialized, skipping")
                     return True
-            
+
             # Закрываем БД с таймаутом
             try:
                 async def close_db():
@@ -285,67 +256,68 @@ class ShutdownManager:
                             db_manager.shutdown()
                     else:
                         logger.warning("⚠️ DatabaseManager has no close/shutdown method")
-                
+
                 await asyncio.wait_for(
                     close_db(),
                     timeout=self.database_shutdown_timeout
                 )
-                
+
                 logger.info("✅ Database connections closed successfully")
                 return True
-            
+
             except asyncio.TimeoutError:
                 logger.error(
                     f"❌ Database shutdown timeout ({self.database_shutdown_timeout}s) exceeded"
                 )
                 return False
-        
+
         except Exception as e:
             logger.error(
                 f"❌ Error closing database: {e}",
                 exc_info=True
             )
             return False
-    
+
     def set_monitor(self, monitor: 'IntegratedCryptoMonitor') -> None:
         """
         Установка монитора для shutdown
-        
+
         Args:
             monitor: Экземпляр IntegratedCryptoMonitor
         """
         self.monitor = monitor
         logger.debug("Monitor set for shutdown management")
-    
+
     def get_status(self) -> dict:
         """
-        Получение статуса shutdown manager
-        
+        Получение статуса shutdown manager v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - Обновлены проверки has_* для новой архитектуры
+        - Убраны устаревшие task_manager и db_initializer
+
         Returns:
             Словарь с информацией о состоянии
         """
         return {
             'shutdown_in_progress': self.shutdown_in_progress,
             'shutdown_completed': self.shutdown_completed,
-            'has_task_manager': self.task_manager is not None,
-            'has_db_initializer': self.db_initializer is not None,
+            'has_db_manager': self.db_manager is not None,
             'has_monitor': self.monitor is not None,
             'timeouts': {
-                'tasks': self.task_shutdown_timeout,
                 'monitor': self.monitor_shutdown_timeout,
                 'database': self.database_shutdown_timeout
             }
         }
     
     def __repr__(self) -> str:
-        """Строковое представление"""
-        # ИСПРАВЛЕНО: вычисление вынесено из f-string для избежания syntax error
+        """Строковое представление v5.3"""
+        # ИСПРАВЛЕНО v5.3: обновлено для новой архитектуры
         components_count = sum([
-            self.task_manager is not None,
-            self.db_initializer is not None,
+            self.db_manager is not None,
             self.monitor is not None
         ])
-        
+
         return (
             f"ShutdownManager("
             f"in_progress={self.shutdown_in_progress}, "
