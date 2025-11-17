@@ -27,11 +27,17 @@ class HyperliquidSystem:
     def __init__(self, components: Dict):
         self.enabled = False
         self.publisher = components.get('publisher')
-        
+
+        # DEBUG: Проверяем что publisher загружен
+        if self.publisher:
+            logger.info(f"🌊 [HYPERLIQUID] Publisher загружен: {type(self.publisher).__name__}")
+        else:
+            logger.error("🌊 [HYPERLIQUID] ❌ Publisher отсутствует!")
+
         if not HYPERLIQUID_AVAILABLE or not config.is_feature_enabled('hyperliquid'):
             logger.info("🌊 [HYPERLIQUID] Disabled")
             return
-        
+
         self.enabled = True
         logger.info("🌊 [HYPERLIQUID] Система активна")
     
@@ -51,23 +57,34 @@ class HyperliquidSystem:
                 
                 sent = 0
                 if activities and config.hyperliquid.notify_whale_activity:
+                    logger.info(f"📊 [HYPERLIQUID] Проверяем {len(activities)} activities для публикации")
                     for activity in activities:
+                        logger.debug(f"   • {activity.asset}: confidence={activity.confidence}")
+
                         if activity.confidence >= 70:
                             try:
+                                if not self.publisher:
+                                    logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {activity.asset}")
+                                    continue
+
                                 message = monitor.format_whale_activity_alert(activity)
-                                
+
                                 await self.publisher.bot.send_message(
                                     chat_id=config.telegram.channel_id,
                                     text=message,
                                     parse_mode='HTML'
                                 )
-                                
+
                                 sent += 1
                                 logger.info(f"✅ [HYPERLIQUID] Whale activity: {activity.asset}")
                                 await asyncio.sleep(2)
-                                
+
                             except Exception as e:
                                 logger.error(f"⚠️ [HYPERLIQUID] Send error: {e}")
+                                import traceback
+                                logger.error(traceback.format_exc())
+                        else:
+                            logger.debug(f"   ⏭️  Пропускаем {activity.asset}: confidence {activity.confidence} < 70")
                 
                 logger.info(f"   Найдено: {len(activities)}, Отправлено: {sent}")
                 
@@ -97,23 +114,34 @@ class HyperliquidSystem:
                 
                 sent = 0
                 if liquidations and config.hyperliquid.notify_liquidations:
+                    logger.info(f"📊 [HYPERLIQUID] Проверяем {len(liquidations)} liquidations для публикации")
                     for liq in liquidations:
+                        logger.debug(f"   • {liq.asset}: confidence={liq.confidence}")
+
                         if liq.confidence >= 70:
                             try:
+                                if not self.publisher:
+                                    logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {liq.asset}")
+                                    continue
+
                                 message = monitor.format_liquidation_alert(liq)
-                                
+
                                 await self.publisher.bot.send_message(
                                     chat_id=config.telegram.channel_id,
                                     text=message,
                                     parse_mode='HTML'
                                 )
-                                
+
                                 sent += 1
                                 logger.info(f"✅ [HYPERLIQUID] Liquidation: {liq.asset}")
                                 await asyncio.sleep(2)
-                                
+
                             except Exception as e:
                                 logger.error(f"⚠️ [HYPERLIQUID] Send error: {e}")
+                                import traceback
+                                logger.error(traceback.format_exc())
+                        else:
+                            logger.debug(f"   ⏭️  Пропускаем {liq.asset}: confidence {liq.confidence} < 70")
                 
                 logger.info(f"   Найдено: {len(liquidations)}, Отправлено: {sent}")
                 

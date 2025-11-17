@@ -22,15 +22,27 @@ class EventEnricher:
         Args:
             components: Компоненты системы
         """
+        # DEBUG: Проверяем все компоненты
+        logger.info(f"🔍 [ENRICHER] Получены компоненты: {list(components.keys())}")
+
         self.price_provider = components.get('price_provider')
         self.history_manager = components.get('history_manager')
         self.news_gate = components.get('news_gate')
-        
-        if not self.price_provider:
+
+        if self.price_provider:
+            logger.info(f"✅ [ENRICHER] Price provider загружен: {type(self.price_provider).__name__}")
+        else:
             logger.warning("⚠️ [ENRICHER] Price provider не доступен")
-        
-        if not self.history_manager:
+
+        if self.history_manager:
+            logger.info(f"✅ [ENRICHER] History manager загружен: {type(self.history_manager).__name__}")
+        else:
             logger.warning("⚠️ [ENRICHER] History manager не доступен")
+
+        if self.news_gate:
+            logger.info(f"✅ [ENRICHER] News gate загружен: {type(self.news_gate).__name__}")
+        else:
+            logger.debug("ℹ️ [ENRICHER] News gate не доступен (опционально)")
     
     async def enrich_with_market_data(
         self, 

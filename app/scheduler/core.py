@@ -154,7 +154,7 @@ class IntegratedScheduler:
     
     def _get_components(self) -> Dict:
         """Получение всех компонентов для передачи в подсистемы"""
-        return {
+        components = {
             'discovery': self.discovery,
             'scorer': self.scorer,
             'price_provider': self.price_provider,
@@ -168,6 +168,12 @@ class IntegratedScheduler:
             'rate_limiter': self.rate_limiter,
             'pending_verification': self.pending_verification
         }
+
+        # DEBUG: Логируем какие компоненты реально не None
+        loaded = [k for k, v in components.items() if v is not None]
+        logger.debug(f"📦 [COMPONENTS] Передаем {len(loaded)}/{len(components)}: {', '.join(loaded)}")
+
+        return components
     
     def set_rate_limiter(self, rate_limiter):
         """Установка rate limiter"""
