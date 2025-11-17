@@ -155,7 +155,7 @@ class WhaleMonitor:
     def get_health_status(self) -> Dict[str, Any]:
         """
         Получение статуса здоровья системы
-        
+
         Returns:
             Dict со статусом и метриками
         """
@@ -172,7 +172,26 @@ class WhaleMonitor:
             'total_events_published': self.state.total_events_published,
             'components': self.lifecycle.get_components_status()
         }
-    
+
+    async def run(self):
+        """
+        Запуск монитора как сервиса (on-demand mode)
+
+        Монитор работает в режиме on-demand - вызывается через run_cycle().
+        Этот метод просто ждет сигнала отмены.
+        """
+        import asyncio
+
+        logger.info("🐋 [WHALE] Monitor running in service mode (on-demand)")
+        logger.info("🐋 [WHALE] Will be called via run_cycle() when needed")
+
+        try:
+            # Ждем сигнала shutdown
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            logger.info("🐋 [WHALE] Monitor received shutdown signal")
+            raise
+
     async def cleanup(self):
         """Очистка ресурсов"""
         logger.info("🧹 [WHALE] Cleanup monitor...")

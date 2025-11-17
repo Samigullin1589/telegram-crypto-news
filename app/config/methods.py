@@ -67,7 +67,39 @@ class ConfigMethods:
     def get_ai_provider(self) -> str:
         """Получение названия активного AI провайдера"""
         return self.config.api.get_ai_provider()
-    
+
+    def get_api_key(self, api_name: str) -> str:
+        """
+        Получение API ключа по названию API
+
+        Args:
+            api_name: Название API (coingecko, openai, anthropic, gemini, etc.)
+
+        Returns:
+            API ключ или пустая строка если не найден
+        """
+        # Маппинг названий API к атрибутам config.api
+        api_mapping = {
+            'coingecko': 'coingecko_api_key',
+            'openai': 'openai_api_key',
+            'anthropic': 'anthropic_api_key',
+            'gemini': 'gemini_api_key',
+            'alchemy': 'alchemy_api_key',
+            'helius': 'helius_api_key',
+            'coinmarketcap': 'coinmarketcap_api_key',
+            'etherscan': 'etherscan_api_key',
+            'bscscan': 'bscscan_api_key',
+            'polygonscan': 'polygonscan_api_key',
+            'arbiscan': 'arbiscan_api_key',
+            'basescan': 'basescan_api_key',
+            'snowtrace': 'snowtrace_api_key',
+        }
+
+        attr_name = api_mapping.get(api_name.lower())
+        if attr_name:
+            return getattr(self.config.api, attr_name, '')
+        return ''
+
     # ========================================================================
     # BLOCKCHAIN МЕТОДЫ
     # ========================================================================

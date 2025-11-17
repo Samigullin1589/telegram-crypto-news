@@ -39,6 +39,7 @@ class ConfigAliases:
         self._setup_production_alias()
         self._setup_rate_limit_alias()
         self._setup_data_dir_alias()
+        self._setup_state_file_alias()
 
         logger.debug("Все алиасы настроены")
     
@@ -140,3 +141,17 @@ class ConfigAliases:
             logger.debug("Алиас config.data_dir -> config.paths.data_dir создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас data_dir: {e}")
+
+    def _setup_state_file_alias(self):
+        """
+        Настройка алиаса config.state_file -> config.paths.state_file
+
+        Для обратной совместимости со старым кодом,
+        который использует config.state_file
+        """
+        try:
+            # Создаем ссылку state_file -> paths.state_file
+            self.config.state_file = self.config.paths.state_file
+            logger.debug("Алиас config.state_file -> config.paths.state_file создан")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас state_file: {e}")
