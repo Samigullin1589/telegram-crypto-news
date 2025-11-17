@@ -1,9 +1,15 @@
 # core/monitor.py
 """
-Integrated Crypto Monitor v5.3
+Integrated Crypto Monitor v5.4
 ===============================
 
 Production-Ready система мониторинга криптовалют.
+
+ИСПРАВЛЕНО v5.4:
+- Telegram bot webhook режим для Render.com
+- Автоматическое определение режима (webhook vs polling)
+- Использует BotWebhookRunner на Render для webhook поддержки
+- Исправлена проблема запуска бота в webhook окружении
 
 ИСПРАВЛЕНО v5.3:
 - MonitorBusinessLayer.initialize() проверяет результат load_all()
@@ -19,11 +25,12 @@ Production-Ready система мониторинга криптовалют.
 - Убран двойной cleanup (только через stop())
 - Все методы существуют и работают
 
-Architecture v5.3:
+Architecture v5.4:
 ------------------
 - Core: Rate limiter, resource monitor, health monitor, statistics
 - Business: News, whale, trading, bot (lazy-loaded через ComponentManager)
 - Infrastructure: HTTP server, direct task launching, shutdown coordination
+- Bot: Автоматический выбор webhook (Render) или polling (local) режима
 """
 
 import asyncio
@@ -524,20 +531,49 @@ class MonitorInfrastructure:
     async def _run_bot_application(self, bot_app: Any) -> None:
         """
         Wrapper для запуска bot application
-        
+
+        ИСПРАВЛЕНО v5.4:
+        - Использует BotWebhookRunner для webhook режима (Render.com)
+        - Автоматическое определение режима по окружению
+
         Args:
             bot_app: Bot application instance
         """
         try:
             logger.info("[BOT] Starting application...")
-            
-            if hasattr(bot_app, 'run_polling'):
-                await bot_app.run_polling()
-            elif hasattr(bot_app, 'run'):
-                await bot_app.run()
+
+            # ИСПРАВЛЕНО v5.4: Проверяем если нужен webhook режим (Render.com)
+            import os
+            is_render = os.environ.get('RENDER') == 'true'
+            webhook_url = os.environ.get('WEBHOOK_URL', '')
+            render_url = os.environ.get('RENDER_EXTERNAL_URL', '')
+
+            # Если Render или есть WEBHOOK_URL - используем webhook режим
+            if is_render or webhook_url or render_url:
+                logger.info("[BOT] Starting in WEBHOOK mode (Render.com)")
+
+                # Создаем BotWebhookRunner
+                from core.tasks.bot_runner import BotWebhookRunner
+
+                runner = BotWebhookRunner(
+                    bot_application=bot_app,
+                    health_monitor=self.core.health_monitor,
+                    statistics=self.core.statistics,
+                    shutdown_event=self.shutdown_event
+                )
+
+                await runner.run()
             else:
-                logger.warning("[BOT] No run_polling/run method found")
-        
+                # Локальный режим - используем polling
+                logger.info("[BOT] Starting in POLLING mode (local)")
+
+                if hasattr(bot_app, 'run_polling'):
+                    await bot_app.run_polling()
+                elif hasattr(bot_app, 'run'):
+                    await bot_app.run()
+                else:
+                    logger.warning("[BOT] No run_polling/run method found")
+
         except asyncio.CancelledError:
             logger.info("[BOT] Task cancelled")
             raise
