@@ -84,13 +84,13 @@ class WhaleLoader:
 
             # КРИТИЧЕСКИЕ КОМПОНЕНТЫ (required)
 
-            # 1. WhaleScorer
+            # 1. EventScorer
             try:
-                from app.whales.score import WhaleScorer
-                components['scorer'] = WhaleScorer()
-                logger.debug("   ✓ WhaleScorer created")
+                from app.whales.score import EventScorer
+                components['scorer'] = EventScorer()
+                logger.debug("   ✓ EventScorer created")
             except Exception as e:
-                logger.error(f"   ❌ WhaleScorer failed: {e}")
+                logger.error(f"   ❌ EventScorer failed: {e}")
 
             # 2. PriceProvider
             try:
