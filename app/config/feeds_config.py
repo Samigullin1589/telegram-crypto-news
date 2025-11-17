@@ -1,9 +1,9 @@
-# app/config/feeds_config.py
 """
 RSS Feeds Configuration Module
 Конфигурация RSS источников новостей
 """
 
+import os
 import logging
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
@@ -168,9 +168,19 @@ class FeedsConfig:
                 ]
             ),
         }
-        
+
+        # Флаг включения news модуля (для обратной совместимости)
+        self.enabled = os.getenv('NEWS_ENABLED', 'true').lower() == 'true'
+
+        # Дополнительные параметры для обратной совместимости
+        self.fetch_interval = int(os.getenv('NEWS_FETCH_INTERVAL', '300'))
+        self.ai_enabled = os.getenv('NEWS_AI_ENABLED', 'true').lower() == 'true'
+        self.ai_provider = os.getenv('NEWS_AI_PROVIDER', 'openai')
+        self.posts_per_hour_cap = int(os.getenv('POSTS_PER_HOUR_CAP', '10'))
+
         enabled_count = len([f for f in self.feeds.values() if f.enabled])
         logger.info(f"✅ [FEEDS] Загружено {len(self.feeds)} источников ({enabled_count} активных)")
+        logger.info(f"✅ [FEEDS] News module enabled: {self.enabled}")
     
     def get_enabled_feeds(self) -> Dict[str, FeedConfig]:
         """Получение только активных фидов"""
