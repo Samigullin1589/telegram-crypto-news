@@ -183,7 +183,7 @@ class IntegratedScheduler:
         """Выполнить один цикл whale monitoring (для manual запуска)"""
         self.stats["last_cycle_time"] = datetime.utcnow()
         start_time = datetime.utcnow() - timedelta(seconds=config.whale.poll_seconds)
-        chains = config.chains.enabled_chains
+        chains = config.blockchain.enabled_chains
         
         result = await self.whale_monitor.run_cycle(start_time, chains)
         
@@ -226,8 +226,8 @@ class IntegratedScheduler:
         while not self._shutdown_flag:
             try:
                 logger.info(f"\n📊 [WHALE] Цикл: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
-                
-                chains = config.chains.enabled_chains
+
+                chains = config.blockchain.enabled_chains
                 result = await self.whale_monitor.run_cycle(start_time, chains)
                 
                 self.stats["events_collected"] += result.get('events_collected', 0)

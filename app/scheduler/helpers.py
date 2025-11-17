@@ -78,7 +78,7 @@ def print_startup_banner(components: Dict):
         print(f"  Min Trade: ${config.hyperliquid.min_trade_usd:,.0f}")
     
     print(f"\n🌐 CHAINS:")
-    print(f"  Enabled: {', '.join(config.chains.enabled_chains)}")
+    print(f"  Enabled: {', '.join(config.blockchain.enabled_chains)}")
     
     if components.get('wallet_db'):
         active = len(components['wallet_db'].get_active_wallets())

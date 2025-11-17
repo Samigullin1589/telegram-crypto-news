@@ -130,12 +130,12 @@ class MonitorBusinessLayer:
 
             self._component_manager = ComponentManager()
 
-            # ИСПРАВЛЕНО v5.3: Проверяем результат load_all()
-            news_ok, whale_ok, bot_ok, trading_ok = self._component_manager.load_all()
+            # ИСПРАВЛЕНО v5.4: Обновлено для 5 компонентов (добавлен Hyperliquid)
+            news_ok, whale_ok, bot_ok, trading_ok, hyperliquid_ok = self._component_manager.load_all()
 
             # Подсчет успешно загруженных
-            loaded_count = sum([news_ok, whale_ok, bot_ok, trading_ok])
-            total_count = 4
+            loaded_count = sum([news_ok, whale_ok, bot_ok, trading_ok, hyperliquid_ok])
+            total_count = 5
 
             # Логирование детального статуса
             logger.info(f"[BUSINESS] Components loaded: {loaded_count}/{total_count}")
@@ -159,7 +159,12 @@ class MonitorBusinessLayer:
             else:
                 logger.warning("[BUSINESS]   ⚠️  Trading system (failed/disabled)")
 
-            # ИСПРАВЛЕНО v5.3: Требуем хотя бы ОДИН успешно загруженный компонент
+            if hyperliquid_ok:
+                logger.info("[BUSINESS]   ✅ Hyperliquid system")
+            else:
+                logger.warning("[BUSINESS]   ⚠️  Hyperliquid system (failed/disabled)")
+
+            # ИСПРАВЛЕНО v5.4: Требуем хотя бы ОДИН успешно загруженный компонент
             if loaded_count == 0:
                 logger.error("[BUSINESS] ❌ No components loaded! Cannot proceed.")
                 return False
