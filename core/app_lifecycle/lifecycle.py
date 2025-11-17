@@ -1,7 +1,11 @@
 # core/app_lifecycle/lifecycle.py
 """
-Application Lifecycle Module v5.3
+Application Lifecycle Module v5.4
 ИСПРАВЛЕНО: Monitor запускается как фоновая задача
+
+ИСПРАВЛЕНО v5.4:
+- Убран HealthServer (HTTP endpoints обрабатывает Monitor.HTTPServer)
+- Исправлен конфликт портов между HealthServer и HTTPServer
 
 ИСПРАВЛЕНО v5.3:
 - HealthServer v5.3 compatibility (start() без параметра port)
@@ -20,51 +24,57 @@ logger = logging.getLogger(__name__)
 
 class ApplicationLifecycle:
     """
-    Управление жизненным циклом v5.1
-    
-    ИСПРАВЛЕНО:
+    Управление жизненным циклом v5.4
+
+    ИСПРАВЛЕНО v5.4:
+    - Убран health_server (HTTP сервер теперь в Monitor)
+    - Исправлен конфликт портов
+
+    ИСПРАВЛЕНО v5.1:
     - Monitor.run() запускается как фоновая задача
     - Ожидание через monitor.infrastructure.shutdown_event
     - Сохранение ссылки на monitor_task
     """
-    
+
     def __init__(
         self,
         config: Any,
         monitor: Any,
         db_manager: Any,
-        shutdown_manager: Any,
-        health_server: Any
+        shutdown_manager: Any
     ):
         self.config = config
         self.monitor = monitor
         self.db_manager = db_manager
         self.shutdown_manager = shutdown_manager
-        self.health_server = health_server
-        
+
         self.validator = ApplicationValidator(config, monitor, db_manager)
-        
+
         self.is_running = False
         self.start_time: Optional[float] = None
         self.monitor_task: Optional[asyncio.Task] = None
-        
-        logger.debug("ApplicationLifecycle initialized")
+
+        logger.debug("ApplicationLifecycle v5.4 initialized")
     
     async def startup(self) -> None:
-        """Запуск приложения"""
+        """
+        Запуск приложения v5.4
+
+        ИСПРАВЛЕНО v5.4:
+        - Убран запуск HealthServer (HTTP сервер запускается в Monitor)
+        """
         self.start_time = time.time()
-        
+
         logger.info("="*80)
         logger.info("🚀 STARTING APPLICATION")
         logger.info("="*80)
-        
+
         try:
             await self._validate_readiness()
-            await self._start_health_server()
             await self._start_monitor()
-            
+
             self.is_running = True
-            
+
             logger.info("="*80)
             logger.info("✅ STARTUP COMPLETE")
             logger.info("="*80)
@@ -82,27 +92,6 @@ class ApplicationLifecycle:
         
         logger.info("✅ Validated")
     
-    async def _start_health_server(self) -> None:
-        """
-        Запуск health server v5.3
-
-        ИСПРАВЛЕНО v5.3:
-        - HealthServer.start() не принимает параметр port
-        - Порт уже установлен в HealthServer.__init__()
-        - Получаем порт из health_server.port для логирования
-        """
-        logger.info("Starting health server...")
-
-        try:
-            # ИСПРАВЛЕНО v5.3: start() без параметров
-            await self.health_server.start()
-
-            # Получаем порт из health_server для логирования
-            port = getattr(self.health_server, 'port', 8000)
-            logger.info(f"✅ Health server on port {port}")
-        except Exception as e:
-            logger.error(f"❌ Health server failed: {e}", exc_info=True)
-            raise
     
     async def _start_monitor(self) -> None:
         """Запуск monitor как фоновой задачи"""
@@ -124,22 +113,26 @@ class ApplicationLifecycle:
             raise
     
     async def shutdown(self) -> None:
-        """Graceful shutdown"""
+        """
+        Graceful shutdown v5.4
+
+        ИСПРАВЛЕНО v5.4:
+        - Убрана остановка HealthServer (HTTP сервер останавливается в Monitor)
+        """
         if not self.is_running:
             return
-        
+
         logger.info("="*80)
         logger.info("⏹️ SHUTDOWN")
         logger.info("="*80)
-        
+
         try:
             await self._stop_monitor()
             await self._run_shutdown_manager()
-            await self._stop_health_server()
             self._log_stats()
-            
+
             self.is_running = False
-            
+
             logger.info("="*80)
             logger.info("✅ SHUTDOWN COMPLETE")
             logger.info("="*80)
@@ -172,13 +165,6 @@ class ApplicationLifecycle:
         except Exception as e:
             logger.error(f"❌ Shutdown manager error: {e}", exc_info=True)
     
-    async def _stop_health_server(self) -> None:
-        """Остановка health server"""
-        try:
-            await self.health_server.stop()
-            logger.info("✅ Health server stopped")
-        except Exception as e:
-            logger.error(f"❌ Health server error: {e}", exc_info=True)
     
     def _log_stats(self) -> None:
         """Статистика"""

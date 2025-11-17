@@ -1,7 +1,12 @@
 # core/application.py
 """
-Main Application Module v5.1
-Интеграция с IntegratedCryptoMonitor v5.0
+Main Application Module v5.4
+Интеграция с IntegratedCryptoMonitor v5.3
+
+ИСПРАВЛЕНО v5.4:
+- Убран HealthServer (используется Monitor.HTTPServer)
+- Исправлен конфликт портов HTTP серверов
+- Упрощенная архитектура - один HTTP сервер
 
 ИСПРАВЛЕНО v5.1:
 - Убран отдельный TaskManager (используется monitor.infrastructure.task_manager)
@@ -21,57 +26,69 @@ from .initialization import (
 )
 
 from .shutdown import ShutdownManager
-from .health_server import HealthServer
 from .app_lifecycle.lifecycle import ApplicationLifecycle
 
 logger = logging.getLogger(__name__)
 
 
 class ApplicationComponents:
-    """Контейнер компонентов приложения"""
-    
+    """
+    Контейнер компонентов приложения v5.4
+
+    ИСПРАВЛЕНО v5.4:
+    - Убран health_server (HTTP endpoints обрабатывает Monitor.HTTPServer)
+    """
+
     def __init__(self):
         self.config: Optional[Any] = None
         self.db_manager: Optional[Any] = None
         self.monitor: Optional[Any] = None
         self.shutdown_manager: Optional[ShutdownManager] = None
-        self.health_server: Optional[HealthServer] = None
         self.lifecycle: Optional[ApplicationLifecycle] = None
-    
+
     def is_fully_initialized(self) -> bool:
         """Проверка полной инициализации"""
         return all([
             self.config is not None,
             self.db_manager is not None,
             self.monitor is not None,
-            self.shutdown_manager is not None,
-            self.health_server is not None
+            self.shutdown_manager is not None
         ])
-    
+
     def get_missing_components(self) -> list:
         """Получить список неинициализированных компонентов"""
         components = {
             'config': self.config,
             'db_manager': self.db_manager,
             'monitor': self.monitor,
-            'shutdown_manager': self.shutdown_manager,
-            'health_server': self.health_server
+            'shutdown_manager': self.shutdown_manager
         }
         return [name for name, comp in components.items() if comp is None]
 
 
 class ComponentInitializer:
-    """Инициализатор компонентов"""
-    
+    """
+    Инициализатор компонентов v5.4
+
+    ИСПРАВЛЕНО v5.4:
+    - Убрана инициализация HealthServer (HTTP сервер в Monitor)
+    - Обновлено количество шагов: 4 вместо 5
+    """
+
     def __init__(self, components: ApplicationComponents):
         self.components = components
         self._step = 0
-        self._total = 5
+        self._total = 4  # ИСПРАВЛЕНО v5.4: было 5
     
     async def initialize_all(self) -> bool:
-        """Инициализация всех компонентов"""
+        """
+        Инициализация всех компонентов v5.4
+
+        ИСПРАВЛЕНО v5.4:
+        - Убрана инициализация HealthServer
+        """
         self._print_header()
-        
+
         try:
             if not await self._init_environment():
                 return False
@@ -81,9 +98,7 @@ class ComponentInitializer:
                 return False
             if not await self._init_shutdown_manager():
                 return False
-            if not await self._init_health_server():
-                return False
-            
+
             self._print_success()
             return True
         except Exception as e:
@@ -157,21 +172,6 @@ class ComponentInitializer:
             logger.error(f"❌ Shutdown manager error: {e}", exc_info=True)
             return False
     
-    async def _init_health_server(self) -> bool:
-        """Step 5: Health server"""
-        self._step = 5
-        self._print_step("Health server")
-        try:
-            self.components.health_server = HealthServer(
-                monitor=self.components.monitor,
-                config=self.components.config
-            )
-            logger.info("✅ Health server created")
-            logger.info("")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Health server error: {e}", exc_info=True)
-            return False
     
     def _print_header(self):
         logger.info("")
@@ -269,10 +269,9 @@ class Application:
                 config=self.components.config,
                 monitor=self.components.monitor,
                 db_manager=self.components.db_manager,
-                shutdown_manager=self.components.shutdown_manager,
-                health_server=self.components.health_server
+                shutdown_manager=self.components.shutdown_manager
             )
-            logger.info("✅ Lifecycle manager created")
+            logger.info("✅ Lifecycle manager v5.4 created (HTTP server in Monitor)")
         except Exception as e:
             logger.error(f"❌ Lifecycle creation failed: {e}", exc_info=True)
             raise
