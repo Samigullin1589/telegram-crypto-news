@@ -47,9 +47,9 @@ class SolanaRPCClient:
         Returns:
             API ключ или None
         """
-        # Попытка получить из config.chains.api_keys
-        if hasattr(config, 'chains') and hasattr(config.chains, 'api_keys'):
-            api_key = getattr(config.chains.api_keys, 'helius', None)
+        # Попытка получить из config.blockchain.api_keys
+        if hasattr(config, 'blockchain') and hasattr(config.blockchain, 'api_keys'):
+            api_key = getattr(config.blockchain.api_keys, 'helius', None)
             if api_key:
                 return api_key
         

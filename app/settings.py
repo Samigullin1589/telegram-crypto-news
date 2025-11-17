@@ -42,11 +42,11 @@ GEMINI_API_KEY = config.gemini_api_key or ''
 # BLOCKCHAIN SETTINGS
 # ============================================================================
 
-ENABLED_CHAINS = config.chains.enabled_chains
-ETHEREUM_RPC_URL = config.chains.rpc_urls.get('ethereum', '')
-BSC_RPC_URL = config.chains.rpc_urls.get('bsc', '')
-POLYGON_RPC_URL = config.chains.rpc_urls.get('polygon', '')
-SOLANA_RPC_URL = config.chains.rpc_urls.get('solana', '')
+ENABLED_CHAINS = config.blockchain.enabled_chains
+ETHEREUM_RPC_URL = config.blockchain.rpc_urls.get('ethereum', '')
+BSC_RPC_URL = config.blockchain.rpc_urls.get('bsc', '')
+POLYGON_RPC_URL = config.blockchain.rpc_urls.get('polygon', '')
+SOLANA_RPC_URL = config.blockchain.rpc_urls.get('solana', '')
 
 # ============================================================================
 # WHALE SETTINGS

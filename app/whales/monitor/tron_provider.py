@@ -17,9 +17,9 @@ class TronProvider:
         self.session = session
         self.rate_limiter = rate_limiter
         self.tx_cache = tx_cache
-        
+
         self.api_url = "https://apilist.tronscanapi.com/api"
-        self.api_key = getattr(config.chains.api_keys, 'tronscan', '') or getattr(config, 'TRONSCAN_API_KEY', '')
+        self.api_key = getattr(config.blockchain.api_keys, 'tronscan', '') or getattr(config, 'TRONSCAN_API_KEY', '')
     
     async def fetch_events(
         self,
