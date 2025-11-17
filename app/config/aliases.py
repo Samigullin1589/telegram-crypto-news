@@ -36,6 +36,8 @@ class ConfigAliases:
         self._setup_whale_alias()
         self._setup_telegram_token_alias()
         self._setup_feeds_sources_alias()
+        self._setup_production_alias()
+        self._setup_rate_limit_alias()
 
         logger.debug("Все алиасы настроены")
     
@@ -83,7 +85,7 @@ class ConfigAliases:
     def _setup_feeds_sources_alias(self):
         """
         Настройка алиаса feeds.sources для легкого доступа
-        
+
         Позволяет использовать config.news.sources вместо
         config.news.get_enabled_feeds()
         """
@@ -94,3 +96,32 @@ class ConfigAliases:
                 logger.debug("Алиас feeds.sources создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас feeds.sources: {e}")
+
+    def _setup_production_alias(self):
+        """
+        Настройка алиаса config.production -> config.base
+
+        Для обратной совместимости со старым кодом,
+        который использует config.production.port,
+        config.production.http_timeout, config.production.max_memory_mb
+        """
+        try:
+            # Создаем ссылку production -> base
+            self.config.production = self.config.base
+            logger.debug("Алиас config.production -> config.base создан")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас production: {e}")
+
+    def _setup_rate_limit_alias(self):
+        """
+        Настройка алиаса config.rate_limit -> config.rate_limiting
+
+        Для обратной совместимости со старым кодом,
+        который использует config.rate_limit
+        """
+        try:
+            # Создаем ссылку rate_limit -> rate_limiting
+            self.config.rate_limit = self.config.rate_limiting
+            logger.debug("Алиас config.rate_limit -> config.rate_limiting создан")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас rate_limit: {e}")

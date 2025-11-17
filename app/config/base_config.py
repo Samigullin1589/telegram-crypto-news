@@ -99,11 +99,20 @@ class BaseConfig:
         # ====================================================================
         # METRICS
         # ====================================================================
-        
+
         self.METRICS_ENABLED = self._get_bool_env('METRICS_ENABLED', False)
         self.METRICS_INTERVAL = self._get_int_env('METRICS_INTERVAL', 60)
         self.METRICS_RETENTION_HOURS = self._get_int_env('METRICS_RETENTION_HOURS', 24)
-        
+
+        # ====================================================================
+        # BACKWARD COMPATIBILITY ALIASES (lowercase)
+        # ====================================================================
+
+        # Для совместимости со старым кодом, который использует lowercase
+        self.port = self.PORT
+        self.http_timeout = self.HTTP_TIMEOUT
+        self.max_memory_mb = self.MAX_MEMORY_MB
+
         # ====================================================================
         # HTTP HEADERS
         # ====================================================================

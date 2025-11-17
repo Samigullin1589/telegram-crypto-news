@@ -42,12 +42,15 @@ class RateLimitingConfig:
         
         # Для обратной совместимости
         self.rate_limit_enabled = self.enabled
-        
+
         # Глобальные лимиты
         self.max_requests_per_minute = self._get_int_env(
-            'MAX_REQUESTS_PER_MINUTE', 
+            'MAX_REQUESTS_PER_MINUTE',
             60
         )
+
+        # Для обратной совместимости
+        self.calls_per_minute = self.max_requests_per_minute
         
         self.max_api_calls_per_second = self._get_int_env(
             'MAX_API_CALLS_PER_SECOND', 
