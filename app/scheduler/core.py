@@ -101,6 +101,21 @@ class IntegratedScheduler:
             logger.error(f"   ❌ HistoryManager не загружен: {e}")
             self.history_manager = None
 
+        # EventEnricher - КРИТИЧЕСКИЙ компонент для обогащения
+        try:
+            from app.scheduler.whale_components.event_enricher import EventEnricher
+            # Создаем enricher, передавая компоненты
+            enricher_components = {
+                'price_provider': self.price_provider,
+                'history_manager': self.history_manager,
+                'news_gate': self.news_gate
+            }
+            self.enricher = EventEnricher(enricher_components)
+            logger.info("   ✓ EventEnricher created")
+        except Exception as e:
+            logger.error(f"   ❌ EventEnricher не загружен: {e}")
+            self.enricher = None
+
         if config.is_feature_enabled('adaptive_thresholds'):
             self.adaptive_thresholds = AdaptiveThresholds()
         else:
@@ -162,6 +177,7 @@ class IntegratedScheduler:
             'publisher': self.publisher,
             'chart_renderer': self.chart_renderer,
             'history_manager': self.history_manager,
+            'enricher': self.enricher,  # КРИТИЧЕСКИ ВАЖНО для PublicationManager!
             'adaptive_thresholds': self.adaptive_thresholds,
             'wallet_db': self.wallet_db,
             'seen_keys': self.seen_keys,
