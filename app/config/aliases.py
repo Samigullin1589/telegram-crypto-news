@@ -38,6 +38,7 @@ class ConfigAliases:
         self._setup_feeds_sources_alias()
         self._setup_production_alias()
         self._setup_rate_limit_alias()
+        self._setup_data_dir_alias()
 
         logger.debug("Все алиасы настроены")
     
@@ -125,3 +126,17 @@ class ConfigAliases:
             logger.debug("Алиас config.rate_limit -> config.rate_limiting создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас rate_limit: {e}")
+
+    def _setup_data_dir_alias(self):
+        """
+        Настройка алиаса config.data_dir -> config.paths.data_dir
+
+        Для обратной совместимости со старым кодом,
+        который использует config.data_dir
+        """
+        try:
+            # Создаем ссылку data_dir -> paths.data_dir
+            self.config.data_dir = self.config.paths.data_dir
+            logger.debug("Алиас config.data_dir -> config.paths.data_dir создан")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас data_dir: {e}")
