@@ -169,9 +169,48 @@ class ConfigMethods:
         return feature_map.get(feature_name.lower(), False)
     
     # ========================================================================
+    # API KEYS PROPERTIES (для обратной совместимости)
+    # ========================================================================
+
+    @property
+    def coingecko_api_key(self) -> str:
+        """CoinGecko API ключ (прямой доступ для совместимости)"""
+        return self.config.api.coingecko_api_key
+
+    @property
+    def openai_api_key(self) -> str:
+        """OpenAI API ключ (прямой доступ для совместимости)"""
+        return self.config.api.openai_api_key
+
+    @property
+    def gemini_api_key(self) -> str:
+        """Gemini API ключ (прямой доступ для совместимости)"""
+        return self.config.api.gemini_api_key
+
+    @property
+    def anthropic_api_key(self) -> str:
+        """Anthropic API ключ (прямой доступ для совместимости)"""
+        return self.config.api.anthropic_api_key
+
+    @property
+    def alchemy_api_key(self) -> str:
+        """Alchemy API ключ (прямой доступ для совместимости)"""
+        return self.config.api.alchemy_api_key
+
+    @property
+    def helius_api_key(self) -> str:
+        """Helius API ключ (прямой доступ для совместимости)"""
+        return self.config.api.helius_api_key
+
+    @property
+    def coinmarketcap_api_key(self) -> str:
+        """CoinMarketCap API ключ (прямой доступ для совместимости)"""
+        return self.config.api.coinmarketcap_api_key
+
+    # ========================================================================
     # AI TEMPLATE
     # ========================================================================
-    
+
     @property
     def ai_prompt_template(self) -> str:
         """Шаблон промпта для AI обработки новостей"""
