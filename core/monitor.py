@@ -441,6 +441,20 @@ class MonitorInfrastructure:
                     failed.append('bot')
                     logger.error(f"[INFRA] ❌ Bot start error: {e}", exc_info=True)
 
+            # Hyperliquid system
+            if cm.has_hyperliquid():
+                try:
+                    task = asyncio.create_task(
+                        self._run_hyperliquid_system(cm.hyperliquid_system),
+                        name="HyperliquidSystem"
+                    )
+                    self._running_tasks.append(task)
+                    started.append('hyperliquid')
+                    logger.info("[INFRA] ✅ Hyperliquid task started")
+                except Exception as e:
+                    failed.append('hyperliquid')
+                    logger.error(f"[INFRA] ❌ Hyperliquid start error: {e}", exc_info=True)
+
             logger.info("="*80)
             logger.info(f"[INFRA] 📊 Started {len(started)} tasks: {', '.join(started) if started else 'NONE'}")
             if failed:
@@ -632,7 +646,78 @@ class MonitorInfrastructure:
         except Exception as e:
             logger.error(f"[BOT] Task error: {e}", exc_info=True)
             self.core.statistics.increment_errors()
-    
+
+    async def _run_hyperliquid_system(self, system: Any) -> None:
+        """
+        Wrapper для запуска hyperliquid system v5.4
+
+        Hyperliquid работает как активный мониторинг с периодическими проверками:
+        - check_whale_activity() - каждые N минут
+        - check_liquidations() - каждые N минут
+        - check_funding_rates() - периодически
+
+        Args:
+            system: Hyperliquid system instance
+        """
+        try:
+            logger.info("[HYPERLIQUID] Starting system...")
+
+            if not hasattr(system, 'enabled') or not system.enabled:
+                logger.warning("[HYPERLIQUID] System disabled, waiting for shutdown...")
+                await self.shutdown_event.wait()
+                return
+
+            # Интервал проверок (default 10 минут)
+            check_interval = 600  # 10 minutes
+
+            try:
+                from app.config import config
+                if hasattr(config, 'features') and hasattr(config.features, 'timing'):
+                    # Используем whale_check_interval если есть
+                    check_interval = getattr(config.features.timing, 'whale_check_interval', 600)
+            except Exception:
+                pass
+
+            logger.info(f"[HYPERLIQUID] Check interval: {check_interval}s")
+
+            # Цикл проверок до shutdown
+            while not self.shutdown_event.is_set():
+                try:
+                    # Проверка whale activity
+                    if hasattr(system, 'check_whale_activity'):
+                        await system.check_whale_activity()
+
+                    # Проверка liquidations
+                    if hasattr(system, 'check_liquidations'):
+                        await system.check_liquidations()
+
+                    # Ждем до следующей проверки или shutdown
+                    try:
+                        await asyncio.wait_for(
+                            self.shutdown_event.wait(),
+                            timeout=check_interval
+                        )
+                        # Если дождались shutdown - выходим
+                        break
+                    except asyncio.TimeoutError:
+                        # Таймаут истек - продолжаем следующую проверку
+                        continue
+
+                except Exception as e:
+                    logger.error(f"[HYPERLIQUID] Check error: {e}", exc_info=True)
+                    self.core.statistics.increment_errors()
+                    # Ждем перед повтором при ошибке
+                    await asyncio.sleep(min(60, check_interval))
+
+            logger.info("[HYPERLIQUID] System stopped")
+
+        except asyncio.CancelledError:
+            logger.info("[HYPERLIQUID] Task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"[HYPERLIQUID] Task error: {e}", exc_info=True)
+            self.core.statistics.increment_errors()
+
     async def stop_business_tasks(self) -> None:
         """Остановка всех business задач"""
         logger.info("[INFRA] Stopping business tasks...")
