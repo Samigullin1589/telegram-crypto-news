@@ -32,13 +32,16 @@ class BlockchainConfig:
     def __init__(self):
         """Инициализация конфигурации блокчейнов"""
         logger.debug("Инициализация BlockchainConfig v3.0...")
-        
+
         # Загрузка списка активных блокчейнов
         self.enabled_chains = self._parse_enabled_chains()
-        
+
         # Глобальный минимальный порог в USD
         self.min_usd = float(os.getenv('MIN_USD', '100000'))
-        
+
+        # Загрузка RPC URLs из переменных окружения
+        self.rpc_urls = self._load_rpc_urls()
+
         # Инициализация компонентов
         self.thresholds = ChainThresholds()
         self.metadata = ChainMetadata()
@@ -48,7 +51,7 @@ class BlockchainConfig:
             supported_chains=self.thresholds.get_all_chains()
         )
         self.formatters = ChainFormatters(self.metadata)
-        
+
         logger.info(
             f"✅ [BLOCKCHAIN] Инициализировано chains: {len(self.enabled_chains)} "
             f"({', '.join(self.enabled_chains)})"
@@ -58,7 +61,7 @@ class BlockchainConfig:
     def _parse_enabled_chains() -> List[str]:
         """
         Парсинг списка включенных блокчейнов из переменных окружения
-        
+
         Returns:
             Список названий блокчейнов в нижнем регистре
         """
@@ -66,11 +69,33 @@ class BlockchainConfig:
             'ENABLED_CHAINS',
             'ethereum,solana,bsc,polygon,arbitrum,base,optimism,avalanche'
         )
-        
+
         chains = [chain.strip().lower() for chain in chains_str.split(',') if chain.strip()]
-        
+
         logger.debug(f"Parsed enabled chains: {chains}")
         return chains
+
+    @staticmethod
+    def _load_rpc_urls() -> Dict[str, str]:
+        """
+        Загрузка RPC URLs из переменных окружения
+
+        Returns:
+            Словарь с RPC URLs для каждого блокчейна
+        """
+        rpc_urls = {
+            'ethereum': os.getenv('ETHEREUM_RPC_URL', ''),
+            'bsc': os.getenv('BSC_RPC_URL', ''),
+            'polygon': os.getenv('POLYGON_RPC_URL', ''),
+            'arbitrum': os.getenv('ARBITRUM_RPC_URL', ''),
+            'base': os.getenv('BASE_RPC_URL', ''),
+            'optimism': os.getenv('OPTIMISM_RPC_URL', ''),
+            'avalanche': os.getenv('AVALANCHE_RPC_URL', ''),
+            'solana': os.getenv('SOLANA_RPC_URL', ''),
+        }
+
+        logger.debug(f"Loaded RPC URLs for {len([u for u in rpc_urls.values() if u])} chains")
+        return rpc_urls
     
     # ========================================================================
     # ПРОВЕРКА БЛОКЧЕЙНОВ

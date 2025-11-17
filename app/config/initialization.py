@@ -38,6 +38,7 @@ class ConfigInitializer:
         from .database_config import DatabaseConfig
         from .rate_limiting_config import RateLimitingConfig
         from .trading_config import TradingConfig
+        from .hyperliquid_config import HyperliquidConfig
         from .config_validator import ConfigValidator
         from .config_printer import ConfigPrinter
         
@@ -62,7 +63,8 @@ class ConfigInitializer:
         from .database.enums import DatabaseEngine
         from .rate_limiting_config import RateLimitingConfig
         from .trading_config import TradingConfig
-        
+        from .hyperliquid_config import HyperliquidConfig
+
         logger.debug("Инициализация конфигурационных модулей...")
         
         config_instance.base = BaseConfig()
@@ -108,6 +110,9 @@ class ConfigInitializer:
 
         config_instance.trading = TradingConfig()
         logger.debug("✓ TradingConfig")
+
+        config_instance.hyperliquid = HyperliquidConfig()
+        logger.debug("✓ HyperliquidConfig")
 
         logger.debug("Все модули инициализированы")
     

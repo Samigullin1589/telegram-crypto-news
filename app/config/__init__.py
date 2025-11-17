@@ -38,6 +38,7 @@ from .features_config import FeaturesConfig
 from .database_config import DatabaseConfig
 from .rate_limiting_config import RateLimitingConfig
 from .trading_config import TradingConfig
+from .hyperliquid_config import HyperliquidConfig
 from .config_validator import ConfigValidator
 from .config_printer import ConfigPrinter
 
@@ -83,6 +84,7 @@ class Config(metaclass=SingletonMeta):
         database: DatabaseConfig - база данных
         rate_limiting: RateLimitingConfig - rate limiting
         trading: TradingConfig - торговая система
+        hyperliquid: HyperliquidConfig - конфигурация Hyperliquid DEX
         validator: ConfigValidator - валидатор
         printer: ConfigPrinter - принтер
         news: FeedsConfig - алиас для feeds (обратная совместимость)
@@ -223,6 +225,7 @@ __all__ = [
     'DatabaseConfig',
     'RateLimitingConfig',
     'TradingConfig',
+    'HyperliquidConfig',
     'ConfigValidator',
     'ConfigPrinter',
 ]
