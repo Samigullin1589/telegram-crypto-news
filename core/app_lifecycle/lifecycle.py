@@ -1,7 +1,11 @@
 # core/app_lifecycle/lifecycle.py
 """
-Application Lifecycle Module v5.1
+Application Lifecycle Module v5.3
 ИСПРАВЛЕНО: Monitor запускается как фоновая задача
+
+ИСПРАВЛЕНО v5.3:
+- HealthServer v5.3 compatibility (start() без параметра port)
+- ApplicationValidator v5.3 compatibility (business layer)
 """
 
 import logging
@@ -79,12 +83,22 @@ class ApplicationLifecycle:
         logger.info("✅ Validated")
     
     async def _start_health_server(self) -> None:
-        """Запуск health server"""
+        """
+        Запуск health server v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - HealthServer.start() не принимает параметр port
+        - Порт уже установлен в HealthServer.__init__()
+        - Получаем порт из health_server.port для логирования
+        """
         logger.info("Starting health server...")
-        
+
         try:
-            port = getattr(self.config, 'port', 8000)
-            await self.health_server.start(port=port)
+            # ИСПРАВЛЕНО v5.3: start() без параметров
+            await self.health_server.start()
+
+            # Получаем порт из health_server для логирования
+            port = getattr(self.health_server, 'port', 8000)
             logger.info(f"✅ Health server on port {port}")
         except Exception as e:
             logger.error(f"❌ Health server failed: {e}", exc_info=True)
