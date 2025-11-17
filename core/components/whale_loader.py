@@ -72,24 +72,52 @@ class WhaleLoader:
     def _create_components(self) -> Optional[Dict[str, Any]]:
         """
         Создание компонентов для WhaleMonitor
-        
+
         Returns:
             Dict с компонентами или None
         """
         try:
             components = {}
-            
+
             # Seen keys для отслеживания событий
             components['seen_keys'] = set()
-            
-            # Попытка создать дополнительные компоненты
+
+            # КРИТИЧЕСКИЕ КОМПОНЕНТЫ (required)
+
+            # 1. WhaleScorer
             try:
                 from app.whales.score import WhaleScorer
                 components['scorer'] = WhaleScorer()
                 logger.debug("   ✓ WhaleScorer created")
             except Exception as e:
-                logger.debug(f"   WhaleScorer not available: {e}")
-            
+                logger.error(f"   ❌ WhaleScorer failed: {e}")
+
+            # 2. PriceProvider
+            try:
+                from app.whales.price import PriceProvider
+                components['price_provider'] = PriceProvider()
+                logger.debug("   ✓ PriceProvider created")
+            except Exception as e:
+                logger.error(f"   ❌ PriceProvider failed: {e}")
+
+            # 3. WhalePublisher
+            try:
+                from app.whales.publisher.core import WhalePublisher
+                components['publisher'] = WhalePublisher()
+                logger.debug("   ✓ WhalePublisher created")
+            except Exception as e:
+                logger.error(f"   ❌ WhalePublisher failed: {e}")
+
+            # 4. HistoryManager
+            try:
+                from app.whales.history.manager import HistoryManager
+                components['history_manager'] = HistoryManager()
+                logger.debug("   ✓ HistoryManager created")
+            except Exception as e:
+                logger.error(f"   ❌ HistoryManager failed: {e}")
+
+            # ОПЦИОНАЛЬНЫЕ КОМПОНЕНТЫ
+
             # Event filter
             try:
                 from app.scheduler.whale_components import EventFilter
@@ -98,7 +126,7 @@ class WhaleLoader:
                 logger.debug("   ✓ EventFilter created")
             except Exception as e:
                 logger.debug(f"   EventFilter not available: {e}")
-            
+
             # Event enricher
             try:
                 from app.scheduler.whale_components import EventEnricher
@@ -106,10 +134,10 @@ class WhaleLoader:
                 logger.debug("   ✓ EventEnricher created")
             except Exception as e:
                 logger.debug(f"   EventEnricher not available: {e}")
-            
+
             logger.debug(f"   Created {len(components)} components")
             return components
-        
+
         except Exception as e:
             logger.error(f"Error creating components: {e}")
             return None
