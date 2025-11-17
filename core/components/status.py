@@ -53,13 +53,15 @@ class ComponentStatusManager:
             'news_processor': ComponentInfo('news_processor', False),
             'whale_scheduler': ComponentInfo('whale_scheduler', False),
             'bot_application': ComponentInfo('bot_application', False),
-            'trading_system': ComponentInfo('trading_system', False)
+            'trading_system': ComponentInfo('trading_system', False),
+            'hyperliquid_system': ComponentInfo('hyperliquid_system', False)
         }
         self._display_names = {
             'news_processor': 'News Bot',
             'whale_scheduler': 'Whale Monitor',
             'bot_application': 'Bot Commands',
-            'trading_system': 'Trading System'
+            'trading_system': 'Trading System',
+            'hyperliquid_system': 'Hyperliquid DEX'
         }
     
     def update(

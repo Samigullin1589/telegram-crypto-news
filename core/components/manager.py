@@ -46,7 +46,8 @@ class ComponentManager:
         self.whale_scheduler: Optional[Any] = None
         self.bot_application: Optional[Any] = None
         self.trading_system: Optional[Any] = None
-        
+        self.hyperliquid_system: Optional[Any] = None
+
         # ИСПРАВЛЕНО: ComponentLoader будет создан при первом использовании
         self._loader: Optional[Any] = None
         self._status = ComponentStatusManager()
@@ -72,26 +73,27 @@ class ComponentManager:
             self._loader = ComponentLoader()
         return self._loader
     
-    def load_all(self) -> Tuple[bool, bool, bool, bool]:
+    def load_all(self) -> Tuple[bool, bool, bool, bool, bool]:
         """
         Загружает все компоненты приложения
-        
+
         Returns:
-            Tuple[news_ok, whale_ok, bot_ok, trading_ok]
+            Tuple[news_ok, whale_ok, bot_ok, trading_ok, hyperliquid_ok]
         """
         logger.info("\n" + "="*80)
         logger.info("📦 LOADING APPLICATION COMPONENTS")
         logger.info("="*80)
-        
+
         # ИСПРАВЛЕНО: Используем self.loader вместо self._loader
         news_ok = self._load_component('news_processor', self.loader.load_news_processor)
         whale_ok = self._load_component('whale_scheduler', self.loader.load_whale_scheduler)
         bot_ok = self._load_component('bot_application', self.loader.load_bot_application)
         trading_ok = self._load_component('trading_system', self.loader.load_trading_system)
-        
+        hyperliquid_ok = self._load_component('hyperliquid_system', self.loader.load_hyperliquid_system)
+
         self._status.print_status()
-        
-        return (news_ok, whale_ok, bot_ok, trading_ok)
+
+        return (news_ok, whale_ok, bot_ok, trading_ok, hyperliquid_ok)
     
     def _load_component(self, component_name: str, loader_func: callable) -> bool:
         """
@@ -143,7 +145,11 @@ class ComponentManager:
     def has_trading(self) -> bool:
         """Проверяет доступность Trading System"""
         return self._status.is_available('trading_system')
-    
+
+    def has_hyperliquid(self) -> bool:
+        """Проверяет доступность Hyperliquid System"""
+        return self._status.is_available('hyperliquid_system')
+
     def get_active_components_count(self) -> int:
         """Возвращает количество активных компонентов"""
         return self._status.active_count()
@@ -165,7 +171,8 @@ class ComponentManager:
             'news_processor': self.news_processor,
             'whale_scheduler': self.whale_scheduler,
             'bot_application': self.bot_application,
-            'trading_system': self.trading_system
+            'trading_system': self.trading_system,
+            'hyperliquid_system': self.hyperliquid_system
         }
         await self._shutdown_manager.stop_all(components)
     
@@ -183,6 +190,7 @@ class ComponentManager:
             self.whale_scheduler = None
             self.bot_application = None
             self.trading_system = None
+            self.hyperliquid_system = None
             self._loader = None
             
             logger.debug("✅ ComponentManager cleanup completed")

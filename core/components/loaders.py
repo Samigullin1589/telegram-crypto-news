@@ -48,6 +48,7 @@ class ComponentLoader:
         self._whale_loader = None
         self._trading_loader = None
         self._bot_loader = None
+        self._hyperliquid_loader = None
     
     @property
     def news_loader(self):
@@ -104,10 +105,10 @@ class ComponentLoader:
     def bot_loader(self):
         """
         Ленивая загрузка BotLoader
-        
+
         Импортирует BotLoader только при первом обращении.
         Это предотвращает циклические зависимости при инициализации модуля.
-        
+
         Returns:
             BotLoader instance
         """
@@ -116,6 +117,23 @@ class ComponentLoader:
             from .bot_loader import BotLoader
             self._bot_loader = BotLoader(self.utils)
         return self._bot_loader
+
+    @property
+    def hyperliquid_loader(self):
+        """
+        Ленивая загрузка HyperliquidLoader
+
+        Импортирует HyperliquidLoader только при первом обращении.
+        Это предотвращает циклические зависимости при инициализации модуля.
+
+        Returns:
+            HyperliquidLoader instance
+        """
+        if self._hyperliquid_loader is None:
+            # Импорт только когда нужен
+            from .hyperliquid_loader import HyperliquidLoader
+            self._hyperliquid_loader = HyperliquidLoader()
+        return self._hyperliquid_loader
     
     def load_news_processor(self) -> Optional[Any]:
         """
@@ -195,54 +213,81 @@ class ComponentLoader:
     def load_trading_system(self) -> Optional[Any]:
         """
         Загрузка Trading System
-        
+
         Использует ленивый импорт TradingLoader для загрузки компонента.
         Включает comprehensive error handling.
-        
+
         Returns:
             TradingSystem instance или None при ошибке
         """
         try:
             logger.debug("Loading trading system...")
             result = self.trading_loader.load()
-            
+
             if result is not None:
                 logger.info("✅ Trading system loaded successfully")
             else:
                 logger.warning("⚠️  Trading system not loaded (disabled or error)")
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"❌ Failed to load trading system: {e}", exc_info=True)
+            return None
+
+    def load_hyperliquid_system(self) -> Optional[Any]:
+        """
+        Загрузка Hyperliquid System
+
+        Использует ленивый импорт HyperliquidLoader для загрузки компонента.
+        Включает comprehensive error handling.
+
+        Returns:
+            HyperliquidSystem instance или None при ошибке
+        """
+        try:
+            logger.debug("Loading hyperliquid system...")
+            result = self.hyperliquid_loader.load()
+
+            if result is not None:
+                logger.info("✅ Hyperliquid system loaded successfully")
+            else:
+                logger.warning("⚠️  Hyperliquid system not loaded (disabled or error)")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Failed to load hyperliquid system: {e}", exc_info=True)
             return None
     
     def load_all_components(self) -> Dict[str, Any]:
         """
         Загрузка всех компонентов системы
-        
+
         Последовательно загружает все компоненты с полным error handling
         и детальным логированием процесса.
-        
+
         Returns:
             Dict с загруженными компонентами:
             {
                 'news_processor': NewsProcessor или None,
                 'whale_scheduler': WhaleMonitor или None,
                 'bot_application': Application или None,
-                'trading_system': TradingSystem или None
+                'trading_system': TradingSystem или None,
+                'hyperliquid_system': HyperliquidSystem или None
             }
         """
         logger.info("\n" + "="*80)
         logger.info("📦 ЗАГРУЗКА КОМПОНЕНТОВ СИСТЕМЫ")
         logger.info("="*80)
-        
+
         # Загружаем все компоненты
         components = {
             'news_processor': self.load_news_processor(),
             'whale_scheduler': self.load_whale_scheduler(),
             'bot_application': self.load_bot_application(),
-            'trading_system': self.load_trading_system()
+            'trading_system': self.load_trading_system(),
+            'hyperliquid_system': self.load_hyperliquid_system()
         }
         
         # Подсчет успешно загруженных
@@ -265,7 +310,7 @@ class ComponentLoader:
     def get_load_status(self) -> Dict[str, bool]:
         """
         Получение статуса загрузки всех загрузчиков
-        
+
         Returns:
             Dict с флагами инициализации загрузчиков
         """
@@ -273,7 +318,8 @@ class ComponentLoader:
             'news_loader_initialized': self._news_loader is not None,
             'whale_loader_initialized': self._whale_loader is not None,
             'trading_loader_initialized': self._trading_loader is not None,
-            'bot_loader_initialized': self._bot_loader is not None
+            'bot_loader_initialized': self._bot_loader is not None,
+            'hyperliquid_loader_initialized': self._hyperliquid_loader is not None
         }
 
 
