@@ -59,7 +59,7 @@ class HyperliquidSystem:
                 if activities and config.hyperliquid.notify_whale_activity:
                     logger.info(f"📊 [HYPERLIQUID] Проверяем {len(activities)} activities для публикации")
                     for activity in activities:
-                        logger.debug(f"   • {activity.coin}: confidence={activity.confidence}")
+                        logger.info(f"   • {activity.coin}: confidence={activity.confidence:.1f}")
 
                         if activity.confidence >= 70:
                             try:
@@ -84,7 +84,7 @@ class HyperliquidSystem:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         else:
-                            logger.debug(f"   ⏭️  Пропускаем {activity.coin}: confidence {activity.confidence} < 70")
+                            logger.info(f"   ⏭️  Пропускаем {activity.coin}: confidence {activity.confidence:.1f} < 70")
                 
                 logger.info(f"   Найдено: {len(activities)}, Отправлено: {sent}")
                 
@@ -116,7 +116,7 @@ class HyperliquidSystem:
                 if liquidations and config.hyperliquid.notify_liquidations:
                     logger.info(f"📊 [HYPERLIQUID] Проверяем {len(liquidations)} liquidations для публикации")
                     for liq in liquidations:
-                        logger.debug(f"   • {liq.coin}: confidence={liq.confidence}")
+                        logger.info(f"   • {liq.coin}: confidence={liq.confidence:.1f}")
 
                         if liq.confidence >= 70:
                             try:
@@ -141,7 +141,7 @@ class HyperliquidSystem:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         else:
-                            logger.debug(f"   ⏭️  Пропускаем {liq.coin}: confidence {liq.confidence} < 70")
+                            logger.info(f"   ⏭️  Пропускаем {liq.coin}: confidence {liq.confidence:.1f} < 70")
                 
                 logger.info(f"   Найдено: {len(liquidations)}, Отправлено: {sent}")
                 
