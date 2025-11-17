@@ -55,9 +55,9 @@ class IntegratedScheduler:
         from app.whales.score import EventScorer
         from app.whales.price import PriceProvider
         from app.whales.news import NewsGate
-        from app.whales.publish import WhalePublisher
+        from app.whales.publisher.core import WhalePublisher
         from app.charts.sparkline import SparklineRenderer
-        from app.whales.history import HistoryManager
+        from app.whales.history.manager import HistoryManager
         
         self.discovery = DiscoveryEngine()
         self.scorer = EventScorer()
