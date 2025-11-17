@@ -50,35 +50,69 @@ class IntegratedScheduler:
     def _init_whale_components(self):
         """Инициализация компонентов whale monitoring"""
         logger.info("📦 [1/3] Инициализация Whale Monitoring...")
-        
-        from app.whales.discovery import DiscoveryEngine
-        from app.whales.score import EventScorer
-        from app.whales.price import PriceProvider
-        from app.whales.news import NewsGate
-        from app.whales.publisher.core import WhalePublisher
-        from app.charts.sparkline import SparklineRenderer
-        from app.whales.history.manager import HistoryManager
-        
-        self.discovery = DiscoveryEngine()
-        self.scorer = EventScorer()
-        self.price_provider = PriceProvider()
-        self.news_gate = NewsGate()
-        self.publisher = WhalePublisher()
-        self.chart_renderer = SparklineRenderer()
-        self.history_manager = HistoryManager()
-        
+
+        # Пытаемся импортировать компоненты с обработкой ошибок
+        try:
+            from app.whales.discovery import DiscoveryEngine
+            self.discovery = DiscoveryEngine()
+        except Exception as e:
+            logger.warning(f"   ⚠️  Discovery Engine не загружен: {e}")
+            self.discovery = None
+
+        try:
+            from app.whales.score import EventScorer
+            self.scorer = EventScorer()
+        except Exception as e:
+            logger.error(f"   ❌ EventScorer не загружен: {e}")
+            self.scorer = None
+
+        try:
+            from app.whales.price import PriceProvider
+            self.price_provider = PriceProvider()
+        except Exception as e:
+            logger.error(f"   ❌ PriceProvider не загружен: {e}")
+            self.price_provider = None
+
+        try:
+            from app.whales.news import NewsGate
+            self.news_gate = NewsGate()
+        except Exception as e:
+            logger.warning(f"   ⚠️  NewsGate не загружен: {e}")
+            self.news_gate = None
+
+        try:
+            from app.whales.publisher.core import WhalePublisher
+            self.publisher = WhalePublisher()
+        except Exception as e:
+            logger.error(f"   ❌ WhalePublisher не загружен: {e}")
+            self.publisher = None
+
+        try:
+            from app.charts.sparkline import SparklineRenderer
+            self.chart_renderer = SparklineRenderer()
+        except Exception as e:
+            logger.warning(f"   ⚠️  SparklineRenderer не загружен: {e}")
+            self.chart_renderer = None
+
+        try:
+            from app.whales.history.manager import HistoryManager
+            self.history_manager = HistoryManager()
+        except Exception as e:
+            logger.error(f"   ❌ HistoryManager не загружен: {e}")
+            self.history_manager = None
+
         if config.is_feature_enabled('adaptive_thresholds'):
             self.adaptive_thresholds = AdaptiveThresholds()
         else:
             self.adaptive_thresholds = None
-        
+
         if config.is_feature_enabled('smart_discovery') or config.is_feature_enabled('validation'):
             self.wallet_db = WalletDatabase()
         else:
             self.wallet_db = None
-        
+
         self.seen_keys = load_state()
-        
+
         logger.info("   ✓ Whale components loaded")
     
     def _init_optional_features(self):
