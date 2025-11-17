@@ -118,29 +118,33 @@ class MonitorCycleRunner:
     async def _process_events(self, events: List[Any]) -> List[Any]:
         """
         Обработка и фильтрация событий
-        
+
         Args:
             events: Сырые события
-            
+
         Returns:
             Отфильтрованные события
         """
         try:
             # Импорт процессора если доступен
-            from .whale_components import EventProcessor
-            
-            event_processor = EventProcessor(self.components, None, None)
+            from .whale_components import EventProcessor, EventFilter, EventEnricher
+
+            # Создаем filter и enricher с правильными компонентами
+            event_filter = EventFilter(self.components)
+            event_enricher = EventEnricher(self.components)
+
+            event_processor = EventProcessor(self.components, event_filter, event_enricher)
             qualified = await event_processor.process_events(
                 events,
                 self.state.seen_keys
             )
-            
+
             return qualified
-        
-        except ImportError:
-            logger.debug("EventProcessor not available, returning all events")
+
+        except ImportError as e:
+            logger.debug(f"EventProcessor not available: {e}, returning all events")
             return events
-        
+
         except Exception as e:
             logger.error(f"Error processing events: {e}")
             return []

@@ -59,12 +59,12 @@ class HyperliquidSystem:
                 if activities and config.hyperliquid.notify_whale_activity:
                     logger.info(f"📊 [HYPERLIQUID] Проверяем {len(activities)} activities для публикации")
                     for activity in activities:
-                        logger.debug(f"   • {activity.asset}: confidence={activity.confidence}")
+                        logger.debug(f"   • {activity.coin}: confidence={activity.confidence}")
 
                         if activity.confidence >= 70:
                             try:
                                 if not self.publisher:
-                                    logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {activity.asset}")
+                                    logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {activity.coin}")
                                     continue
 
                                 message = monitor.format_whale_activity_alert(activity)
@@ -76,7 +76,7 @@ class HyperliquidSystem:
                                 )
 
                                 sent += 1
-                                logger.info(f"✅ [HYPERLIQUID] Whale activity: {activity.asset}")
+                                logger.info(f"✅ [HYPERLIQUID] Whale activity: {activity.coin}")
                                 await asyncio.sleep(2)
 
                             except Exception as e:
@@ -84,7 +84,7 @@ class HyperliquidSystem:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         else:
-                            logger.debug(f"   ⏭️  Пропускаем {activity.asset}: confidence {activity.confidence} < 70")
+                            logger.debug(f"   ⏭️  Пропускаем {activity.coin}: confidence {activity.confidence} < 70")
                 
                 logger.info(f"   Найдено: {len(activities)}, Отправлено: {sent}")
                 
@@ -116,12 +116,12 @@ class HyperliquidSystem:
                 if liquidations and config.hyperliquid.notify_liquidations:
                     logger.info(f"📊 [HYPERLIQUID] Проверяем {len(liquidations)} liquidations для публикации")
                     for liq in liquidations:
-                        logger.debug(f"   • {liq.asset}: confidence={liq.confidence}")
+                        logger.debug(f"   • {liq.coin}: confidence={liq.confidence}")
 
                         if liq.confidence >= 70:
                             try:
                                 if not self.publisher:
-                                    logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {liq.asset}")
+                                    logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {liq.coin}")
                                     continue
 
                                 message = monitor.format_liquidation_alert(liq)
@@ -133,7 +133,7 @@ class HyperliquidSystem:
                                 )
 
                                 sent += 1
-                                logger.info(f"✅ [HYPERLIQUID] Liquidation: {liq.asset}")
+                                logger.info(f"✅ [HYPERLIQUID] Liquidation: {liq.coin}")
                                 await asyncio.sleep(2)
 
                             except Exception as e:
@@ -141,7 +141,7 @@ class HyperliquidSystem:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         else:
-                            logger.debug(f"   ⏭️  Пропускаем {liq.asset}: confidence {liq.confidence} < 70")
+                            logger.debug(f"   ⏭️  Пропускаем {liq.coin}: confidence {liq.confidence} < 70")
                 
                 logger.info(f"   Найдено: {len(liquidations)}, Отправлено: {sent}")
                 
