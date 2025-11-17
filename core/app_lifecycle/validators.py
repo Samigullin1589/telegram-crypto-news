@@ -1,6 +1,11 @@
 """
-Application validators
+Application validators v5.3
 Валидаторы для проверки готовности приложения к запуску
+
+ИСПРАВЛЕНО v5.3:
+- Поддержка Monitor v5.3 архитектуры (business layer)
+- Проверка monitor.business.component_manager вместо monitor.component_manager
+- Исправлено имя атрибута: bot_application вместо bot_app
 """
 
 import logging
@@ -95,19 +100,28 @@ class ApplicationValidator:
         return len(errors) == 0, errors
     
     def _validate_monitor(self) -> Tuple[bool, List[str]]:
-        """Валидация монитора"""
+        """
+        Валидация монитора v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - Проверка monitor.business.component_manager вместо monitor.component_manager
+        - Поддержка архитектуры Monitor v5.3 (business layer)
+        """
         errors = []
-        
+
         if not self.monitor:
             errors.append("Monitor not initialized")
             return False, errors
-        
-        # Проверка компонентов монитора
-        required_components = ['component_manager']
-        for component in required_components:
-            if not hasattr(self.monitor, component):
-                errors.append(f"Monitor missing component: {component}")
-        
+
+        # Проверка business layer (Monitor v5.3)
+        if not hasattr(self.monitor, 'business'):
+            errors.append("Monitor missing business layer")
+            return False, errors
+
+        # Проверка component_manager в business layer
+        if not hasattr(self.monitor.business, 'component_manager'):
+            errors.append("Monitor business layer missing component_manager")
+
         return len(errors) == 0, errors
     
     def _validate_database(self) -> Tuple[bool, List[str]]:
@@ -127,26 +141,43 @@ class ApplicationValidator:
         return len(errors) == 0, errors
     
     def _validate_components(self) -> Tuple[bool, List[str]]:
-        """Валидация загруженных компонентов"""
+        """
+        Валидация загруженных компонентов v5.3
+
+        ИСПРАВЛЕНО v5.3:
+        - Доступ через monitor.business.component_manager (не напрямую)
+        - Проверка business layer перед доступом к component_manager
+        """
         errors = []
-        
-        if not hasattr(self.monitor, 'component_manager'):
-            errors.append("Component manager not available")
+
+        # Проверка наличия business layer
+        if not hasattr(self.monitor, 'business') or not self.monitor.business:
+            errors.append("Monitor business layer not available")
             return False, errors
-        
-        component_manager = self.monitor.component_manager
-        
+
+        # Проверка наличия component_manager
+        if not hasattr(self.monitor.business, 'component_manager'):
+            errors.append("Component manager not available in business layer")
+            return False, errors
+
+        component_manager = self.monitor.business.component_manager
+
+        # Проверка что component_manager инициализирован
+        if not component_manager:
+            errors.append("Component manager is None")
+            return False, errors
+
         # Проверка что хотя бы один компонент загружен
         loaded_count = sum([
             component_manager.news_processor is not None,
             component_manager.whale_scheduler is not None,
-            component_manager.bot_app is not None,
+            component_manager.bot_application is not None,  # ИСПРАВЛЕНО: bot_application, не bot_app
             component_manager.trading_system is not None
         ])
-        
+
         if loaded_count == 0:
             errors.append("No components loaded successfully")
-        
+
         return len(errors) == 0, errors
     
     def get_system_info(self) -> Dict[str, Any]:
