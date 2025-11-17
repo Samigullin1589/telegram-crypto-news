@@ -59,9 +59,10 @@ class HyperliquidSystem:
                 if activities and config.hyperliquid.notify_whale_activity:
                     logger.info(f"📊 [HYPERLIQUID] Проверяем {len(activities)} activities для публикации")
                     for activity in activities:
-                        logger.info(f"   • {activity.coin}: confidence={activity.confidence:.1f}")
+                        logger.info(f"   • {activity.coin}: confidence={activity.confidence:.2f} ({activity.confidence*100:.0f}%)")
 
-                        if activity.confidence >= 70:
+                        # ИСПРАВЛЕНИЕ: confidence в диапазоне 0.0-1.0, поэтому 70% = 0.7
+                        if activity.confidence >= 0.5:
                             try:
                                 if not self.publisher:
                                     logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {activity.coin}")
@@ -84,7 +85,7 @@ class HyperliquidSystem:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         else:
-                            logger.info(f"   ⏭️  Пропускаем {activity.coin}: confidence {activity.confidence:.1f} < 70")
+                            logger.info(f"   ⏭️  Пропускаем {activity.coin}: confidence {activity.confidence:.2f} ({activity.confidence*100:.0f}%) < 50%")
                 
                 logger.info(f"   Найдено: {len(activities)}, Отправлено: {sent}")
                 
@@ -116,9 +117,10 @@ class HyperliquidSystem:
                 if liquidations and config.hyperliquid.notify_liquidations:
                     logger.info(f"📊 [HYPERLIQUID] Проверяем {len(liquidations)} liquidations для публикации")
                     for liq in liquidations:
-                        logger.info(f"   • {liq.coin}: confidence={liq.confidence:.1f}")
+                        logger.info(f"   • {liq.coin}: confidence={liq.confidence:.2f} ({liq.confidence*100:.0f}%)")
 
-                        if liq.confidence >= 70:
+                        # ИСПРАВЛЕНИЕ: confidence в диапазоне 0.0-1.0, поэтому 70% = 0.7
+                        if liq.confidence >= 0.5:
                             try:
                                 if not self.publisher:
                                     logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {liq.coin}")
@@ -141,7 +143,7 @@ class HyperliquidSystem:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         else:
-                            logger.info(f"   ⏭️  Пропускаем {liq.coin}: confidence {liq.confidence:.1f} < 70")
+                            logger.info(f"   ⏭️  Пропускаем {liq.coin}: confidence {liq.confidence:.2f} ({liq.confidence*100:.0f}%) < 50%")
                 
                 logger.info(f"   Найдено: {len(liquidations)}, Отправлено: {sent}")
                 
