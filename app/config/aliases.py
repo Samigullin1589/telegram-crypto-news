@@ -33,15 +33,16 @@ class ConfigAliases:
     def setup_all(self):
         """Настройка всех алиасов"""
         self._setup_news_alias()
+        self._setup_whale_alias()
         self._setup_telegram_token_alias()
         self._setup_feeds_sources_alias()
-        
+
         logger.debug("Все алиасы настроены")
     
     def _setup_news_alias(self):
         """
         Настройка алиаса config.news -> config.feeds
-        
+
         Для обратной совместимости со старым кодом,
         который использует config.news
         """
@@ -51,7 +52,21 @@ class ConfigAliases:
             logger.debug("Алиас config.news -> config.feeds создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас news: {e}")
-    
+
+    def _setup_whale_alias(self):
+        """
+        Настройка алиаса config.whale -> config.features.whale
+
+        Для обратной совместимости со старым кодом,
+        который использует config.whale
+        """
+        try:
+            # Создаем ссылку whale -> features.whale
+            self.config.whale = self.config.features.whale
+            logger.debug("Алиас config.whale -> config.features.whale создан")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас whale: {e}")
+
     def _setup_telegram_token_alias(self):
         """
         Настройка алиаса telegram.token -> telegram.bot_token

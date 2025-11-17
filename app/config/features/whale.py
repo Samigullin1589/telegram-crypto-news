@@ -80,7 +80,13 @@ class WhaleFeatures(BaseFeatureConfig):
         self.notify_mega_whales = self.get_bool_env('NOTIFY_MEGA_WHALES', True)
         self.notify_smart_money = self.get_bool_env('NOTIFY_SMART_MONEY', True)
         self.notify_suspicious = self.get_bool_env('NOTIFY_SUSPICIOUS', True)
-        
+
+        # Алиасы для обратной совместимости со старым кодом
+        self.min_confidence_score = self.min_confidence
+        self.posts_per_hour_cap = self.posts_per_hour
+        self.poll_seconds = self.check_interval
+        self.start_from_minutes_ago = self.get_int_env('WHALE_START_FROM_MINUTES_AGO', 60)
+
         # Логирование
         self._log_configuration()
     
