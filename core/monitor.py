@@ -507,20 +507,30 @@ class MonitorInfrastructure:
     async def _run_trading_system(self, system: Any) -> None:
         """
         Wrapper для запуска trading system
-        
+
+        ИСПРАВЛЕНО v5.4:
+        - TradingSystem работает как сервис (on-demand), не как задача
+        - Если нет run/start метода, ждем shutdown_event
+        - Предотвращено немедленное завершение задачи
+
         Args:
             system: Trading system instance
         """
         try:
             logger.info("[TRADING] Starting system...")
-            
+
             if hasattr(system, 'run'):
                 await system.run()
             elif hasattr(system, 'start'):
                 await system.start()
             else:
-                logger.warning("[TRADING] No run/start method found")
-        
+                # ИСПРАВЛЕНО v5.4: TradingSystem - это сервис, не задача
+                # Он вызывается по требованию (от whale alerts, analytics)
+                # Просто ждем shutdown вместо немедленного выхода
+                logger.info("[TRADING] System loaded as service (on-demand mode)")
+                logger.info("[TRADING] Waiting for shutdown signal...")
+                await self.shutdown_event.wait()
+
         except asyncio.CancelledError:
             logger.info("[TRADING] Task cancelled")
             raise
