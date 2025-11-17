@@ -458,21 +458,63 @@ class MonitorInfrastructure:
     
     async def _run_news_processor(self, processor: Any) -> None:
         """
-        Wrapper для запуска news processor
-        
+        Wrapper для запуска news processor v5.4
+
+        ИСПРАВЛЕНО v5.4:
+        - NewsProcessor работает в режиме цикличной обработки
+        - Вызывает run_cycle() в цикле с интервалом из конфигурации
+        - Ждет shutdown_event между циклами
+
         Args:
             processor: News processor instance
         """
         try:
             logger.info("[NEWS] Starting processor...")
-            
-            if hasattr(processor, 'run'):
-                await processor.run()
-            elif hasattr(processor, 'start'):
-                await processor.start()
-            else:
-                logger.warning("[NEWS] No run/start method found")
-        
+
+            # Получаем интервал из конфигурации
+            from app.config import config
+            fetch_interval = 300  # default 5 minutes
+            try:
+                if hasattr(config, 'features') and hasattr(config.features, 'timing'):
+                    fetch_interval = config.features.timing.fetch_interval
+                elif hasattr(config, 'news') and hasattr(config.news, 'fetch_interval'):
+                    fetch_interval = config.news.fetch_interval
+            except Exception:
+                pass
+
+            logger.info(f"[NEWS] Cycle interval: {fetch_interval}s")
+
+            # Проверяем наличие run_cycle метода
+            if not hasattr(processor, 'run_cycle'):
+                logger.error("[NEWS] Processor has no run_cycle() method")
+                return
+
+            # ИСПРАВЛЕНО v5.4: Запускаем циклы до shutdown
+            while not self.shutdown_event.is_set():
+                try:
+                    # Выполняем один цикл обработки
+                    await processor.run_cycle()
+
+                    # Ждем до следующего цикла или shutdown
+                    try:
+                        await asyncio.wait_for(
+                            self.shutdown_event.wait(),
+                            timeout=fetch_interval
+                        )
+                        # Если дождались shutdown - выходим
+                        break
+                    except asyncio.TimeoutError:
+                        # Таймаут истек - продолжаем следующий цикл
+                        continue
+
+                except Exception as e:
+                    logger.error(f"[NEWS] Cycle error: {e}", exc_info=True)
+                    self.core.statistics.increment_errors()
+                    # Ждем перед повтором при ошибке
+                    await asyncio.sleep(min(60, fetch_interval))
+
+            logger.info("[NEWS] Processor stopped")
+
         except asyncio.CancelledError:
             logger.info("[NEWS] Task cancelled")
             raise
