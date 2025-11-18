@@ -7,7 +7,7 @@ Circuit Breaker Pattern
 import logging
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
