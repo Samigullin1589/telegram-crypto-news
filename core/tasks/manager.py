@@ -192,13 +192,29 @@ class TaskManager:
         return True
     
     async def _start_news_task(self, results: Dict[str, Any]):
-        """Запуск news task"""
+        """
+        Запуск news task
+
+        ИСПРАВЛЕНО: Передаём правильные параметры в start_news_task()
+        """
         try:
             logger.info("📰 Starting news task...")
-            
-            processor = self.monitor.component_manager.news_processor
-            self.news_task = await start_news_task(processor, self.config)
-            
+
+            # ИСПРАВЛЕНИЕ: Передаём все необходимые параметры
+            news_processor = self.monitor.component_manager.news_processor
+            health_monitor = self.monitor.health_monitor
+            resource_monitor = self.monitor.resource_monitor
+            statistics = self.monitor.statistics
+            shutdown_event = self.monitor.shutdown_event
+
+            self.news_task = await start_news_task(
+                news_processor=news_processor,
+                health_monitor=health_monitor,
+                resource_monitor=resource_monitor,
+                statistics=statistics,
+                shutdown_event=shutdown_event
+            )
+
             if self.news_task:
                 results['news'] = {'status': 'started', 'task_id': id(self.news_task)}
                 self.started_tasks.append('news')
@@ -207,20 +223,36 @@ class TaskManager:
                 results['news'] = {'status': 'failed', 'reason': 'task_not_created'}
                 self.failed_tasks.append('news')
                 logger.error("❌ News task failed to start")
-                
+
         except Exception as e:
             results['news'] = {'status': 'error', 'error': str(e)}
             self.failed_tasks.append('news')
             logger.error(f"❌ Error starting news task: {e}", exc_info=True)
     
     async def _start_whale_task(self, results: Dict[str, Any]):
-        """Запуск whale task"""
+        """
+        Запуск whale task
+
+        ИСПРАВЛЕНО: Передаём правильные параметры в start_whale_task()
+        """
         try:
             logger.info("🐋 Starting whale task...")
-            
-            scheduler = self.monitor.component_manager.whale_scheduler
-            self.whale_task = await start_whale_task(scheduler, self.config)
-            
+
+            # ИСПРАВЛЕНИЕ: Передаём все необходимые параметры
+            whale_scheduler = self.monitor.component_manager.whale_scheduler
+            health_monitor = self.monitor.health_monitor
+            resource_monitor = self.monitor.resource_monitor
+            statistics = self.monitor.statistics
+            shutdown_event = self.monitor.shutdown_event
+
+            self.whale_task = await start_whale_task(
+                whale_scheduler=whale_scheduler,
+                health_monitor=health_monitor,
+                resource_monitor=resource_monitor,
+                statistics=statistics,
+                shutdown_event=shutdown_event
+            )
+
             if self.whale_task:
                 results['whale'] = {'status': 'started', 'task_id': id(self.whale_task)}
                 self.started_tasks.append('whale')
@@ -229,7 +261,7 @@ class TaskManager:
                 results['whale'] = {'status': 'failed', 'reason': 'task_not_created'}
                 self.failed_tasks.append('whale')
                 logger.error("❌ Whale task failed to start")
-                
+
         except Exception as e:
             results['whale'] = {'status': 'error', 'error': str(e)}
             self.failed_tasks.append('whale')
