@@ -1,4 +1,4 @@
-# bot/telegram_poster.py v2.0
+# bot/telegram_poster.py v2.1 - IMPROVED ERROR HANDLING
 
 import asyncio
 import re
@@ -15,20 +15,24 @@ from telegram.error import TelegramError, RetryAfter, TimedOut, NetworkError
 try:
     from .config import config
     CONFIG_AVAILABLE = True
-except ImportError:
+except (ImportError, ValueError, Exception) as e:
+    # Ловим не только ImportError, но и ValueError (missing env vars) и другие
+    print(f"⚠️  [TELEGRAM] Config import failed: {type(e).__name__}: {e}")
     try:
         from bot.config import config
         CONFIG_AVAILABLE = True
-    except ImportError:
+    except (ImportError, ValueError, Exception) as e2:
+        print(f"⚠️  [TELEGRAM] Config import failed (2nd attempt): {type(e2).__name__}: {e2}")
         CONFIG_AVAILABLE = False
-        
+
         class DummyConfig:
             TELEGRAM_BOT_TOKEN = ""
             TELEGRAM_CHANNEL_ID = ""
             IMAGE_DOWNLOAD_TIMEOUT = 15
             MAX_IMAGE_SIZE_MB = 10
-        
+
         config = DummyConfig()
+        print("⚠️  [TELEGRAM] Using DummyConfig - TelegramPoster will be disabled")
 
 
 class PostingMetrics:

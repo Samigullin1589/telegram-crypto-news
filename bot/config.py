@@ -1,4 +1,4 @@
-# bot/config.py - BOT CONFIG v4.1 - PRODUCTION READY
+# bot/config.py - BOT CONFIG v4.2 - PRODUCTION READY - GRACEFUL FALLBACK
 
 import os
 from pathlib import Path
@@ -44,7 +44,7 @@ class Config:
             return
         
         print("\n" + "="*80)
-        print("⚙️  BOT CONFIG v4.1 - INITIALIZATION")
+        print("⚙️  BOT CONFIG v4.2 - INITIALIZATION (GRACEFUL FALLBACK)")
         print("="*80 + "\n")
         
         self.TELEGRAM_BOT_TOKEN = self._get_required_env('TELEGRAM_BOT_TOKEN')
@@ -452,9 +452,17 @@ class Config:
         print(f"✅ [PATHS] Database: {self.DB_PATH.absolute()}")
     
     def _get_required_env(self, key: str) -> str:
+        """
+        Получить обязательную переменную окружения
+
+        ИСПРАВЛЕНО v4.2: Вместо ValueError возвращает пустую строку
+        с предупреждением для graceful degradation
+        """
         value = os.getenv(key)
         if not value:
-            raise ValueError(f"Missing required environment variable: {key}")
+            print(f"⚠️  [CONFIG] Missing required environment variable: {key}")
+            print(f"⚠️  [CONFIG] Application will continue but features depending on {key} will be disabled")
+            return ""
         return value
     
     def _get_optional_env(self, key: str, default: Optional[str] = None) -> Optional[str]:
