@@ -23,10 +23,14 @@ except ImportError:
 
 class HyperliquidSystem:
     """Система мониторинга Hyperliquid DEX"""
-    
+
     def __init__(self, components: Dict):
         self.enabled = False
         self.publisher = components.get('publisher')
+
+        # Дедупликация: храним время последней публикации для каждой монеты
+        self.last_published = {}  # {coin: timestamp}
+        self.publish_cooldown = 300  # 5 минут между публикациями одной монеты
 
         # DEBUG: Проверяем что publisher загружен
         if self.publisher:
@@ -40,7 +44,30 @@ class HyperliquidSystem:
 
         self.enabled = True
         logger.info("🌊 [HYPERLIQUID] Система активна")
-    
+
+    def _can_publish(self, coin: str) -> bool:
+        """
+        Проверка: можно ли публиковать монету (дедупликация)
+
+        Args:
+            coin: Название монеты
+
+        Returns:
+            True если прошло достаточно времени с последней публикации
+        """
+        now = datetime.now()
+        last_time = self.last_published.get(coin)
+
+        if last_time is None:
+            return True
+
+        elapsed = (now - last_time).total_seconds()
+        return elapsed >= self.publish_cooldown
+
+    def _mark_published(self, coin: str):
+        """Отметить монету как опубликованную"""
+        self.last_published[coin] = datetime.now()
+
     async def check_whale_activity(self) -> Dict:
         """Проверка whale activity"""
         if not self.enabled:
@@ -56,13 +83,20 @@ class HyperliquidSystem:
                 )
                 
                 sent = 0
+                skipped_cooldown = 0
                 if activities and config.hyperliquid.notify_whale_activity:
                     logger.info(f"📊 [HYPERLIQUID] Проверяем {len(activities)} activities для публикации")
                     for activity in activities:
                         logger.info(f"   • {activity.coin}: confidence={activity.confidence:.2f} ({activity.confidence*100:.0f}%)")
 
-                        # ИСПРАВЛЕНИЕ: confidence в диапазоне 0.0-1.0, поэтому 70% = 0.7
-                        if activity.confidence >= 0.5:
+                        # Публикуем только высококачественные сигналы (70%+)
+                        if activity.confidence >= 0.7:
+                            # Проверяем дедупликацию
+                            if not self._can_publish(activity.coin):
+                                logger.info(f"   ⏭️  Пропускаем {activity.coin}: опубликовано недавно (cooldown 5 мин)")
+                                skipped_cooldown += 1
+                                continue
+
                             try:
                                 if not self.publisher:
                                     logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {activity.coin}")
@@ -76,6 +110,9 @@ class HyperliquidSystem:
                                     parse_mode='HTML'
                                 )
 
+                                # Отмечаем как опубликованное
+                                self._mark_published(activity.coin)
+
                                 sent += 1
                                 logger.info(f"✅ [HYPERLIQUID] Whale activity: {activity.coin}")
                                 await asyncio.sleep(2)
@@ -85,14 +122,15 @@ class HyperliquidSystem:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         else:
-                            logger.info(f"   ⏭️  Пропускаем {activity.coin}: confidence {activity.confidence:.2f} ({activity.confidence*100:.0f}%) < 50%")
-                
-                logger.info(f"   Найдено: {len(activities)}, Отправлено: {sent}")
-                
+                            logger.info(f"   ⏭️  Пропускаем {activity.coin}: confidence {activity.confidence:.2f} ({activity.confidence*100:.0f}%) < 70%")
+
+                logger.info(f"   Найдено: {len(activities)}, Отправлено: {sent}, Пропущено (cooldown): {skipped_cooldown}")
+
                 return {
                     'success': True,
                     'activities_found': len(activities),
-                    'activities_sent': sent
+                    'activities_sent': sent,
+                    'skipped_cooldown': skipped_cooldown
                 }
                 
         except Exception as e:
@@ -114,13 +152,20 @@ class HyperliquidSystem:
                 )
                 
                 sent = 0
+                skipped_cooldown = 0
                 if liquidations and config.hyperliquid.notify_liquidations:
                     logger.info(f"📊 [HYPERLIQUID] Проверяем {len(liquidations)} liquidations для публикации")
                     for liq in liquidations:
                         logger.info(f"   • {liq.coin}: confidence={liq.confidence:.2f} ({liq.confidence*100:.0f}%)")
 
-                        # ИСПРАВЛЕНИЕ: confidence в диапазоне 0.0-1.0, поэтому 70% = 0.7
-                        if liq.confidence >= 0.5:
+                        # Публикуем только высококачественные сигналы (70%+)
+                        if liq.confidence >= 0.7:
+                            # Проверяем дедупликацию
+                            if not self._can_publish(liq.coin):
+                                logger.info(f"   ⏭️  Пропускаем {liq.coin}: опубликовано недавно (cooldown 5 мин)")
+                                skipped_cooldown += 1
+                                continue
+
                             try:
                                 if not self.publisher:
                                     logger.error(f"❌ [HYPERLIQUID] Publisher None, не могу отправить {liq.coin}")
@@ -134,6 +179,9 @@ class HyperliquidSystem:
                                     parse_mode='HTML'
                                 )
 
+                                # Отмечаем как опубликованное
+                                self._mark_published(liq.coin)
+
                                 sent += 1
                                 logger.info(f"✅ [HYPERLIQUID] Liquidation: {liq.coin}")
                                 await asyncio.sleep(2)
@@ -143,14 +191,15 @@ class HyperliquidSystem:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         else:
-                            logger.info(f"   ⏭️  Пропускаем {liq.coin}: confidence {liq.confidence:.2f} ({liq.confidence*100:.0f}%) < 50%")
-                
-                logger.info(f"   Найдено: {len(liquidations)}, Отправлено: {sent}")
-                
+                            logger.info(f"   ⏭️  Пропускаем {liq.coin}: confidence {liq.confidence:.2f} ({liq.confidence*100:.0f}%) < 70%")
+
+                logger.info(f"   Найдено: {len(liquidations)}, Отправлено: {sent}, Пропущено (cooldown): {skipped_cooldown}")
+
                 return {
                     'success': True,
                     'liquidations_found': len(liquidations),
-                    'liquidations_sent': sent
+                    'liquidations_sent': sent,
+                    'skipped_cooldown': skipped_cooldown
                 }
                 
         except Exception as e:
