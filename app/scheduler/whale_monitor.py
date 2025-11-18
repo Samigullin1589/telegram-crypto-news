@@ -175,21 +175,51 @@ class WhaleMonitor:
 
     async def run(self):
         """
-        Запуск монитора как сервиса (on-demand mode)
+        Запуск монитора в режиме непрерывного мониторинга
 
-        Монитор работает в режиме on-demand - вызывается через run_cycle().
-        Этот метод просто ждет сигнала отмены.
+        ИСПРАВЛЕНО: Монитор теперь работает в автоматическом режиме,
+        вызывая run_cycle() каждые 5 минут (как News Bot).
         """
         import asyncio
+        from datetime import datetime
 
-        logger.info("🐋 [WHALE] Monitor running in service mode (on-demand)")
-        logger.info("🐋 [WHALE] Will be called via run_cycle() when needed")
+        logger.info("🐋 [WHALE] Monitor starting in continuous mode...")
+        logger.info("🐋 [WHALE] Will run cycles every 300 seconds (5 minutes)")
+
+        # Интервал между циклами (5 минут)
+        cycle_interval = 300
 
         try:
-            # Ждем сигнала shutdown
-            await asyncio.Event().wait()
+            # Основной цикл мониторинга
+            while True:
+                try:
+                    # Получаем текущее время для цикла
+                    start_time = datetime.now()
+
+                    # Выполняем один цикл мониторинга
+                    logger.info("🐋 [WHALE] Starting monitoring cycle...")
+                    result = await self.run_cycle(start_time=start_time)
+
+                    if result.get('success'):
+                        logger.info(f"✅ [WHALE] Cycle completed: {result.get('events_found', 0)} events found")
+                    else:
+                        logger.warning(f"⚠️  [WHALE] Cycle completed with warnings: {result.get('error', 'unknown')}")
+
+                    # Ждем до следующего цикла
+                    logger.debug(f"⏰ [WHALE] Waiting {cycle_interval}s until next cycle...")
+                    await asyncio.sleep(cycle_interval)
+
+                except asyncio.CancelledError:
+                    logger.info("🐋 [WHALE] Monitor received shutdown signal")
+                    raise
+
+                except Exception as e:
+                    logger.error(f"❌ [WHALE] Cycle error: {e}", exc_info=True)
+                    # Ждем перед повтором при ошибке
+                    await asyncio.sleep(min(60, cycle_interval))
+
         except asyncio.CancelledError:
-            logger.info("🐋 [WHALE] Monitor received shutdown signal")
+            logger.info("🐋 [WHALE] Monitor stopped")
             raise
 
     async def cleanup(self):
