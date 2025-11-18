@@ -6,7 +6,7 @@ Solana Chain Provider v4.0
 """
 
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
 from app.whales.normalize import WhaleEvent
