@@ -126,7 +126,12 @@ class BaseConfig:
             'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0'
         }
-        
+
+        # Алиасы для обратной совместимости (маленькими буквами)
+        self.port = self.PORT
+        self.http_timeout = self.HTTP_TIMEOUT
+        self.max_memory_mb = self.MAX_MEMORY_MB
+
         logger.debug("BaseConfig инициализирован")
     
     # ========================================================================
