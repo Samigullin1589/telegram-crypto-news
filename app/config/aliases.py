@@ -38,6 +38,7 @@ class ConfigAliases:
         self._setup_chains_alias()
         self._setup_telegram_token_alias()
         self._setup_feeds_sources_alias()
+        self._setup_production_alias()
 
         logger.debug("Все алиасы настроены")
     
@@ -127,3 +128,17 @@ class ConfigAliases:
                     logger.debug("FeedsConfig не имеет метода get_enabled_feeds(), пропускаем")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас feeds.sources: {e}")
+
+    def _setup_production_alias(self):
+        """
+        Настройка алиаса config.production
+
+        Для обратной совместимости с кодом, который проверяет config.production
+        вместо config.base.is_production()
+        """
+        try:
+            # Создаем атрибут production на основе ENVIRONMENT
+            self.config.production = self.config.base.is_production()
+            logger.debug(f"Алиас config.production создан (значение: {self.config.production})")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас production: {e}")
