@@ -678,7 +678,19 @@ class IntegratedCryptoMonitor:
         
         except Exception as e:
             logger.debug(f"Bot handler patching: {e}")
-    
+
+    @property
+    def component_manager(self) -> Optional[Any]:
+        """
+        Получить component manager (delegation to business layer)
+
+        ИСПРАВЛЕНО: Добавлен для обратной совместимости с validators
+
+        Returns:
+            Optional[Any]: ComponentManager или None
+        """
+        return self.business.component_manager
+
     async def run(self) -> None:
         """
         Главный цикл монитора v5.2

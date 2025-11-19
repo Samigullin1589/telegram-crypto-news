@@ -20,8 +20,10 @@ TRADING_MIN_FUNDAMENTAL_SCORE = 60
 TRADING_MIN_ML_CONFIDENCE = 70
 
 # Limits
-TRADING_MAX_SIGNALS_PER_DAY = config.trading.signal_interval_hours * 24 // config.trading.signal_interval_hours
-TRADING_SIGNAL_COOLDOWN_MINUTES = config.trading.signal_interval_hours * 60
+# ИСПРАВЛЕНО: используем существующие атрибуты TradingFeatures
+TRADING_MAX_SIGNALS_PER_DAY = getattr(config.trading, 'max_signals_per_day', 10)
+# check_interval в секундах, переводим в минуты для кулдауна
+TRADING_SIGNAL_COOLDOWN_MINUTES = getattr(config.trading, 'check_interval', 300) // 60
 TRADING_MAX_OPEN_POSITIONS = 5
 TRADING_MAX_POSITION_SIZE_USD = 10000
 
