@@ -92,11 +92,14 @@ class EventFilter:
         
         Args:
             event: Событие с обогащёнными данными
-            
+
         Returns:
             (passed, reason)
         """
-        min_threshold = config.whale.min_usd_threshold
+        # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.min_usd_threshold
+        _features = getattr(config, 'features', None)
+        _whale = getattr(_features, 'whale', None) if _features else None
+        min_threshold = getattr(_whale, 'min_usd_threshold', 100000) if _whale else 100000
         
         if event.amount_usd < min_threshold:
             self.filter_stats['below_threshold'] += 1
@@ -174,8 +177,13 @@ class EventFilter:
             return thresholds
         
         # Дефолтные пороги
+        # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.min_confidence_score
+        _features = getattr(config, 'features', None)
+        _whale = getattr(_features, 'whale', None) if _features else None
+        min_confidence_score = getattr(_whale, 'min_confidence_score', 60) if _whale else 60
+
         default_thresholds = {
-            "min_confidence": config.whale.min_confidence_score,
+            "min_confidence": min_confidence_score,
             "min_size_rel": 0.10,
             "min_volume_24h": 1000000
         }

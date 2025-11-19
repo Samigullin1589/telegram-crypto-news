@@ -81,7 +81,10 @@ class EVMTransactionParser:
             amount_usd = amount * price
             
             # Первичный фильтр по сумме
-            min_threshold = getattr(config.whale, 'min_usd_threshold', 50000)
+            # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.min_usd_threshold
+            _features = getattr(config, 'features', None)
+            _whale = getattr(_features, 'whale', None) if _features else None
+            min_threshold = getattr(_whale, 'min_usd_threshold', 50000) if _whale else 50000
             if amount_usd < min_threshold * 0.5:  # 50% порог для предварительной фильтрации
                 return None
             

@@ -182,27 +182,38 @@ class IntegratedScheduler:
     async def run_cycle(self):
         """Выполнить один цикл whale monitoring (для manual запуска)"""
         self.stats["last_cycle_time"] = datetime.utcnow()
-        start_time = datetime.utcnow() - timedelta(seconds=config.whale.poll_seconds)
+
+        # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.poll_seconds
+        _features = getattr(config, 'features', None)
+        _whale = getattr(_features, 'whale', None) if _features else None
+        poll_seconds = getattr(_whale, 'poll_seconds', 300) if _whale else 300
+
+        start_time = datetime.utcnow() - timedelta(seconds=poll_seconds)
         chains = config.chains.enabled_chains
-        
+
         result = await self.whale_monitor.run_cycle(start_time, chains)
-        
+
         self.stats["events_collected"] += result.get('events_collected', 0)
-        
+
         return result
     
     async def run_news_cycle(self):
         """Выполнить один цикл обработки новостей (для NewsProcessor)"""
         self.stats["last_news_cycle"] = datetime.utcnow()
         self.stats["news_cycles"] += 1
-        
+
         now = datetime.utcnow()
         recent_pubs = self.whale_monitor.recent_publications
-        
+
         while recent_pubs and (now - recent_pubs[0]).seconds > 3600:
             recent_pubs.popleft()
-        
-        available_slots = config.whale.posts_per_hour_cap - len(recent_pubs)
+
+        # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.posts_per_hour_cap
+        _features = getattr(config, 'features', None)
+        _whale = getattr(_features, 'whale', None) if _features else None
+        posts_per_hour_cap = getattr(_whale, 'posts_per_hour_cap', 3) if _whale else 3
+
+        available_slots = posts_per_hour_cap - len(recent_pubs)
         
         return {
             'success': available_slots > 0,
@@ -221,21 +232,27 @@ class IntegratedScheduler:
     
     async def _whale_monitor_loop(self):
         """Основной цикл мониторинга whale"""
-        start_time = datetime.utcnow() - timedelta(minutes=config.whale.start_from_minutes_ago)
-        
+        # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.*
+        _features = getattr(config, 'features', None)
+        _whale = getattr(_features, 'whale', None) if _features else None
+        start_from_minutes_ago = getattr(_whale, 'start_from_minutes_ago', 60) if _whale else 60
+        poll_seconds = getattr(_whale, 'poll_seconds', 300) if _whale else 300
+
+        start_time = datetime.utcnow() - timedelta(minutes=start_from_minutes_ago)
+
         while not self._shutdown_flag:
             try:
                 logger.info(f"\n📊 [WHALE] Цикл: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
-                
+
                 chains = config.chains.enabled_chains
                 result = await self.whale_monitor.run_cycle(start_time, chains)
-                
+
                 self.stats["events_collected"] += result.get('events_collected', 0)
-                
+
                 start_time = datetime.utcnow()
-                
-                logger.info(f"⏰ [WHALE] Следующая проверка через {config.whale.poll_seconds}с")
-                await asyncio.sleep(config.whale.poll_seconds)
+
+                logger.info(f"⏰ [WHALE] Следующая проверка через {poll_seconds}с")
+                await asyncio.sleep(poll_seconds)
                 
             except Exception as e:
                 self.stats["errors"] += 1

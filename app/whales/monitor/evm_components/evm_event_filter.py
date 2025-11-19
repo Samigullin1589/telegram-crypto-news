@@ -21,8 +21,11 @@ class EVMEventFilter:
     
     def __init__(self):
         """Инициализация фильтра с загрузкой конфигурации"""
-        self.base_threshold = getattr(config.whale, 'min_usd_threshold', 10000)
-        self.chain_thresholds = getattr(config.whale, 'chain_thresholds', {})
+        # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.*
+        _features = getattr(config, 'features', None)
+        _whale = getattr(_features, 'whale', None) if _features else None
+        self.base_threshold = getattr(_whale, 'min_usd_threshold', 10000) if _whale else 10000
+        self.chain_thresholds = getattr(_whale, 'chain_thresholds', {}) if _whale else {}
         
         # Инициализация подфильтров
         self.amount_filter = AmountFilter(self.base_threshold, self.chain_thresholds)

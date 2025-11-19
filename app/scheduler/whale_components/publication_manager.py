@@ -33,9 +33,14 @@ class PublicationManager:
         self.history_manager = components.get('history_manager')
         
         # Очереди и лимиты
+        # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.posts_per_hour_cap
+        _features = getattr(config, 'features', None)
+        _whale = getattr(_features, 'whale', None) if _features else None
+        posts_per_hour_cap = getattr(_whale, 'posts_per_hour_cap', 3) if _whale else 3
+
         self.publication_queue = []
-        self.recent_publications = deque(maxlen=config.whale.posts_per_hour_cap)
-        self.posts_per_hour_cap = config.whale.posts_per_hour_cap
+        self.recent_publications = deque(maxlen=posts_per_hour_cap)
+        self.posts_per_hour_cap = posts_per_hour_cap
         
         # Таймауты и задержки
         self.publish_delay_seconds = 120  # Задержка между публикациями

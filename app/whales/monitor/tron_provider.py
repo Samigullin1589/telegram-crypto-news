@@ -37,8 +37,11 @@ class TronProvider:
                 return []
             
             print(f"✅ [TRON] Получено {len(transfers)} трансферов")
-            
-            min_threshold = getattr(config.whale, 'min_usd_threshold', 50000)
+
+            # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.min_usd_threshold
+            _features = getattr(config, 'features', None)
+            _whale = getattr(_features, 'whale', None) if _features else None
+            min_threshold = getattr(_whale, 'min_usd_threshold', 50000) if _whale else 50000
             
             for idx, transfer in enumerate(transfers):
                 event = await self._parse_transfer(transfer, idx + 1)

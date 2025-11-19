@@ -24,10 +24,16 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from app.scheduler import scheduler
         
         text = "<b>⚙️  КОНФИГУРАЦИЯ СИСТЕМЫ</b>\n\n"
-        
+
+        # ИСПРАВЛЕНО: Безопасный доступ к config.features.whale.*
+        _features = getattr(config, 'features', None)
+        _whale = getattr(_features, 'whale', None) if _features else None
+        posts_per_hour_cap = getattr(_whale, 'posts_per_hour_cap', 3) if _whale else 3
+        poll_seconds = getattr(_whale, 'poll_seconds', 300) if _whale else 300
+
         text += "<b>🔧 GENERAL</b>\n"
-        text += f"Posts per Hour: {config.whale.posts_per_hour_cap}\n"
-        text += f"Poll Interval: {config.whale.poll_seconds}s\n\n"
+        text += f"Posts per Hour: {posts_per_hour_cap}\n"
+        text += f"Poll Interval: {poll_seconds}s\n\n"
         
         text += "<b>🐋 WHALE MONITORING</b>\n"
         text += f"Smart Discovery: {'✅' if config.smart_discovery.enabled else '❌'}\n"
