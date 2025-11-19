@@ -209,10 +209,9 @@ class FeaturesValidator(BaseValidator):
                 if chain in missing_scanner_keys
             ]
             if enabled_without_keys:
-                self._add_warning(
-                    f"Whale мониторинг: отсутствуют scanner ключи для активных chains: "
-                    f"{', '.join(enabled_without_keys)}. "
-                    f"Мониторинг этих сетей будет работать с ограничениями rate limit"
+                self._add_info(
+                    f"Whale мониторинг chains без scanner ключей: "
+                    f"{', '.join(enabled_without_keys)} (опционально, работают с базовыми лимитами)"
                 )
         
         # Проверка Helius для Solana

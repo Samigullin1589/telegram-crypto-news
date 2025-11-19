@@ -57,6 +57,7 @@ class WhaleFeatures(BaseFeatureConfig):
         
         # Уверенность и качество
         self.min_confidence = self.get_int_env('MIN_WHALE_CONFIDENCE', 60)
+        self.min_confidence_score = self.min_confidence  # Alias для обратной совместимости
         self.require_token_info = self.get_bool_env('WHALE_REQUIRE_TOKEN_INFO', True)
         self.require_price_data = self.get_bool_env('WHALE_REQUIRE_PRICE_DATA', False)
         
