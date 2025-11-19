@@ -35,10 +35,11 @@ TRADING_DEFAULT_TAKE_PROFIT_PERCENT = 5.0
 # API KEYS
 # ============================================================================
 
-COINGECKO_API_KEY = config.coingecko_api_key or ''
-OPENAI_API_KEY = config.openai_api_key or ''
-ANTHROPIC_API_KEY = config.anthropic_api_key or ''
-GEMINI_API_KEY = config.gemini_api_key or ''
+# ИСПРАВЛЕНО: используем правильные пути к API ключам через config.api
+COINGECKO_API_KEY = getattr(config.api, 'coingecko_api_key', '') if hasattr(config, 'api') else ''
+OPENAI_API_KEY = getattr(config.api, 'openai_api_key', '') if hasattr(config, 'api') else ''
+ANTHROPIC_API_KEY = getattr(config.api, 'anthropic_api_key', '') if hasattr(config, 'api') else ''
+GEMINI_API_KEY = getattr(config.api, 'gemini_api_key', '') if hasattr(config, 'api') else ''
 
 # ============================================================================
 # BLOCKCHAIN SETTINGS

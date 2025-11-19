@@ -95,9 +95,10 @@ class TaskStarter:
         
         if self.config.features.is_enabled('trading'):
             tasks.append('trading')
-        
+
         # Бот запускается всегда если загружен
-        if self.monitor.component_manager.bot_app is not None:
+        # ИСПРАВЛЕНО: bot_application вместо bot_app
+        if self.monitor.component_manager.bot_application is not None:
             tasks.append('bot')
         
         # Database optimizer запускается всегда

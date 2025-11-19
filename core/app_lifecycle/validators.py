@@ -135,12 +135,13 @@ class ApplicationValidator:
             return False, errors
         
         component_manager = self.monitor.component_manager
-        
+
         # Проверка что хотя бы один компонент загружен
+        # ИСПРАВЛЕНО: bot_application вместо bot_app
         loaded_count = sum([
             component_manager.news_processor is not None,
             component_manager.whale_scheduler is not None,
-            component_manager.bot_app is not None,
+            component_manager.bot_application is not None,
             component_manager.trading_system is not None
         ])
         
