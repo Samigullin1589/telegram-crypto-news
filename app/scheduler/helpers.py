@@ -65,20 +65,28 @@ def print_startup_banner(components: Dict):
     
     print(f"\n📰 NEWS INTEGRATION:")
     print(f"  Status: {'✅ Enabled' if config.is_feature_enabled('news') else '❌ Disabled'}")
-    print(f"  Interval: {config.news.fetch_interval}s")
-    
+    # ИСПРАВЛЕНО: config.news не существует
+    fetch_interval = getattr(config, 'FETCH_INTERVAL', 300)
+    print(f"  Interval: {fetch_interval}s")
+
     print(f"\n📈 TRADING SYSTEM:")
     print(f"  Status: {'✅ Enabled' if config.is_feature_enabled('trading') else '❌ Disabled'}")
     if config.is_feature_enabled('trading'):
-        print(f"  Assets: {len(config.trading.monitored_assets)}")
-    
+        # ИСПРАВЛЕНО: config.trading не существует
+        monitored_assets = getattr(config, 'TRADING_MONITORED_ASSETS', 'BTC,ETH,SOL').split(',')
+        print(f"  Assets: {len(monitored_assets)}")
+
     print(f"\n🌊 HYPERLIQUID DEX:")
     print(f"  Status: {'✅ Enabled' if config.is_feature_enabled('hyperliquid') else '❌ Disabled'}")
     if config.is_feature_enabled('hyperliquid'):
-        print(f"  Min Trade: ${config.hyperliquid.min_trade_usd:,.0f}")
-    
+        # ИСПРАВЛЕНО: config.hyperliquid не существует
+        min_trade = getattr(config, 'HYPERLIQUID_MIN_TRADE_USD', 100000)
+        print(f"  Min Trade: ${min_trade:,.0f}")
+
     print(f"\n🌐 CHAINS:")
-    print(f"  Enabled: {', '.join(config.chains.enabled_chains)}")
+    # ИСПРАВЛЕНО: config.chains не существует
+    enabled_chains = getattr(config, 'ENABLED_CHAINS', ['ethereum', 'solana'])
+    print(f"  Enabled: {', '.join(enabled_chains)}")
     
     if components.get('wallet_db'):
         active = len(components['wallet_db'].get_active_wallets())

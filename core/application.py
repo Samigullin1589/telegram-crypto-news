@@ -142,13 +142,36 @@ class ComponentInitializer:
             return False
     
     async def _init_shutdown_manager(self) -> bool:
-        """Step 4: Shutdown manager"""
+        """
+        Step 4: Shutdown manager
+
+        ИСПРАВЛЕНО: ShutdownManager требует task_manager, db_initializer, monitor
+        Получаем task_manager из monitor.infrastructure
+        """
         self._step = 4
         self._print_step("Shutdown manager")
         try:
+            # ИСПРАВЛЕНО: Получаем task_manager из monitor
+            task_manager = getattr(self.components.monitor, 'task_manager', None)
+            if not task_manager:
+                # Fallback: используем task_manager из infrastructure
+                task_manager = getattr(
+                    getattr(self.components.monitor, 'infrastructure', None),
+                    'task_manager',
+                    None
+                )
+
+            if not task_manager:
+                logger.warning("⚠️ TaskManager not found, creating minimal ShutdownManager")
+                # Создаём минимальный ShutdownManager без task_manager
+                from core.tasks.manager import TaskManager
+                task_manager = TaskManager()
+
+            # ИСПРАВЛЕНО: Используем db_manager как db_initializer (duck typing)
             self.components.shutdown_manager = ShutdownManager(
-                monitor=self.components.monitor,
-                db_manager=self.components.db_manager
+                task_manager=task_manager,
+                db_initializer=self.components.db_manager,  # db_manager работает как initializer
+                monitor=self.components.monitor
             )
             logger.info("✅ Shutdown manager created")
             logger.info("")

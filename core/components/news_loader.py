@@ -103,14 +103,23 @@ class NewsLoader:
         return processor
     
     def _validate_processor(self, processor: Any) -> bool:
-        """Валидация processor"""
-        required_methods = ['process', 'run']
-        
-        for method in required_methods:
-            if not hasattr(processor, method):
-                logger.error(f"   Missing method: {method}")
-                return False
-        
+        """
+        Валидация processor
+
+        ИСПРАВЛЕНО: Требуется только 'run', 'process' опциональный
+        """
+        # Обязательный метод - только run
+        if not hasattr(processor, 'run'):
+            logger.error("   Missing required method: run")
+            return False
+
+        # Проверяем опциональные методы
+        optional_methods = ['process', 'run_cycle', 'start']
+        has_optional = any(hasattr(processor, m) for m in optional_methods)
+
+        if has_optional:
+            logger.debug(f"   ✓ Has execution methods: {[m for m in optional_methods if hasattr(processor, m)]}")
+
         return True
 
 

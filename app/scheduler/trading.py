@@ -55,7 +55,8 @@ class TradingSystem:
             signals_generated = 0
             signals_sent = 0
             
-            monitored_assets = config.trading.monitored_assets
+            # ИСПРАВЛЕНО: config.trading не существует
+            monitored_assets = getattr(config, 'TRADING_MONITORED_ASSETS', 'BTC,ETH,SOL').split(',')
             
             async with aiohttp.ClientSession() as session:
                 for asset in monitored_assets:

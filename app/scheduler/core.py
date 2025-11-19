@@ -246,7 +246,8 @@ class IntegratedScheduler:
         """Цикл генерации торговых сигналов"""
         await asyncio.sleep(300)
         
-        check_interval = config.trading.signal_interval_hours * 3600
+        # ИСПРАВЛЕНО: config.trading не существует, используем getattr с дефолтом
+        check_interval = getattr(config, 'TRADING_SIGNAL_INTERVAL_HOURS', 1) * 3600
         
         while not self._shutdown_flag:
             try:
@@ -266,7 +267,8 @@ class IntegratedScheduler:
         """Цикл управления позициями"""
         await asyncio.sleep(60)
         
-        update_interval = config.trading.position_update_interval_seconds
+        # ИСПРАВЛЕНО: config.trading не существует, используем getattr с дефолтом
+        update_interval = getattr(config, 'TRADING_POSITION_UPDATE_INTERVAL', 300)
         
         while not self._shutdown_flag:
             try:
