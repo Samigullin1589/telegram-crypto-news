@@ -81,10 +81,12 @@ class ApplicationLifecycle:
     async def _start_health_server(self) -> None:
         """Запуск health server"""
         logger.info("Starting health server...")
-        
+
         try:
-            port = getattr(self.config, 'port', 8000)
-            await self.health_server.start(port=port)
+            # ИСПРАВЛЕНО: HealthServer.start() не принимает параметров
+            # Port и host уже переданы в __init__
+            await self.health_server.start()
+            port = self.health_server.port
             logger.info(f"✅ Health server on port {port}")
         except Exception as e:
             logger.error(f"❌ Health server failed: {e}", exc_info=True)
