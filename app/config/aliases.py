@@ -162,17 +162,20 @@ class ConfigAliases:
 
     def _setup_data_dir_alias(self):
         """
-        Настройка алиаса config.data_dir -> config.paths.data_dir
+        Настройка алиасов для путей config.* -> config.paths.*
 
-        Для обратной совместимости с кодом, который использует config.data_dir
-        напрямую вместо config.paths.data_dir
+        Для обратной совместимости с кодом, который использует пути напрямую
+        из config вместо config.paths
         """
         try:
-            # Создаем алиас data_dir -> paths.data_dir
+            # Основные пути
             self.config.data_dir = self.config.paths.data_dir
-            logger.debug(f"Алиас config.data_dir -> config.paths.data_dir создан")
+            self.config.state_file = self.config.paths.state_file
+            self.config.db_path = self.config.paths.db_path
+
+            logger.debug(f"Алиасы путей созданы: data_dir, state_file, db_path")
         except Exception as e:
-            logger.warning(f"Не удалось создать алиас data_dir: {e}")
+            logger.warning(f"Не удалось создать алиасы путей: {e}")
 
     def _setup_api_keys_aliases(self):
         """

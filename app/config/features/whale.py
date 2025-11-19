@@ -52,6 +52,7 @@ class WhaleFeatures(BaseFeatureConfig):
         
         # Лимиты публикаций
         self.posts_per_hour = self.get_int_env('WHALE_POSTS_PER_HOUR', 20)
+        self.posts_per_hour_cap = self.posts_per_hour  # Alias для обратной совместимости
         self.max_queue_size = self.get_int_env('WHALE_MAX_QUEUE_SIZE', 100)
         self.dedup_window_seconds = self.get_int_env('WHALE_DEDUP_WINDOW', 300)
         
