@@ -52,6 +52,7 @@ class FeedsConfig:
         self.enabled = True
         self.fetch_interval = 300  # 5 минут между проверками фидов (по умолчанию)
         self.ai_enabled = True  # AI обработка новостей включена по умолчанию
+        self.ai_provider = 'openai'  # AI провайдер по умолчанию
 
         self.feeds: Dict[str, FeedConfig] = {
             'Крипто и Блокчейн РФ/СНГ 🇷🇺': FeedConfig(
