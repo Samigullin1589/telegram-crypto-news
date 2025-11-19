@@ -367,20 +367,33 @@ class MonitorInfrastructure:
     async def _run_news_processor(self, processor: Any) -> None:
         """
         Wrapper для запуска news processor
-        
+
         Args:
             processor: News processor instance
         """
         try:
             logger.info("[NEWS] Starting processor...")
-            
-            if hasattr(processor, 'run'):
+
+            # NewsProcessor v6.1+ использует run_cycle()
+            if hasattr(processor, 'run_cycle'):
+                # Запускаем циклы с интервалом
+                while not self.shutdown_event.is_set():
+                    try:
+                        await processor.run_cycle()
+                        logger.debug("[NEWS] Cycle completed, waiting...")
+                        await asyncio.sleep(300)  # 5 минут между циклами
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.error(f"[NEWS] Cycle error: {e}", exc_info=True)
+                        await asyncio.sleep(60)  # Подождать минуту перед retry
+            elif hasattr(processor, 'run'):
                 await processor.run()
             elif hasattr(processor, 'start'):
                 await processor.start()
             else:
-                logger.warning("[NEWS] No run/start method found")
-        
+                logger.warning("[NEWS] No run_cycle/run/start method found")
+
         except asyncio.CancelledError:
             logger.info("[NEWS] Task cancelled")
             raise
@@ -415,20 +428,37 @@ class MonitorInfrastructure:
     async def _run_trading_system(self, system: Any) -> None:
         """
         Wrapper для запуска trading system
-        
+
         Args:
             system: Trading system instance
         """
         try:
             logger.info("[TRADING] Starting system...")
-            
-            if hasattr(system, 'run'):
+
+            # TradingSystem использует generate_signal() и update_positions()
+            if hasattr(system, 'update_positions') or hasattr(system, 'generate_signal'):
+                # Запускаем периодические обновления
+                while not self.shutdown_event.is_set():
+                    try:
+                        # Обновляем позиции раз в 5 минут
+                        if hasattr(system, 'update_positions'):
+                            await system.update_positions()
+                            logger.debug("[TRADING] Positions updated")
+
+                        # Генерируем сигналы раз в 10 минут
+                        await asyncio.sleep(600)  # 10 минут между сигналами
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.error(f"[TRADING] Cycle error: {e}", exc_info=True)
+                        await asyncio.sleep(60)  # Подождать минуту перед retry
+            elif hasattr(system, 'run'):
                 await system.run()
             elif hasattr(system, 'start'):
                 await system.start()
             else:
-                logger.warning("[TRADING] No run/start method found")
-        
+                logger.warning("[TRADING] No compatible methods found")
+
         except asyncio.CancelledError:
             logger.info("[TRADING] Task cancelled")
             raise
@@ -439,22 +469,56 @@ class MonitorInfrastructure:
     async def _run_bot_application(self, bot_app: Any) -> None:
         """
         Wrapper для запуска bot application
-        
+
         Args:
             bot_app: Bot application instance
         """
         try:
             logger.info("[BOT] Starting application...")
-            
-            if hasattr(bot_app, 'run_polling'):
-                await bot_app.run_polling()
+
+            # python-telegram-bot требует асинхронного запуска
+            if hasattr(bot_app, 'initialize'):
+                # Инициализируем бота
+                await bot_app.initialize()
+                logger.debug("[BOT] Application initialized")
+
+                # Запускаем бота
+                if hasattr(bot_app, 'start'):
+                    await bot_app.start()
+                    logger.debug("[BOT] Application started")
+
+                # Запускаем polling через updater
+                if hasattr(bot_app, 'updater') and hasattr(bot_app.updater, 'start_polling'):
+                    await bot_app.updater.start_polling()
+                    logger.info("[BOT] ✅ Polling started")
+
+                    # Держим бота запущенным
+                    try:
+                        while not self.shutdown_event.is_set():
+                            await asyncio.sleep(1)
+                    finally:
+                        # Graceful shutdown
+                        if hasattr(bot_app.updater, 'stop'):
+                            await bot_app.updater.stop()
+                        if hasattr(bot_app, 'stop'):
+                            await bot_app.stop()
+                        if hasattr(bot_app, 'shutdown'):
+                            await bot_app.shutdown()
+                        logger.info("[BOT] Stopped gracefully")
+                else:
+                    logger.warning("[BOT] Updater polling not available")
             elif hasattr(bot_app, 'run'):
                 await bot_app.run()
             else:
-                logger.warning("[BOT] No run_polling/run method found")
-        
+                logger.warning("[BOT] No compatible initialization methods found")
+
         except asyncio.CancelledError:
             logger.info("[BOT] Task cancelled")
+            # Cleanup
+            if hasattr(bot_app, 'stop'):
+                await bot_app.stop()
+            if hasattr(bot_app, 'shutdown'):
+                await bot_app.shutdown()
             raise
         except Exception as e:
             logger.error(f"[BOT] Task error: {e}", exc_info=True)
