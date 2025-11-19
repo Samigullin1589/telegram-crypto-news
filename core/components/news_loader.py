@@ -106,19 +106,19 @@ class NewsLoader:
         """
         Валидация processor
 
-        ИСПРАВЛЕНО: Требуется только 'run', 'process' опциональный
+        ИСПРАВЛЕНО v2: NewsProcessor v6.1 использует 'run_cycle', а не 'run'
         """
-        # Обязательный метод - только run
-        if not hasattr(processor, 'run'):
-            logger.error("   Missing required method: run")
+        # Обязательный метод - run_cycle (основной метод NewsProcessor v6.1)
+        if not hasattr(processor, 'run_cycle'):
+            logger.error("   Missing required method: run_cycle")
             return False
 
         # Проверяем опциональные методы
-        optional_methods = ['process', 'run_cycle', 'start']
+        optional_methods = ['process', 'run', 'start', 'get_status']
         has_optional = any(hasattr(processor, m) for m in optional_methods)
 
         if has_optional:
-            logger.debug(f"   ✓ Has execution methods: {[m for m in optional_methods if hasattr(processor, m)]}")
+            logger.debug(f"   ✓ Has additional methods: {[m for m in optional_methods if hasattr(processor, m)]}")
 
         return True
 

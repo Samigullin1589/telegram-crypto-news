@@ -162,10 +162,13 @@ class ComponentInitializer:
                 )
 
             if not task_manager:
-                logger.warning("⚠️ TaskManager not found, creating minimal ShutdownManager")
-                # Создаём минимальный ShutdownManager без task_manager
+                logger.warning("⚠️ TaskManager not found, creating new TaskManager")
+                # ИСПРАВЛЕНО v2: TaskManager требует (config, monitor)
                 from core.tasks.manager import TaskManager
-                task_manager = TaskManager()
+                task_manager = TaskManager(
+                    config=self.components.config,
+                    monitor=self.components.monitor
+                )
 
             # ИСПРАВЛЕНО: Используем db_manager как db_initializer (duck typing)
             self.components.shutdown_manager = ShutdownManager(
