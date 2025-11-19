@@ -41,6 +41,7 @@ class ConfigAliases:
         self._setup_production_alias()
         self._setup_rate_limit_alias()
         self._setup_data_dir_alias()
+        self._setup_api_keys_aliases()
 
         logger.debug("Все алиасы настроены")
     
@@ -172,3 +173,43 @@ class ConfigAliases:
             logger.debug(f"Алиас config.data_dir -> config.paths.data_dir создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас data_dir: {e}")
+
+    def _setup_api_keys_aliases(self):
+        """
+        Настройка алиасов для API ключей config.xxx_api_key -> config.api.xxx_api_key
+
+        Для обратной совместимости с кодом, который использует API ключи напрямую
+        из config вместо config.api
+        """
+        try:
+            # Основные API ключи
+            api_keys = [
+                'coingecko_api_key',
+                'openai_api_key',
+                'gemini_api_key',
+                'alchemy_api_key',
+                'helius_api_key',
+                'anthropic_api_key',
+                # Blockchain scanners
+                'etherscan_api_key',
+                'bscscan_api_key',
+                'polygonscan_api_key',
+                'arbiscan_api_key',
+                'basescan_api_key',
+                'snowtrace_api_key',
+                'optimism_etherscan_api_key',
+                # Другие сервисы
+                'coinmarketcap_api_key',
+                'cryptopanic_api_key',
+                'newsapi_key',
+            ]
+
+            created_count = 0
+            for key_name in api_keys:
+                if hasattr(self.config.api, key_name):
+                    setattr(self.config, key_name, getattr(self.config.api, key_name))
+                    created_count += 1
+
+            logger.debug(f"Создано {created_count} алиасов API ключей: config.* -> config.api.*")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиасы API ключей: {e}")
