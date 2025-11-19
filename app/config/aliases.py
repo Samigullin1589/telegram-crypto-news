@@ -33,15 +33,16 @@ class ConfigAliases:
     def setup_all(self):
         """Настройка всех алиасов"""
         self._setup_news_alias()
+        self._setup_trading_alias()
         self._setup_telegram_token_alias()
         self._setup_feeds_sources_alias()
-        
+
         logger.debug("Все алиасы настроены")
     
     def _setup_news_alias(self):
         """
         Настройка алиаса config.news -> config.feeds
-        
+
         Для обратной совместимости со старым кодом,
         который использует config.news
         """
@@ -51,6 +52,20 @@ class ConfigAliases:
             logger.debug("Алиас config.news -> config.feeds создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас news: {e}")
+
+    def _setup_trading_alias(self):
+        """
+        Настройка алиаса config.trading -> config.features.trading
+
+        Для обратной совместимости со старым кодом,
+        который использует config.trading напрямую
+        """
+        try:
+            # Создаем ссылку trading -> features.trading
+            self.config.trading = self.config.features.trading
+            logger.debug("Алиас config.trading -> config.features.trading создан")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас trading: {e}")
     
     def _setup_telegram_token_alias(self):
         """
