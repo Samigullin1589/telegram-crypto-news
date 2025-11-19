@@ -50,7 +50,7 @@ class IntegratedScheduler:
     def _init_whale_components(self):
         """Инициализация компонентов whale monitoring"""
         logger.info("📦 [1/3] Инициализация Whale Monitoring...")
-        
+
         from app.whales.discovery import DiscoveryEngine
         from app.whales.score import EventScorer
         from app.whales.price import PriceProvider
@@ -58,27 +58,74 @@ class IntegratedScheduler:
         from app.whales.publish import WhalePublisher
         from app.charts.sparkline import SparklineRenderer
         from app.whales.history import HistoryManager
-        
-        self.discovery = DiscoveryEngine()
-        self.scorer = EventScorer()
-        self.price_provider = PriceProvider()
-        self.news_gate = NewsGate()
-        self.publisher = WhalePublisher()
-        self.chart_renderer = SparklineRenderer()
-        self.history_manager = HistoryManager()
-        
+
+        # Инициализация обязательных компонентов с обработкой ошибок
+        try:
+            self.discovery = DiscoveryEngine()
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации DiscoveryEngine: {e}")
+            self.discovery = None
+
+        try:
+            self.scorer = EventScorer()
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации EventScorer: {e}")
+            self.scorer = None
+
+        try:
+            self.price_provider = PriceProvider()
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации PriceProvider: {e}")
+            self.price_provider = None
+
+        try:
+            self.news_gate = NewsGate()
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации NewsGate: {e}")
+            self.news_gate = None
+
+        try:
+            self.publisher = WhalePublisher()
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации WhalePublisher: {e}")
+            self.publisher = None
+
+        try:
+            self.chart_renderer = SparklineRenderer()
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации SparklineRenderer: {e}")
+            self.chart_renderer = None
+
+        try:
+            self.history_manager = HistoryManager()
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации HistoryManager: {e}")
+            self.history_manager = None
+
         if config.is_feature_enabled('adaptive_thresholds'):
-            self.adaptive_thresholds = AdaptiveThresholds()
+            try:
+                self.adaptive_thresholds = AdaptiveThresholds()
+            except Exception as e:
+                logger.error(f"❌ Ошибка инициализации AdaptiveThresholds: {e}")
+                self.adaptive_thresholds = None
         else:
             self.adaptive_thresholds = None
-        
+
         if config.is_feature_enabled('smart_discovery') or config.is_feature_enabled('validation'):
-            self.wallet_db = WalletDatabase()
+            try:
+                self.wallet_db = WalletDatabase()
+            except Exception as e:
+                logger.error(f"❌ Ошибка инициализации WalletDatabase: {e}")
+                self.wallet_db = None
         else:
             self.wallet_db = None
-        
-        self.seen_keys = load_state()
-        
+
+        try:
+            self.seen_keys = load_state()
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки state: {e}")
+            self.seen_keys = {}
+
         logger.info("   ✓ Whale components loaded")
     
     def _init_optional_features(self):
