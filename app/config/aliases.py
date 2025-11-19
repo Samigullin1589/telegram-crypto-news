@@ -131,14 +131,14 @@ class ConfigAliases:
 
     def _setup_production_alias(self):
         """
-        Настройка алиаса config.production
+        Настройка алиаса config.production -> config.base
 
-        Для обратной совместимости с кодом, который проверяет config.production
-        вместо config.base.is_production()
+        Для обратной совместимости с кодом, который использует config.production
+        для доступа к настройкам (port, http_timeout, max_memory_mb, etc.)
         """
         try:
-            # Создаем атрибут production на основе ENVIRONMENT
-            self.config.production = self.config.base.is_production()
-            logger.debug(f"Алиас config.production создан (значение: {self.config.production})")
+            # Создаем алиас production -> base (содержит все production настройки)
+            self.config.production = self.config.base
+            logger.debug(f"Алиас config.production -> config.base создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас production: {e}")
