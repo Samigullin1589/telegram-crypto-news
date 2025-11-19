@@ -29,31 +29,37 @@ logger = logging.getLogger(__name__)
 
 class ApplicationComponents:
     """Контейнер компонентов приложения"""
-    
+
     def __init__(self):
         self.config: Optional[Any] = None
+        self.db_initializer: Optional[Any] = None
         self.db_manager: Optional[Any] = None
         self.monitor: Optional[Any] = None
+        self.task_manager: Optional[Any] = None
         self.shutdown_manager: Optional[ShutdownManager] = None
         self.health_server: Optional[HealthServer] = None
         self.lifecycle: Optional[ApplicationLifecycle] = None
-    
+
     def is_fully_initialized(self) -> bool:
         """Проверка полной инициализации"""
         return all([
             self.config is not None,
+            self.db_initializer is not None,
             self.db_manager is not None,
             self.monitor is not None,
+            self.task_manager is not None,
             self.shutdown_manager is not None,
             self.health_server is not None
         ])
-    
+
     def get_missing_components(self) -> list:
         """Получить список неинициализированных компонентов"""
         components = {
             'config': self.config,
+            'db_initializer': self.db_initializer,
             'db_manager': self.db_manager,
             'monitor': self.monitor,
+            'task_manager': self.task_manager,
             'shutdown_manager': self.shutdown_manager,
             'health_server': self.health_server
         }
@@ -66,12 +72,12 @@ class ComponentInitializer:
     def __init__(self, components: ApplicationComponents):
         self.components = components
         self._step = 0
-        self._total = 5
+        self._total = 6
     
     async def initialize_all(self) -> bool:
         """Инициализация всех компонентов"""
         self._print_header()
-        
+
         try:
             if not await self._init_environment():
                 return False
@@ -79,11 +85,13 @@ class ComponentInitializer:
                 return False
             if not await self._init_monitor():
                 return False
+            if not await self._init_task_manager():
+                return False
             if not await self._init_shutdown_manager():
                 return False
             if not await self._init_health_server():
                 return False
-            
+
             self._print_success()
             return True
         except Exception as e:
@@ -111,10 +119,21 @@ class ComponentInitializer:
         self._step = 2
         self._print_step("Database initialization")
         try:
-            self.components.db_manager = await initialize_database()
-            if not self.components.db_manager:
+            # ИСПРАВЛЕНО: Создаем и храним DatabaseInitializer
+            from core.initialization.database import DatabaseInitializer
+
+            self.components.db_initializer = DatabaseInitializer()
+            success = await self.components.db_initializer.initialize()
+
+            if not success:
                 logger.error("❌ Database init failed")
                 return False
+
+            self.components.db_manager = self.components.db_initializer.get_manager()
+            if not self.components.db_manager:
+                logger.error("❌ Database manager is None")
+                return False
+
             logger.info("✅ Database initialized")
             logger.info("")
             return True
@@ -141,14 +160,35 @@ class ComponentInitializer:
             logger.error(f"❌ Monitor error: {e}", exc_info=True)
             return False
     
-    async def _init_shutdown_manager(self) -> bool:
-        """Step 4: Shutdown manager"""
+    async def _init_task_manager(self) -> bool:
+        """Step 4: Task manager"""
         self._step = 4
+        self._print_step("Task manager")
+        try:
+            # ИСПРАВЛЕНО: Создаем TaskManager для ShutdownManager
+            from core.tasks.manager import TaskManager
+
+            self.components.task_manager = TaskManager(
+                config=self.components.config,
+                monitor=self.components.monitor
+            )
+            logger.info("✅ Task manager created")
+            logger.info("")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Task manager error: {e}", exc_info=True)
+            return False
+
+    async def _init_shutdown_manager(self) -> bool:
+        """Step 5: Shutdown manager"""
+        self._step = 5
         self._print_step("Shutdown manager")
         try:
+            # ИСПРАВЛЕНО: Передаем правильные параметры
             self.components.shutdown_manager = ShutdownManager(
-                monitor=self.components.monitor,
-                db_manager=self.components.db_manager
+                task_manager=self.components.task_manager,
+                db_initializer=self.components.db_initializer,
+                monitor=self.components.monitor
             )
             logger.info("✅ Shutdown manager created")
             logger.info("")
@@ -158,8 +198,8 @@ class ComponentInitializer:
             return False
     
     async def _init_health_server(self) -> bool:
-        """Step 5: Health server"""
-        self._step = 5
+        """Step 6: Health server"""
+        self._step = 6
         self._print_step("Health server")
         try:
             self.components.health_server = HealthServer(

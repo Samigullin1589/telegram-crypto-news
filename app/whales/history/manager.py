@@ -16,10 +16,11 @@ from app.whales.history.calculator import DeltaCalculator
 
 class HistoryManager:
     """Управление историей для функции 'В прошлый раз'"""
-    
+
     def __init__(self):
-        history_dir = config.data_dir / 'history'
-        
+        # ИСПРАВЛЕНО: Используем config.paths.data_dir вместо config.data_dir
+        history_dir = config.paths.data_dir / 'history'
+
         self.storage = EventStorage(history_dir)
         self.calculator = DeltaCalculator()
     
