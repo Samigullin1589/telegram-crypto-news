@@ -113,14 +113,17 @@ class ConfigAliases:
     def _setup_feeds_sources_alias(self):
         """
         Настройка алиаса feeds.sources для легкого доступа
-        
+
         Позволяет использовать config.news.sources вместо
         config.news.get_enabled_feeds()
         """
         try:
             if not hasattr(self.config.feeds, 'sources'):
                 # Создаем property-like доступ
-                self.config.feeds.sources = list(self.config.feeds.get_enabled_feeds().values())
-                logger.debug("Алиас feeds.sources создан")
+                if hasattr(self.config.feeds, 'get_enabled_feeds'):
+                    self.config.feeds.sources = list(self.config.feeds.get_enabled_feeds().values())
+                    logger.debug("Алиас feeds.sources создан")
+                else:
+                    logger.debug("FeedsConfig не имеет метода get_enabled_feeds(), пропускаем")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас feeds.sources: {e}")
