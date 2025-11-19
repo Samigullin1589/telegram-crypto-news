@@ -17,7 +17,11 @@ logger = logging.getLogger(__name__)
 def load_state() -> Set[str]:
     """Загрузка состояния из файла"""
     try:
-        state_file = Path(config.state_file)
+        # ИСПРАВЛЕНО: Безопасный доступ к config.paths.state_file
+        _paths = getattr(config, 'paths', None)
+        state_file_path = getattr(_paths, 'state_file', 'data/state.json') if _paths else 'data/state.json'
+        state_file = Path(state_file_path)
+
         if state_file.exists():
             with open(state_file, 'r') as f:
                 state = json.load(f)
@@ -38,13 +42,16 @@ def save_state(seen_keys: Set[str]):
             "last_seen_timestamp": datetime.utcnow().isoformat(),
             "seen_keys": list(seen_keys)[-10000:]
         }
-        
-        state_file = Path(config.state_file)
+
+        # ИСПРАВЛЕНО: Безопасный доступ к config.paths.state_file
+        _paths = getattr(config, 'paths', None)
+        state_file_path = getattr(_paths, 'state_file', 'data/state.json') if _paths else 'data/state.json'
+        state_file = Path(state_file_path)
         state_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(state_file, 'w') as f:
             json.dump(state, f, indent=2)
-        
+
         logger.info(f"💾 [STATE] Сохранено")
     except Exception as e:
         logger.error(f"⚠️ [STATE] Ошибка: {e}")
@@ -55,35 +62,51 @@ def print_startup_banner(components: Dict):
     print("\n" + "="*80)
     print("🐋 INTEGRATED SCHEDULER v4.4 - PRODUCTION READY")
     print("="*80)
-    print(f"Канал: {config.telegram.channel_id}")
-    print(f"Лимит: {config.whale.posts_per_hour_cap}/час")
-    
+
+    # ИСПРАВЛЕНО: Безопасный доступ к config
+    _telegram = getattr(config, 'telegram', None)
+    _features = getattr(config, 'features', None)
+    _whale = getattr(_features, 'whale', None) if _features else None
+    _news = getattr(config, 'news', None) or getattr(config, 'feeds', None)
+    _trading = getattr(_features, 'trading', None) if _features else None
+    _blockchain = getattr(config, 'blockchain', None)
+
+    if _telegram:
+        print(f"Канал: {getattr(_telegram, 'channel_id', 'N/A')}")
+
+    if _whale:
+        print(f"Лимит: {getattr(_whale, 'posts_per_hour_cap', 10)}/час")
+
     print(f"\n🐋 WHALE MONITORING:")
     print(f"  Status: {'✅ Enabled' if config.is_feature_enabled('whale') else '❌ Disabled'}")
-    print(f"  Min USD: ${config.whale.min_usd_threshold:,.0f}")
-    print(f"  Confidence: ≥{config.whale.min_confidence_score}")
-    
+    if _whale:
+        print(f"  Min USD: ${getattr(_whale, 'min_usd_threshold', 100000):,.0f}")
+        print(f"  Confidence: ≥{getattr(_whale, 'min_confidence_score', 70)}")
+
     print(f"\n📰 NEWS INTEGRATION:")
     print(f"  Status: {'✅ Enabled' if config.is_feature_enabled('news') else '❌ Disabled'}")
-    print(f"  Interval: {config.news.fetch_interval}s")
-    
+    if _news:
+        print(f"  Interval: {getattr(_news, 'fetch_interval', 300)}s")
+
     print(f"\n📈 TRADING SYSTEM:")
     print(f"  Status: {'✅ Enabled' if config.is_feature_enabled('trading') else '❌ Disabled'}")
-    if config.is_feature_enabled('trading'):
-        print(f"  Assets: {len(config.trading.monitored_assets)}")
-    
+    if config.is_feature_enabled('trading') and _trading:
+        monitored = getattr(_trading, 'monitored_assets', [])
+        print(f"  Assets: {len(monitored)}")
+
     print(f"\n🌊 HYPERLIQUID DEX:")
-    print(f"  Status: {'✅ Enabled' if config.is_feature_enabled('hyperliquid') else '❌ Disabled'}")
-    if config.is_feature_enabled('hyperliquid'):
-        print(f"  Min Trade: ${config.hyperliquid.min_trade_usd:,.0f}")
-    
+    hyperliquid_enabled = config.is_feature_enabled('hyperliquid') if hasattr(config, 'is_feature_enabled') else False
+    print(f"  Status: {'✅ Enabled' if hyperliquid_enabled else '❌ Disabled'}")
+
     print(f"\n🌐 CHAINS:")
-    print(f"  Enabled: {', '.join(config.chains.enabled_chains)}")
-    
+    if _blockchain:
+        chains = getattr(_blockchain, 'enabled_chains', [])
+        print(f"  Enabled: {', '.join(chains) if chains else 'N/A'}")
+
     if components.get('wallet_db'):
         active = len(components['wallet_db'].get_active_wallets())
         print(f"\n💾 Tracked Wallets: {active}")
-    
+
     print("="*80 + "\n")
 
 

@@ -606,7 +606,22 @@ class IntegratedCryptoMonitor:
         self._fully_initialized = False
         
         logger.info("✅ IntegratedCryptoMonitor core initialized")
-    
+
+    @property
+    def component_manager(self):
+        """
+        Property для доступа к component_manager
+
+        ИСПРАВЛЕНО: Validator expects monitor.component_manager
+        Returns business layer component manager
+
+        Returns:
+            ComponentManager instance или None
+        """
+        if not self.business:
+            return None
+        return self.business.component_manager
+
     async def initialize(self) -> bool:
         """
         Async инициализация business компонентов и infrastructure
