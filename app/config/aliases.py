@@ -34,6 +34,7 @@ class ConfigAliases:
         """Настройка всех алиасов"""
         self._setup_news_alias()
         self._setup_trading_alias()
+        self._setup_chains_alias()
         self._setup_telegram_token_alias()
         self._setup_feeds_sources_alias()
 
@@ -66,6 +67,20 @@ class ConfigAliases:
             logger.debug("Алиас config.trading -> config.features.trading создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас trading: {e}")
+
+    def _setup_chains_alias(self):
+        """
+        Настройка алиаса config.chains -> config.blockchain
+
+        Для обратной совместимости со старым кодом,
+        который использует config.chains
+        """
+        try:
+            # Создаем ссылку chains -> blockchain
+            self.config.chains = self.config.blockchain
+            logger.debug("Алиас config.chains -> config.blockchain создан")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас chains: {e}")
     
     def _setup_telegram_token_alias(self):
         """
