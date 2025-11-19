@@ -51,6 +51,7 @@ class FeedsConfig:
         # Aliases для обратной совместимости
         self.enabled = True
         self.fetch_interval = 300  # 5 минут между проверками фидов (по умолчанию)
+        self.ai_enabled = True  # AI обработка новостей включена по умолчанию
 
         self.feeds: Dict[str, FeedConfig] = {
             'Крипто и Блокчейн РФ/СНГ 🇷🇺': FeedConfig(
