@@ -44,10 +44,13 @@ class FeedsConfig:
     Конфигурация всех RSS источников
     Управление приоритетами и категориями фидов
     """
-    
+
     def __init__(self):
         """Инициализация конфигурации фидов"""
-        
+
+        # Alias для обратной совместимости - FeedsConfig всегда enabled
+        self.enabled = True
+
         self.feeds: Dict[str, FeedConfig] = {
             'Крипто и Блокчейн РФ/СНГ 🇷🇺': FeedConfig(
                 url='https://habr.com/ru/rss/hubs/cryptocurrency/',
