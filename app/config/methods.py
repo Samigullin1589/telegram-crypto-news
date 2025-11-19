@@ -67,6 +67,20 @@ class ConfigMethods:
     def get_ai_provider(self) -> str:
         """Получение названия активного AI провайдера"""
         return self.config.api.get_ai_provider()
+
+    def get_api_key(self, service: str) -> str:
+        """
+        Получение API ключа для сервиса
+
+        Args:
+            service: Название сервиса (coingecko, alchemy, etc.)
+
+        Returns:
+            API ключ или пустая строка
+        """
+        service_lower = service.lower()
+        key_attr = f"{service_lower}_api_key"
+        return getattr(self.config.api, key_attr, '')
     
     # ========================================================================
     # BLOCKCHAIN МЕТОДЫ

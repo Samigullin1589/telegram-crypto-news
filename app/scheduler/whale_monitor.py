@@ -173,17 +173,67 @@ class WhaleMonitor:
             'components': self.lifecycle.get_components_status()
         }
     
+    async def run(self):
+        """
+        Непрерывный цикл мониторинга
+
+        Запускается в фоне и выполняет циклы мониторинга
+        через заданные интервалы
+        """
+        import asyncio
+        from app.config import config
+
+        # Получаем интервал проверки
+        check_interval = getattr(
+            getattr(config, 'features', None),
+            'whale_check_interval',
+            60
+        ) if hasattr(config, 'features') else 60
+
+        logger.info(f"🐋 [WHALE] Запуск цикла мониторинга (интервал: {check_interval}s)")
+
+        while True:
+            try:
+                # Получаем список блокчейнов
+                chains = self._get_enabled_chains()
+
+                # Время начала для этого цикла
+                start_time = datetime.utcnow()
+
+                # Выполняем цикл
+                result = await self.run_cycle(start_time, chains)
+
+                # Логируем результат
+                if result.get('success'):
+                    events_count = result.get('events_collected', 0)
+                    if events_count > 0:
+                        logger.info(f"🐋 [WHALE] Цикл завершен: {events_count} событий обработано")
+                else:
+                    logger.warning(f"⚠️  [WHALE] Цикл завершен с ошибкой: {result.get('error', 'Unknown')}")
+
+                # Ждем до следующего цикла
+                await asyncio.sleep(check_interval)
+
+            except asyncio.CancelledError:
+                logger.info("🐋 [WHALE] Остановка цикла мониторинга")
+                break
+
+            except Exception as e:
+                logger.error(f"❌ [WHALE] Ошибка в цикле: {e}", exc_info=True)
+                # Ждем перед повтором даже при ошибке
+                await asyncio.sleep(check_interval)
+
     async def cleanup(self):
         """Очистка ресурсов"""
         logger.info("🧹 [WHALE] Cleanup monitor...")
-        
+
         try:
             await self.cycle_runner.cleanup()
             await self.lifecycle.cleanup()
-            
+
             self.state.is_initialized = False
             logger.info("✅ [WHALE] Cleanup completed")
-        
+
         except Exception as e:
             logger.error(f"⚠️  [WHALE] Cleanup error: {e}")
 
