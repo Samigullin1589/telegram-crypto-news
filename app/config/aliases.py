@@ -39,6 +39,7 @@ class ConfigAliases:
         self._setup_telegram_token_alias()
         self._setup_feeds_sources_alias()
         self._setup_production_alias()
+        self._setup_rate_limit_alias()
 
         logger.debug("Все алиасы настроены")
     
@@ -142,3 +143,17 @@ class ConfigAliases:
             logger.debug(f"Алиас config.production -> config.base создан")
         except Exception as e:
             logger.warning(f"Не удалось создать алиас production: {e}")
+
+    def _setup_rate_limit_alias(self):
+        """
+        Настройка алиаса config.rate_limit -> config.rate_limiting
+
+        Для обратной совместимости с кодом, который использует config.rate_limit
+        для доступа к настройкам лимитирования (enabled, calls_per_minute, etc.)
+        """
+        try:
+            # Создаем алиас rate_limit -> rate_limiting
+            self.config.rate_limit = self.config.rate_limiting
+            logger.debug(f"Алиас config.rate_limit -> config.rate_limiting создан")
+        except Exception as e:
+            logger.warning(f"Не удалось создать алиас rate_limit: {e}")
