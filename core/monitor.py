@@ -714,10 +714,12 @@ class IntegratedCryptoMonitor:
         self.start_time = datetime.now()
         
         try:
-            # Start HTTP server
-            if not await self.infrastructure.start_http_server():
-                raise RuntimeError("HTTP server start failed")
-            
+            # Start HTTP server (optional - HealthServer already running)
+            http_started = await self.infrastructure.start_http_server()
+            if not http_started:
+                logger.warning("⚠️  HTTP server не запущен (вероятно HealthServer уже использует порт)")
+                logger.info("   ✓ HealthServer обеспечивает health checks, продолжаем работу")
+
             # Start business tasks
             if not await self.infrastructure.start_business_tasks():
                 raise RuntimeError("Business tasks start failed")

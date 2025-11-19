@@ -55,21 +55,21 @@ class ChainMetadata:
     def _initialize_names() -> Dict[str, str]:
         """
         Инициализация полных названий блокчейнов
-        
+
         Returns:
             Словарь с полными названиями
         """
         return {
-            'ethereum': 'Ethereum',
-            'bsc': 'BNB Chain',
-            'polygon': 'Polygon',
-            'arbitrum': 'Arbitrum',
-            'optimism': 'Optimism',
-            'base': 'Base',
-            'avalanche': 'Avalanche',
-            'solana': 'Solana',
-            'fantom': 'Fantom',
-            'tron': 'Tron'
+            'ethereum': 'Ethereum Mainnet',
+            'bsc': 'BNB Smart Chain',
+            'polygon': 'Polygon PoS',
+            'arbitrum': 'Arbitrum One',
+            'optimism': 'Optimism Mainnet',
+            'base': 'Base Network',
+            'avalanche': 'Avalanche C-Chain',
+            'solana': 'Solana Network',
+            'fantom': 'Fantom Opera',
+            'tron': 'Tron Network'
         }
     
     @staticmethod

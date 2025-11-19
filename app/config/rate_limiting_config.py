@@ -68,7 +68,13 @@ class RateLimitingConfig:
         
         # API-специфичные лимиты
         self.api_rate_limits = self._initialize_api_limits()
-        
+
+        # Специфичные лимиты для Solana (для валидации)
+        self.solana_requests_per_second = self._get_int_env(
+            'SOLANA_REQUESTS_PER_SECOND',
+            10  # По умолчанию 10 req/sec (helius tier)
+        )
+
         # Логирование конфигурации
         self._log_configuration()
     
