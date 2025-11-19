@@ -72,44 +72,87 @@ class WhaleLoader:
     def _create_components(self) -> Optional[Dict[str, Any]]:
         """
         Создание компонентов для WhaleMonitor
-        
+
         Returns:
             Dict с компонентами или None
         """
         try:
             components = {}
-            
+
             # Seen keys для отслеживания событий
             components['seen_keys'] = set()
-            
-            # Попытка создать дополнительные компоненты
+
+            # Критически важные компоненты
             try:
-                from app.whales.score import WhaleScorer
-                components['scorer'] = WhaleScorer()
-                logger.debug("   ✓ WhaleScorer created")
+                from app.whales.score import EventScorer
+                components['scorer'] = EventScorer()
+                logger.debug("   ✓ EventScorer created")
             except Exception as e:
-                logger.debug(f"   WhaleScorer not available: {e}")
-            
+                logger.warning(f"   ⚠️ EventScorer not available: {e}")
+
+            try:
+                from app.whales.price import PriceProvider
+                components['price_provider'] = PriceProvider()
+                logger.debug("   ✓ PriceProvider created")
+            except Exception as e:
+                logger.warning(f"   ⚠️ PriceProvider not available: {e}")
+
+            try:
+                from app.whales.publish import WhalePublisher
+                components['publisher'] = WhalePublisher()
+                logger.debug("   ✓ WhalePublisher created")
+            except Exception as e:
+                logger.warning(f"   ⚠️ WhalePublisher not available: {e}")
+
+            try:
+                from app.whales.history import HistoryManager
+                components['history_manager'] = HistoryManager()
+                logger.debug("   ✓ HistoryManager created")
+            except Exception as e:
+                logger.warning(f"   ⚠️ HistoryManager not available: {e}")
+
+            # Дополнительные компоненты
+            try:
+                from app.whales.discovery import DiscoveryEngine
+                components['discovery'] = DiscoveryEngine()
+                logger.debug("   ✓ DiscoveryEngine created")
+            except Exception as e:
+                logger.debug(f"   DiscoveryEngine not available: {e}")
+
+            try:
+                from app.whales.news import NewsGate
+                components['news_gate'] = NewsGate()
+                logger.debug("   ✓ NewsGate created")
+            except Exception as e:
+                logger.debug(f"   NewsGate not available: {e}")
+
+            try:
+                from app.charts.sparkline import SparklineRenderer
+                components['chart_renderer'] = SparklineRenderer()
+                logger.debug("   ✓ SparklineRenderer created")
+            except Exception as e:
+                logger.debug(f"   SparklineRenderer not available: {e}")
+
             # Event filter
             try:
                 from app.scheduler.whale_components import EventFilter
-                # EventFilter нужны components, передаем пустой dict
-                components['event_filter'] = EventFilter({})
+                # EventFilter нужны components, передаем созданные компоненты
+                components['event_filter'] = EventFilter(components)
                 logger.debug("   ✓ EventFilter created")
             except Exception as e:
                 logger.debug(f"   EventFilter not available: {e}")
-            
+
             # Event enricher
             try:
                 from app.scheduler.whale_components import EventEnricher
-                components['event_enricher'] = EventEnricher({})
+                components['event_enricher'] = EventEnricher(components)
                 logger.debug("   ✓ EventEnricher created")
             except Exception as e:
                 logger.debug(f"   EventEnricher not available: {e}")
-            
+
             logger.debug(f"   Created {len(components)} components")
             return components
-        
+
         except Exception as e:
             logger.error(f"Error creating components: {e}")
             return None

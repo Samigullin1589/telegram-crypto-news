@@ -438,21 +438,26 @@ class MonitorInfrastructure:
     
     async def _run_bot_application(self, bot_app: Any) -> None:
         """
-        Wrapper для запуска bot application
-        
+        Wrapper для запуска bot application в webhook режиме
+
         Args:
             bot_app: Bot application instance
         """
         try:
-            logger.info("[BOT] Starting application...")
-            
-            if hasattr(bot_app, 'run_polling'):
-                await bot_app.run_polling()
-            elif hasattr(bot_app, 'run'):
-                await bot_app.run()
-            else:
-                logger.warning("[BOT] No run_polling/run method found")
-        
+            logger.info("[BOT] Starting application in WEBHOOK mode...")
+
+            # Используем BotWebhookRunner для webhook режима
+            from core.tasks.bot_runner import BotWebhookRunner
+
+            runner = BotWebhookRunner(
+                bot_application=bot_app,
+                health_monitor=self.core.health_monitor,
+                statistics=self.core.statistics,
+                shutdown_event=self.shutdown_event
+            )
+
+            await runner.run()
+
         except asyncio.CancelledError:
             logger.info("[BOT] Task cancelled")
             raise
