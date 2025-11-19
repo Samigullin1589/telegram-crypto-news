@@ -39,7 +39,9 @@ class CoinGeckoClient:
     }
     
     def __init__(self):
-        self.api_key = config.coingecko_api_key
+        # ИСПРАВЛЕНО: Безопасный доступ к config.api.coingecko_api_key
+        _api = getattr(config, 'api', None)
+        self.api_key = getattr(_api, 'coingecko_api_key', '') if _api else ''
         self.base_url = "https://api.coingecko.com/api/v3"
     
     def get_coin_id(self, asset: str) -> Optional[str]:

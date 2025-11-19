@@ -202,9 +202,11 @@ class ComponentInitializer:
         self._step = 6
         self._print_step("Health server")
         try:
+            # ИСПРАВЛЕНО: HealthServer принимает только port и host
+            port = getattr(self.components.config.base, 'port', 8000) if hasattr(self.components.config, 'base') else 8000
             self.components.health_server = HealthServer(
-                monitor=self.components.monitor,
-                config=self.components.config
+                port=port,
+                host='0.0.0.0'
             )
             logger.info("✅ Health server created")
             logger.info("")
