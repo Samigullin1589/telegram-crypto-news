@@ -377,8 +377,8 @@ class FeaturesValidator(BaseValidator):
             else:
                 self._add_info(f"Hyperliquid API URL: {api_url}")
         else:
-            self._add_warning(
-                "Hyperliquid модуль включен, но API URL не настроен в конфигурации"
+            self._add_info(
+                "Hyperliquid модуль использует API URL по умолчанию (опционально)"
             )
         
         # Проверка интеграции с Trading

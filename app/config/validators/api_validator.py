@@ -114,15 +114,13 @@ class APIValidator(BaseValidator):
         
         # Получаем список блокчейнов без ключей
         missing_keys = self.config.get_missing_scanner_keys()
-        
+
         if missing_keys:
-            self._add_warning(
-                f"Отсутствуют API ключи для blockchain scanners: {', '.join(missing_keys)}. "
-                f"Мониторинг этих сетей будет работать с ограничениями rate limit. "
-                f"Рекомендуется получить бесплатные ключи на соответствующих сайтах"
+            self._add_info(
+                f"Blockchain scanners без API ключей: {', '.join(missing_keys)} (опционально, работают с базовыми лимитами)"
             )
         else:
-            self._add_info("Все необходимые blockchain scanner ключи настроены")
+            self._add_info("Все blockchain scanner ключи настроены")
         
         # Валидация формата существующих ключей
         scanner_keys = {
@@ -167,7 +165,7 @@ class APIValidator(BaseValidator):
         
         # Alchemy (для EVM chains)
         if self.config.api.alchemy_api_key:
-            if self._validate_key_format('Alchemy', self.config.api.alchemy_api_key, min_length=30):
+            if self._validate_key_format('Alchemy', self.config.api.alchemy_api_key, min_length=20):
                 self._add_info("Alchemy API ключ: настроен")
     
     # ========================================================================

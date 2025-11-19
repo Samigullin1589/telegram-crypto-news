@@ -345,9 +345,8 @@ class SystemValidator(BaseValidator):
         if hasattr(self.config.database, 'enable_auto_backup') and self.config.database.enable_auto_backup:
             self._validate_backup_settings()
         else:
-            self._add_warning(
-                "Database backup отключен. "
-                "Рекомендуется включить автоматическое резервное копирование"
+            self._add_info(
+                "Database backup отключен (опционально)"
             )
         
         # ИСПРАВЛЕНО: используем pool.timeout
