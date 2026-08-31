@@ -59,10 +59,10 @@ class APIValidator(BaseValidator):
         logger.debug("Проверка AI провайдеров...")
         
         if not self.config.api.has_ai_provider():
-            self._add_error(
+            self._add_warning(
                 "AI провайдер не настроен. "
-                "Необходим хотя бы один из: OpenAI, Gemini, Anthropic. "
                 "AI-обработка новостей будет недоступна. "
+                "Новости будут публиковаться в сыром виде. "
                 "Установите одну из переменных: OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY"
             )
             return
