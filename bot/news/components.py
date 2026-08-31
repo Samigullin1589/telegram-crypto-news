@@ -33,7 +33,10 @@ class ProcessorComponents:
     
     def has_telegram(self) -> bool:
         """Проверка наличия Telegram постера"""
-        return self.telegram is not None
+        return (
+            self.telegram is not None
+            and bool(getattr(self.telegram, 'is_initialized', True))
+        )
 
 
 class ComponentsLoader:
@@ -117,8 +120,11 @@ class ComponentsLoader:
     def _load_telegram_poster() -> Optional[Any]:
         """Загрузка Telegram Poster"""
         try:
-            from bot.telegram_poster import NewsTelegramPoster
-            poster = NewsTelegramPoster()
+            from bot.telegram_poster import TelegramPoster
+            poster = TelegramPoster()
+            if not poster.is_initialized:
+                print("   ⚠️  Telegram Poster is not configured")
+                return None
             print("   ✅ Telegram Poster loaded")
             return poster
         except ImportError:

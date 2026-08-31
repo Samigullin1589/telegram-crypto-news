@@ -185,7 +185,7 @@ class TaskManager:
             logger.warning("Component manager not available")
             return False
         
-        if self.monitor.component_manager.bot_app is None:
+        if self.monitor.component_manager.bot_application is None:
             logger.warning("Bot application not loaded")
             return False
         
@@ -197,7 +197,42 @@ class TaskManager:
             logger.info("📰 Starting news task...")
             
             processor = self.monitor.component_manager.news_processor
-            self.news_task = await start_news_task(processor, self.config)
+            infrastructure = getattr(self.monitor, 'infrastructure', None)
+            core = getattr(self.monitor, 'core', None)
+
+            health_monitor = getattr(
+                core, 'health_monitor', getattr(self.monitor, 'health_monitor', None)
+            )
+            resource_monitor = getattr(
+                core, 'resource_monitor', getattr(self.monitor, 'resource_monitor', None)
+            )
+            statistics = getattr(
+                core, 'statistics', getattr(self.monitor, 'statistics', None)
+            )
+            shutdown_event = getattr(
+                infrastructure, 'shutdown_event', getattr(self.monitor, 'shutdown_event', None)
+            )
+
+            missing = [
+                name for name, value in {
+                    'health_monitor': health_monitor,
+                    'resource_monitor': resource_monitor,
+                    'statistics': statistics,
+                    'shutdown_event': shutdown_event,
+                }.items() if value is None
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"News task dependencies are unavailable: {', '.join(missing)}"
+                )
+
+            self.news_task = await start_news_task(
+                processor,
+                health_monitor,
+                resource_monitor,
+                statistics,
+                shutdown_event
+            )
             
             if self.news_task:
                 results['news'] = {'status': 'started', 'task_id': id(self.news_task)}
@@ -283,7 +318,7 @@ class TaskManager:
             logger.info("🤖 Starting bot task...")
             
             # ИСПРАВЛЕНИЕ: Передаём все необходимые параметры
-            bot_app = self.monitor.component_manager.bot_app
+            bot_app = self.monitor.component_manager.bot_application
             health_monitor = self.monitor.health_monitor
             statistics = self.monitor.statistics
             shutdown_event = self.monitor.shutdown_event

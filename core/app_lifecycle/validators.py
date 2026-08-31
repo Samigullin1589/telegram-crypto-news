@@ -118,11 +118,11 @@ class ApplicationValidator:
             errors.append("Database manager not initialized")
             return False, errors
         
-        # Проверка методов
-        required_methods = ['initialize', 'shutdown']
-        for method in required_methods:
-            if not hasattr(self.db_manager, method):
-                errors.append(f"DatabaseManager missing method: {method}")
+        if not any(
+            hasattr(self.db_manager, method)
+            for method in ('shutdown', 'close')
+        ):
+            errors.append("DatabaseManager missing shutdown/close method")
         
         return len(errors) == 0, errors
     
@@ -140,7 +140,7 @@ class ApplicationValidator:
         loaded_count = sum([
             component_manager.news_processor is not None,
             component_manager.whale_scheduler is not None,
-            component_manager.bot_app is not None,
+            component_manager.bot_application is not None,
             component_manager.trading_system is not None
         ])
         

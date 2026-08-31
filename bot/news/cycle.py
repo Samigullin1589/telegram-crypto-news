@@ -7,7 +7,8 @@ News Processing Cycle v2.0
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 from app.config import config
 from .state import ProcessorState, ProcessorLogger
@@ -112,7 +113,7 @@ class NewsCycleProcessor:
         # Безопасное получение источников из config.feeds
         try:
             enabled_feeds = config.feeds.get_enabled_feeds()
-            sources = list(enabled_feeds.values())[:5]  # Первые 5 источников
+            sources = list(enabled_feeds.items())[:5]  # Первые 5 источников
             
             if not sources:
                 self.logger.log_warning("No enabled feeds found")
@@ -124,13 +125,16 @@ class NewsCycleProcessor:
             return []
         
         # Параллельное получение из всех источников
-        tasks = [self.fetcher.fetch_source(source) for source in sources]
+        tasks = [
+            self.fetcher.fetch_source(source, source_name)
+            for source_name, source in sources
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Обработка результатов
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                source_name = getattr(sources[i], 'name', 'Unknown')
+                source_name = sources[i][0]
                 self.logger.log_warning(f"Source {source_name} failed: {result}")
             elif result:
                 all_articles.extend(result)
@@ -152,10 +156,6 @@ class NewsCycleProcessor:
             if not self.deduplicator.is_duplicate(article)
         ]
         
-        # Отмечаем новые статьи как просмотренные
-        for article in new_articles:
-            self.deduplicator.mark_as_seen(article)
-        
         return new_articles
     
     async def _process_articles(self, articles: List[Dict]) -> int:
@@ -172,28 +172,27 @@ class NewsCycleProcessor:
         
         # Безопасное получение лимитов
         try:
-            posts_per_hour_cap = getattr(config.feeds, 'posts_per_hour_cap', 10)
-        except:
-            posts_per_hour_cap = 10
+            posts_per_hour_cap = int(
+                getattr(config.features, 'posts_per_hour_cap', 3)
+            )
+        except (AttributeError, TypeError, ValueError):
+            posts_per_hour_cap = 3
         
-        max_posts = min(
+        max_posts = max(0, min(
             len(articles),
             posts_per_hour_cap - self.state.posts_this_hour,
             3  # Не более 3 за один цикл
-        )
+        ))
         
         for article in articles[:max_posts]:
             try:
-                # Обработка статьи
                 title = article.get('title', 'No title')[:50]
                 self.logger.log_info(f"Processing: {title}...")
-                
-                # Имитация обработки
-                await asyncio.sleep(0.5)
-                
-                posted += 1
-                self.state.posts_this_hour += 1
-                self.state.total_articles_posted += 1
+
+                if await self._process_article(article):
+                    posted += 1
+                    self.state.posts_this_hour += 1
+                    self.state.total_articles_posted += 1
                 
             except Exception as e:
                 self.logger.log_warning(f"Article processing error: {e}")
@@ -201,6 +200,140 @@ class NewsCycleProcessor:
                 continue
         
         return posted
+
+    async def _process_article(self, article: Dict) -> bool:
+        """Обработать и опубликовать статью как одну логическую операцию."""
+        link = article.get('url') or article.get('link')
+        title = (article.get('title') or '').strip()
+
+        if not link or not title:
+            self.logger.log_warning("Article has no title or URL")
+            return False
+
+        prepared = article.copy()
+        prepared['url'] = link
+        prepared['link'] = link
+        prepared['normalized_link'] = self._normalize_url(link)
+
+        await self._enrich_content(prepared)
+        message, ai_provider, ai_score = await self._build_message(prepared)
+        if not message:
+            self.logger.log_warning("Could not build publication message")
+            return False
+
+        telegram = self.components.telegram
+        if telegram is None or not hasattr(telegram, 'post'):
+            self.logger.log_warning("Telegram poster is not available")
+            return False
+
+        sent = await telegram.post(
+            message=message,
+            link=link,
+            image_url=prepared.get('image_url')
+        )
+        if not sent:
+            self.logger.log_warning("Telegram publication failed; article will be retried")
+            return False
+
+        # Только успешная Telegram-отправка делает статью обработанной.
+        self.deduplicator.mark_as_seen(prepared)
+
+        prepared['ai_provider'] = ai_provider
+        prepared['ai_score'] = ai_score
+        prepared['has_image'] = bool(prepared.get('image_url'))
+
+        if self.components.has_database():
+            saved = await self.components.database.save_article(
+                article=prepared,
+                status='success'
+            )
+            if not saved:
+                self.logger.log_warning(
+                    "Article was sent, but could not be recorded in the news database"
+                )
+
+        return True
+
+    async def _enrich_content(self, article: Dict) -> None:
+        """Дополнить RSS-данные полным текстом и изображением, если возможно."""
+        parser = self.components.content_parser
+        if parser is None:
+            return
+
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                if hasattr(parser, 'get_article_content'):
+                    parsed = await parser.get_article_content(
+                        article['url'], article, session
+                    )
+                    if parsed:
+                        if parsed.get('text'):
+                            article['content'] = parsed['text']
+                        if parsed.get('image_url'):
+                            article['image_url'] = parsed['image_url']
+                        if parsed.get('final_url'):
+                            article['normalized_link'] = self._normalize_url(
+                                parsed['final_url']
+                            )
+                elif hasattr(parser, 'parse_article'):
+                    content = await parser.parse_article(article['url'], session)
+                    if content:
+                        article['content'] = content
+
+            if not article.get('image_url') and hasattr(parser, 'find_best_image'):
+                article['image_url'] = parser.find_best_image(article)
+        except Exception as e:
+            # RSS description остается безопасным fallback.
+            logger.debug("Article enrichment failed: %s", e, exc_info=True)
+
+    async def _build_message(
+        self,
+        article: Dict
+    ) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+        """Построить AI-summary либо локальный fallback-текст."""
+        title = article['title'].strip()
+        text = (
+            article.get('content')
+            or article.get('summary')
+            or article.get('description')
+            or ''
+        ).strip()
+        category = article.get('category') or 'news 📰'
+        ai_handler = self.components.ai_handler
+        ai_provider = None
+        ai_score = None
+
+        if ai_handler is not None:
+            try:
+                if hasattr(ai_handler, 'analyze_article'):
+                    analysis = await ai_handler.analyze_article(article)
+                    if analysis:
+                        ai_score = analysis.get('score')
+
+                if hasattr(ai_handler, 'get_summary'):
+                    summary = await ai_handler.get_summary(title, text, category)
+                    if summary:
+                        message, ai_provider = summary
+                        return message, ai_provider, ai_score
+            except Exception as e:
+                logger.warning("AI processing failed, using fallback: %s", e)
+
+        fallback_text = text or "Подробности доступны в первоисточнике."
+        fallback_text = fallback_text[:900].strip()
+        message = f"📰 **{title}**\n\n{fallback_text}\n\n#crypto #news"
+        return message, ai_provider, ai_score
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        """Удалить query/fragment, обычно содержащие tracking-параметры."""
+        try:
+            parsed = urlsplit(url)
+            path = parsed.path.rstrip('/') or '/'
+            return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, '', ''))
+        except Exception:
+            return url
     
     def get_statistics(self) -> Dict:
         """

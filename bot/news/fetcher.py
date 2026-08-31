@@ -5,7 +5,7 @@ News Fetcher v2.0 - Fixed FeedConfig Support
 """
 
 import logging
-from typing import List, Dict, Union, TYPE_CHECKING
+from typing import List, Dict, Union, TYPE_CHECKING, Optional
 
 from .http_client import NewsHttpClient
 from .parsers import RSSParser, HTMLParser
@@ -34,7 +34,11 @@ class NewsFetcher:
         self.html_parser = HTMLParser()
         self.extractor = ArticleExtractor()
     
-    async def fetch_source(self, source: Union[Dict, 'FeedConfig']) -> List[Dict]:
+    async def fetch_source(
+        self,
+        source: Union[Dict, 'FeedConfig'],
+        source_name: Optional[str] = None
+    ) -> List[Dict]:
         """
         Получает статьи из одного источника
         
@@ -46,6 +50,8 @@ class NewsFetcher:
         """
         # Нормализация источника в словарь
         source_data = self._normalize_source(source)
+        if source_name:
+            source_data['name'] = source_name
         
         url = source_data.get('url')
         name = source_data.get('name', 'Unknown')

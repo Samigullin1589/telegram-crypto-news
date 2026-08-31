@@ -83,7 +83,12 @@ class ApplicationLifecycle:
         logger.info("Starting health server...")
         
         try:
-            port = getattr(self.config, 'port', 8000)
+            base_config = getattr(self.config, 'base', None)
+            port = getattr(
+                self.config,
+                'port',
+                getattr(self.config, 'PORT', getattr(base_config, 'PORT', 8000))
+            )
             await self.health_server.start(port=port)
             logger.info(f"✅ Health server on port {port}")
         except Exception as e:

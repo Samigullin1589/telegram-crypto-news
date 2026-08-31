@@ -85,9 +85,16 @@ class ProcessorLifecycle:
         self.logger.log_header("LOADING INITIAL BASELINE")
         
         try:
+            # Постоянная БД имеет приоритет над сетевым baseline: после
+            # перезапуска уже опубликованные URL не должны отправляться снова.
+            if self.components.has_database():
+                stored_links = await self.components.database.get_all_links()
+                for link in stored_links:
+                    deduplicator.mark_as_seen({'url': link})
+
             # Безопасное получение источников
             enabled_feeds = config.feeds.get_enabled_feeds()
-            sources = list(enabled_feeds.values())[:5]  # Первые 5 источников
+            sources = list(enabled_feeds.items())[:5]  # Первые 5 источников
             
             if not sources:
                 self.logger.log_warning("No sources available for baseline")
@@ -96,12 +103,15 @@ class ProcessorLifecycle:
             
             # Получаем статьи из всех источников
             all_articles = []
-            tasks = [fetcher.fetch_source(source) for source in sources]
+            tasks = [
+                fetcher.fetch_source(source, source_name)
+                for source_name, source in sources
+            ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    source_name = getattr(sources[i], 'name', 'Unknown')
+                    source_name = sources[i][0]
                     self.logger.log_warning(f"Source {source_name}: {result}")
                 elif result:
                     all_articles.extend(result)

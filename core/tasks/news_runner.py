@@ -91,7 +91,13 @@ class NewsSystemRunner:
         
         # Параметры выполнения
         self.cycle_timeout = 180.0
-        self.normal_interval = 300  # 5 минут
+        try:
+            from app.config import config
+            self.normal_interval = int(
+                getattr(config.features, 'news_check_interval', 300)
+            )
+        except Exception:
+            self.normal_interval = 300  # 5 минут
         
         logger.debug("NewsSystemRunner initialized")
     
@@ -120,7 +126,8 @@ class NewsSystemRunner:
         while not self.shutdown_event.is_set():
             try:
                 # Обновление heartbeat
-                self.health_monitor.update_news_heartbeat()
+                if hasattr(self.health_monitor, 'update_news_heartbeat'):
+                    self.health_monitor.update_news_heartbeat()
                 
                 # Выполнение цикла обработки
                 await self._execute_news_cycle()
@@ -129,10 +136,14 @@ class NewsSystemRunner:
                 consecutive_errors = 0
                 
                 # Обновление статистики
-                self.statistics.increment_news()
+                if hasattr(self.statistics, 'increment_news'):
+                    self.statistics.increment_news()
                 
                 # Проверка памяти
-                if not self.resource_monitor.check_memory():
+                if (
+                    hasattr(self.resource_monitor, 'check_memory')
+                    and not self.resource_monitor.check_memory()
+                ):
                     logger.warning("⚠️  [NEWS] Memory pressure detected")
                     await asyncio.sleep(self.base_delay)
                 

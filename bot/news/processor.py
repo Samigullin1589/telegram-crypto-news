@@ -127,11 +127,15 @@ class NewsProcessor:
             self.logger.log_info(f"Sources: {len(enabled_feeds)}")
             
             # Пытаемся получить дополнительные параметры
-            if hasattr(config.feeds, 'fetch_interval'):
-                self.logger.log_info(f"Fetch interval: {config.feeds.fetch_interval}s")
+            if hasattr(config.features, 'news_check_interval'):
+                self.logger.log_info(
+                    f"Fetch interval: {config.features.news_check_interval}s"
+                )
             
-            if hasattr(config.feeds, 'posts_per_hour_cap'):
-                self.logger.log_info(f"Posts per hour cap: {config.feeds.posts_per_hour_cap}")
+            if hasattr(config.features, 'posts_per_hour_cap'):
+                self.logger.log_info(
+                    f"Posts per hour cap: {config.features.posts_per_hour_cap}"
+                )
             
         except Exception as e:
             self.logger.log_warning(f"Cannot log full configuration: {e}")

@@ -55,23 +55,33 @@ class HealthServer:
         site: aiohttp TCPSite
     """
     
-    def __init__(self, port: int = 8080, host: str = '0.0.0.0'):
+    def __init__(
+        self,
+        port: int = 8080,
+        host: str = '0.0.0.0',
+        monitor: Optional[Any] = None,
+        config: Optional[Any] = None
+    ):
         """
         Инициализация health server
         
         Args:
             port: Порт сервера (по умолчанию 8080)
             host: Хост для привязки (по умолчанию 0.0.0.0)
+            monitor: Монитор приложения (для расширенных health checks)
+            config: Конфигурация приложения
         """
-        self.port = port
+        self.port = int(port)
         self.host = host
+        self.monitor = monitor
+        self.config = config
         self.app: Optional[web.Application] = None
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
         
         logger.debug(f"HealthServer initialized on {host}:{port}")
     
-    async def start(self) -> None:
+    async def start(self, port: Optional[int] = None) -> None:
         """
         Запуск health server
         
@@ -81,6 +91,9 @@ class HealthServer:
             Exception: При ошибках запуска сервера
         """
         try:
+            if port is not None:
+                self.port = int(port)
+
             logger.info("🏥 [HEALTH] Starting Health Check Server...")
             
             # Создание application

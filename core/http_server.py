@@ -49,7 +49,8 @@ class HTTPServer:
             resource_monitor: ResourceMonitor instance
             rate_limiter: ChainRateLimiter instance
             bot_application: Telegram bot application (optional)
-            port: HTTP port (default: from PORT env var or 8000)
+            port: HTTP port. The monitor passes METRICS_PORT explicitly;
+                standalone use falls back to PORT or 8000.
         """
         self.health_monitor = health_monitor
         self.resource_monitor = resource_monitor

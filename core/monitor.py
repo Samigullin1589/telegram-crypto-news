@@ -20,6 +20,7 @@ Architecture v5.2:
 
 import asyncio
 import logging
+import os
 from typing import Optional, Any, Dict, List, Set
 from datetime import datetime
 
@@ -237,7 +238,8 @@ class MonitorInfrastructure:
                 health_monitor=self.core.health_monitor,
                 resource_monitor=self.core.resource_monitor,
                 rate_limiter=self.core.rate_limiter,
-                bot_application=bot_app
+                bot_application=bot_app,
+                port=int(os.environ.get('METRICS_PORT', 9090))
             )
             
             logger.info("[INFRA] ✅ HTTP server initialized")
@@ -373,13 +375,17 @@ class MonitorInfrastructure:
         """
         try:
             logger.info("[NEWS] Starting processor...")
-            
-            if hasattr(processor, 'run'):
-                await processor.run()
-            elif hasattr(processor, 'start'):
-                await processor.start()
-            else:
-                logger.warning("[NEWS] No run/start method found")
+
+            from core.tasks.news_runner import NewsSystemRunner
+
+            runner = NewsSystemRunner(
+                processor,
+                self.core.health_monitor,
+                self.core.resource_monitor,
+                self.core.statistics,
+                self.shutdown_event
+            )
+            await runner.run()
         
         except asyncio.CancelledError:
             logger.info("[NEWS] Task cancelled")
@@ -601,6 +607,11 @@ class IntegratedCryptoMonitor:
         self._fully_initialized = False
         
         logger.info("✅ IntegratedCryptoMonitor core initialized")
+
+    @property
+    def component_manager(self) -> Optional[Any]:
+        """Обратная совместимость для валидаторов и legacy task API."""
+        return self.business.component_manager
     
     async def initialize(self) -> bool:
         """

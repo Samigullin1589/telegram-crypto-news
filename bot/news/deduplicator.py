@@ -6,6 +6,7 @@ Article Deduplication System
 import re
 import hashlib
 from typing import Dict, Set
+from urllib.parse import urlsplit, urlunsplit
 
 
 class ArticleDeduplicator:
@@ -26,7 +27,7 @@ class ArticleDeduplicator:
         Returns:
             True если дубликат
         """
-        url = article.get('url', '')
+        url = self._normalize_url(article.get('url', ''))
         if not url:
             return True
         
@@ -46,7 +47,7 @@ class ArticleDeduplicator:
     
     def mark_as_seen(self, article: Dict):
         """Помечает статью как просмотренную"""
-        url = article.get('url', '')
+        url = self._normalize_url(article.get('url', ''))
         title = article.get('title', '')
         
         if url:
@@ -57,6 +58,18 @@ class ArticleDeduplicator:
             self.seen_hashes.add(title_hash)
         
         self._cleanup_cache()
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        """Привести URL к ключу без query/fragment tracking-параметров."""
+        if not url:
+            return url
+        try:
+            parsed = urlsplit(url)
+            path = parsed.path.rstrip('/') or '/'
+            return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, '', ''))
+        except Exception:
+            return url
     
     def _compute_title_hash(self, title: str) -> str:
         """Вычисляет хеш заголовка"""

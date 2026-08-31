@@ -104,14 +104,12 @@ class NewsLoader:
     
     def _validate_processor(self, processor: Any) -> bool:
         """Валидация processor"""
-        required_methods = ['process', 'run']
-        
-        for method in required_methods:
-            if not hasattr(processor, method):
-                logger.error(f"   Missing method: {method}")
-                return False
-        
-        return True
+        cycle_method = getattr(processor, 'run_cycle', None)
+        if not callable(cycle_method):
+            logger.error("   Missing callable method: run_cycle")
+            return False
+
+        return bool(getattr(processor, 'is_initialized', True))
 
 
 __all__ = ['NewsLoader']
