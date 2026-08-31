@@ -576,12 +576,14 @@ class DatabaseConfigValidator:
             )
         )
         
-        result.merge(
-            self.network_validators.validate_port(
-                self.config.port,
-                'port'
+        # SQLite is file-based and deliberately uses port 0.
+        if self.config.engine.value != 'sqlite':
+            result.merge(
+                self.network_validators.validate_port(
+                    self.config.port,
+                    'port'
+                )
             )
-        )
         
         result.merge(
             self.basic_validators.validate_non_empty_string(

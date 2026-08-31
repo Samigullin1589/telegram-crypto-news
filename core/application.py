@@ -147,7 +147,6 @@ class ComponentInitializer:
         self._print_step("Shutdown manager")
         try:
             self.components.shutdown_manager = ShutdownManager(
-                monitor=self.components.monitor,
                 db_manager=self.components.db_manager
             )
             logger.info("✅ Shutdown manager created")

@@ -11,7 +11,7 @@ Graceful остановка приложения
 """
 
 import asyncio
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from core.logging_config import get_logger
 from core.tasks.manager import TaskManager
 from core.initialization.database import DatabaseInitializer
@@ -50,9 +50,10 @@ class ShutdownManager:
     
     def __init__(
         self,
-        task_manager: TaskManager,
-        db_initializer: DatabaseInitializer,
+        task_manager: Optional[TaskManager] = None,
+        db_initializer: Optional[DatabaseInitializer] = None,
         monitor: Optional['IntegratedCryptoMonitor'] = None,
+        db_manager: Optional[Any] = None,
         task_shutdown_timeout: int = DEFAULT_TASK_SHUTDOWN_TIMEOUT,
         monitor_shutdown_timeout: int = DEFAULT_MONITOR_SHUTDOWN_TIMEOUT,
         database_shutdown_timeout: int = DEFAULT_DATABASE_SHUTDOWN_TIMEOUT
@@ -70,6 +71,7 @@ class ShutdownManager:
         """
         self.task_manager = task_manager
         self.db_initializer = db_initializer
+        self.db_manager = db_manager
         self.monitor = monitor
         
         # Таймауты
@@ -249,11 +251,9 @@ class ShutdownManager:
         try:
             logger.info("💾 Step 3/3: Closing database connections...")
             
-            if not self.db_initializer:
-                logger.warning("⚠️ DatabaseInitializer is None, skipping")
-                return True
-            
-            db_manager = self.db_initializer.get_manager()
+            db_manager = self.db_manager
+            if db_manager is None and self.db_initializer is not None:
+                db_manager = self.db_initializer.get_manager()
             
             if not db_manager:
                 logger.info("ℹ️ DatabaseManager is not initialized, skipping")
@@ -329,6 +329,7 @@ class ShutdownManager:
             'shutdown_completed': self.shutdown_completed,
             'has_task_manager': self.task_manager is not None,
             'has_db_initializer': self.db_initializer is not None,
+            'has_db_manager': self.db_manager is not None,
             'has_monitor': self.monitor is not None,
             'timeouts': {
                 'tasks': self.task_shutdown_timeout,
@@ -342,7 +343,7 @@ class ShutdownManager:
         # ИСПРАВЛЕНО: вычисление вынесено из f-string для избежания syntax error
         components_count = sum([
             self.task_manager is not None,
-            self.db_initializer is not None,
+            self.db_initializer is not None or self.db_manager is not None,
             self.monitor is not None
         ])
         

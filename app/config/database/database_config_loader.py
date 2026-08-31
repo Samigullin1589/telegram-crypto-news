@@ -4,10 +4,11 @@ Database Configuration Loader
 """
 
 import logging
+from dataclasses import fields
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .database_config_core import DatabaseConfig
+    from ..database_config import DatabaseConfig
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,8 @@ class DatabaseConfigLoader:
         Returns:
             Инстанс DatabaseConfig
         """
-        from .database_config_core import DatabaseConfig
-        from .database.loader import DatabaseConfigLoader as BaseLoader, EnvironmentLoader
+        from ..database_config import DatabaseConfig
+        from .loader import DatabaseConfigLoader as BaseLoader, EnvironmentLoader
         
         logger.info(f"Loading DatabaseConfig from environment (prefix: {prefix})")
         
@@ -39,7 +40,10 @@ class DatabaseConfigLoader:
         env_loader = EnvironmentLoader(prefix)
         
         # Собираем все параметры
-        config_dict = base_config.to_dict(mask_sensitive=False)
+        config_dict = {
+            field.name: getattr(base_config, field.name)
+            for field in fields(base_config)
+        }
         
         # Добавляем расширенные параметры
         config_dict.update({
@@ -81,7 +85,7 @@ class DatabaseConfigLoader:
         Returns:
             Инстанс DatabaseConfig
         """
-        from .database_config_core import DatabaseConfig
+        from ..database_config import DatabaseConfig
         
         logger.info("Loading DatabaseConfig from dict")
         
@@ -106,8 +110,8 @@ class DatabaseConfigLoader:
         Returns:
             Инстанс DatabaseConfig
         """
-        from .database_config_core import DatabaseConfig
-        from .database.database_base import DatabaseConfigBase
+        from ..database_config import DatabaseConfig
+        from .database_base import DatabaseConfigBase
         
         logger.info(f"Loading DatabaseConfig from URL")
         
@@ -115,7 +119,10 @@ class DatabaseConfigLoader:
         base_config = DatabaseConfigBase.from_url(url)
         
         # Собираем параметры
-        config_dict = base_config.to_dict(mask_sensitive=False)
+        config_dict = {
+            field.name: getattr(base_config, field.name)
+            for field in fields(base_config)
+        }
         config_dict.update(kwargs)
         
         config = DatabaseConfig(**config_dict)
@@ -139,7 +146,7 @@ class DatabaseConfigLoader:
         Returns:
             Инстанс DatabaseConfig
         """
-        from .database_config_core import DatabaseConfig
+        from ..database_config import DatabaseConfig
         import json
         
         logger.info(f"Loading DatabaseConfig from file: {filepath}")
