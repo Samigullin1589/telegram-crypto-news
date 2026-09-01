@@ -144,3 +144,56 @@ def test_photo_plain_fallback_runs_before_text_only():
     assert poster.metrics.strategies_used['plain_with_image'] == 1
     assert poster.metrics.posts_with_images == 1
     assert poster.metrics.posts_without_images == 0
+
+
+def test_required_image_never_falls_back_to_text_only():
+    poster = TelegramPoster.__new__(TelegramPoster)
+    poster._initialized = True
+    poster.channel_id = '-1001234567890'
+    poster.metrics = PostingMetrics()
+    poster.sanitizer = MessageSanitizer()
+    poster._rate_limit = AsyncMock()
+    poster._post_with_markdown_and_image = AsyncMock(return_value=False)
+    poster._post_plain_with_image = AsyncMock(return_value=False)
+    poster._post_with_markdown_text_only = AsyncMock(return_value=True)
+    poster._post_plain_text_only = AsyncMock(return_value=True)
+
+    result = asyncio.run(
+        poster.post(
+            message='📰 **Тестовая новость**\n\nПодробный русский текст.',
+            link='https://example.com/news',
+            image_data=b'image-bytes',
+            require_image=True,
+        )
+    )
+
+    assert result is False
+    poster._post_with_markdown_and_image.assert_awaited_once()
+    poster._post_plain_with_image.assert_awaited_once()
+    poster._post_with_markdown_text_only.assert_not_awaited()
+    poster._post_plain_text_only.assert_not_awaited()
+    assert poster.metrics.failed_posts == 1
+
+
+def test_required_missing_image_cancels_publication():
+    poster = TelegramPoster.__new__(TelegramPoster)
+    poster._initialized = True
+    poster.channel_id = '-1001234567890'
+    poster.metrics = PostingMetrics()
+    poster.sanitizer = MessageSanitizer()
+    poster._rate_limit = AsyncMock()
+    poster._post_with_markdown_text_only = AsyncMock(return_value=True)
+    poster._post_plain_text_only = AsyncMock(return_value=True)
+
+    result = asyncio.run(
+        poster.post(
+            message='📰 **Тестовая новость**\n\nПодробный русский текст.',
+            link='https://example.com/news',
+            require_image=True,
+        )
+    )
+
+    assert result is False
+    poster._post_with_markdown_text_only.assert_not_awaited()
+    poster._post_plain_text_only.assert_not_awaited()
+    assert poster.metrics.failed_posts == 1

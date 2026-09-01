@@ -366,6 +366,7 @@ class TelegramPoster:
         image_url: Optional[str] = None,
         text: Optional[str] = None,
         image_data: Optional[bytes] = None,
+        require_image: bool = False,
         **kwargs
     ) -> bool:
         
@@ -407,7 +408,12 @@ class TelegramPoster:
                 print(f"✅ [TELEGRAM] Изображение скачано за {download_time:.2f}s")
             else:
                 self.metrics.images_download_failed += 1
-                print(f"⚠️  [TELEGRAM] Не удалось скачать изображение, публикую без него")
+                print(f"⚠️  [TELEGRAM] Не удалось скачать изображение")
+
+        if require_image and not final_image_data:
+            self.metrics.failed_posts += 1
+            print("❌ [POST] Публикация отменена: обязательное изображение недоступно")
+            return False
         
         keyboard = [[InlineKeyboardButton("🔗 Читать первоисточник", url=final_link)]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -419,9 +425,12 @@ class TelegramPoster:
             strategies = [
                 ('markdown_with_image', self._post_with_markdown_and_image),
                 ('plain_with_image', self._post_plain_with_image),
-                ('markdown_without_image', self._post_with_markdown_text_only),
-                ('plain_text', self._post_plain_text_only),
             ]
+            if not require_image:
+                strategies.extend([
+                    ('markdown_without_image', self._post_with_markdown_text_only),
+                    ('plain_text', self._post_plain_text_only),
+                ])
         else:
             strategies = [
                 ('markdown_without_image', self._post_with_markdown_text_only),

@@ -166,6 +166,9 @@ class TradingSystem:
             'success': False,
             'assets_checked': 0,
             'signals_generated': 0,
+            'signals_actionable': 0,
+            'signals_filtered': 0,
+            'filter_reasons': {},
             'signals_sent': 0,
             'errors': 0,
         }
@@ -208,15 +211,22 @@ class TradingSystem:
                         continue
 
                     result['signals_generated'] += 1
-                    if not self._should_publish_signal(signal):
+                    filter_reason = self._signal_publication_block_reason(signal)
+                    if filter_reason:
+                        result['signals_filtered'] += 1
+                        result['filter_reasons'][filter_reason] = (
+                            result['filter_reasons'].get(filter_reason, 0) + 1
+                        )
                         logger.info(
-                            "⏸️ [TRADING] %s: %s, confidence=%.1f — не публикуем",
+                            "⏸️ [TRADING] %s: %s, confidence=%.1f — фильтр=%s",
                             asset,
                             getattr(signal, 'signal', 'UNKNOWN'),
                             float(getattr(signal, 'confidence', 0)),
+                            filter_reason,
                         )
                         continue
 
+                    result['signals_actionable'] += 1
                     if await self._publish_signal(signal):
                         self._record_publication(signal)
                         result['signals_sent'] += 1
@@ -234,9 +244,11 @@ class TradingSystem:
 
         result['success'] = result['errors'] < result['assets_checked']
         logger.info(
-            "✅ [TRADING] Цикл завершён: проверено=%d, сгенерировано=%d, опубликовано=%d, ошибок=%d",
+            "✅ [TRADING] Цикл завершён: проверено=%d, проанализировано=%d, готово=%d, отфильтровано=%d, опубликовано=%d, ошибок=%d",
             result['assets_checked'],
             result['signals_generated'],
+            result['signals_actionable'],
+            result['signals_filtered'],
             result['signals_sent'],
             result['errors'],
         )
@@ -283,17 +295,17 @@ class TradingSystem:
         frame = frame.dropna(subset=numeric_columns)
         return frame[['timestamp', *numeric_columns]]
 
-    def _should_publish_signal(self, signal: Any) -> bool:
+    def _signal_publication_block_reason(self, signal: Any) -> Optional[str]:
         direction = getattr(signal, 'signal', '')
         if direction not in {'STRONG_BUY', 'BUY', 'SELL', 'STRONG_SELL'}:
-            return False
+            return 'non_actionable_direction'
 
         min_confidence = float(self.trading_config.get('min_confidence', 75))
         if float(getattr(signal, 'confidence', 0)) < min_confidence:
-            return False
+            return 'low_confidence'
 
         if hasattr(signal, 'is_tradeable') and not signal.is_tradeable():
-            return False
+            return 'not_tradeable'
 
         now = datetime.now(timezone.utc)
         self._daily_publications = [
@@ -302,19 +314,24 @@ class TradingSystem:
         ]
         max_per_day = int(self.trading_config.get('max_signals_per_day', 10))
         if len(self._daily_publications) >= max_per_day:
-            return False
+            return 'daily_limit'
 
         hour_ago = now - timedelta(hours=1)
         max_per_hour = int(self.trading_config.get('max_signals_per_hour', 5))
         if sum(published >= hour_ago for published in self._daily_publications) >= max_per_hour:
-            return False
+            return 'hourly_limit'
 
         asset = str(getattr(signal, 'asset', '')).upper()
         last_published = self._published_at.get(asset)
         cooldown = timedelta(
             hours=float(self.trading_config.get('signal_interval_hours', 1.0))
         )
-        return last_published is None or now - last_published >= cooldown
+        if last_published is not None and now - last_published < cooldown:
+            return 'asset_cooldown'
+        return None
+
+    def _should_publish_signal(self, signal: Any) -> bool:
+        return self._signal_publication_block_reason(signal) is None
 
     def _record_publication(self, signal: Any) -> None:
         published_at = datetime.now(timezone.utc)

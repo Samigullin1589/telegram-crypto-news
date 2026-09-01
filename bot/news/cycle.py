@@ -186,7 +186,9 @@ class NewsCycleProcessor:
             3  # Не более 3 за один цикл
         ))
         
-        for article in articles[:max_posts]:
+        for article in articles:
+            if posted >= max_posts:
+                break
             try:
                 title = article.get('title', 'No title')[:50]
                 self.logger.log_info(f"Processing: {title}...")
@@ -218,6 +220,12 @@ class NewsCycleProcessor:
         prepared['normalized_link'] = self._normalize_url(link)
 
         await self._enrich_content(prepared)
+        if not prepared.get('image_url'):
+            self.logger.log_warning(
+                "Article has no validated image; publication will be retried"
+            )
+            return False
+
         message, ai_provider, ai_score = await self._build_message(prepared)
         if not message:
             self.logger.log_warning("Could not build publication message")
@@ -231,7 +239,8 @@ class NewsCycleProcessor:
         sent = await telegram.post(
             message=message,
             link=link,
-            image_url=prepared.get('image_url')
+            image_url=prepared.get('image_url'),
+            require_image=True,
         )
         if not sent:
             self.logger.log_warning("Telegram publication failed; article will be retried")
@@ -294,7 +303,7 @@ class NewsCycleProcessor:
         self,
         article: Dict
     ) -> Tuple[Optional[str], Optional[str], Optional[int]]:
-        """Построить AI-summary либо локальный fallback-текст."""
+        """Построить проверенный русский AI-summary либо русский source fallback."""
         title = article['title'].strip()
         text = (
             article.get('content')
@@ -321,13 +330,24 @@ class NewsCycleProcessor:
                         return message, ai_provider, ai_score
                     if summary:
                         logger.warning(
-                            "AI returned a non-Russian or error-page response; using local fallback"
+                            "AI returned a non-Russian or error-page response"
                         )
             except Exception as e:
-                logger.warning("AI processing failed, using fallback: %s", e)
+                logger.warning("AI processing failed: %s", e)
 
-        russian_title = title if self._has_cyrillic(title) else "Важная новость крипторынка"
+        if not self._has_cyrillic(title) or not self._has_cyrillic(text):
+            logger.warning(
+                "Foreign-language article has no valid Russian AI summary; skipping publication"
+            )
+            return None, ai_provider, ai_score
+
+        russian_title = title
         fallback_text = self._build_russian_fallback(text)
+        if not fallback_text:
+            logger.warning(
+                "Russian source has no publishable article text; skipping publication"
+            )
+            return None, ai_provider, ai_score
         message = f"📰 **{russian_title}**\n\n{fallback_text}\n\n#крипто #новости"
         return message, ai_provider, ai_score
 
@@ -347,10 +367,7 @@ class NewsCycleProcessor:
         fallback = ' '.join(russian_sentences[:3])[:900].strip()
         if fallback:
             return fallback
-        return (
-            "Появилось новое сообщение о событиях на крипторынке. "
-            "Проверенные подробности доступны по ссылке на первоисточник."
-        )
+        return ''
 
     @classmethod
     def _is_publishable_russian_message(cls, message: str) -> bool:

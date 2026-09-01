@@ -77,6 +77,9 @@ def test_active_trading_cycle_generates_and_confirms_publication():
         'success': True,
         'assets_checked': 1,
         'signals_generated': 1,
+        'signals_actionable': 1,
+        'signals_filtered': 0,
+        'filter_reasons': {},
         'signals_sent': 1,
         'errors': 0,
     }
@@ -131,6 +134,21 @@ def test_missing_generated_signal_marks_cycle_failed():
     assert result['signals_sent'] == 0
     assert result['errors'] == 1
     assert result['success'] is False
+
+
+def test_non_actionable_analysis_is_reported_as_filtered_not_failed():
+    system = make_system(make_signal(signal='HOLD', confidence=92.0))
+
+    result = asyncio.run(system.run_signal_cycle())
+
+    assert result['signals_generated'] == 1
+    assert result['signals_actionable'] == 0
+    assert result['signals_filtered'] == 1
+    assert result['filter_reasons'] == {'non_actionable_direction': 1}
+    assert result['signals_sent'] == 0
+    assert result['errors'] == 0
+    assert result['success'] is True
+    system._publish_signal.assert_not_awaited()
 
 
 def test_runner_rejects_legacy_noop_contract():

@@ -280,10 +280,13 @@ class TradingCycleExecutor:
             )
 
         logger.info(
-            "[TRADING-EXEC] Cycle result: generated=%d, sent=%d, errors=%d",
+            "[TRADING-EXEC] Cycle result: analyzed=%d, actionable=%d, filtered=%d, sent=%d, errors=%d, filter_reasons=%s",
             result.get('signals_generated', 0),
+            result.get('signals_actionable', 0),
+            result.get('signals_filtered', 0),
             result.get('signals_sent', 0),
             result.get('errors', 0),
+            result.get('filter_reasons', {}),
         )
         return result
 

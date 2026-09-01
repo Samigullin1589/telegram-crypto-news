@@ -91,6 +91,7 @@ def make_cycle(post_outcomes):
         'source': 'Example Feed',
         'category': 'bitcoin 🟠',
         'description': 'Bitcoin adoption continues to grow. ' * 10,
+        'image_url': 'https://cdn.example.com/news.jpg',
     }
     return cycle, state, deduplicator, database, events, article
 
@@ -174,14 +175,34 @@ def test_english_ai_failure_uses_fully_russian_local_fallback():
 
     message, provider, score = asyncio.run(cycle._build_message(article))
 
-    assert 'English headline' not in message
-    assert 'Bitcoin adoption' not in message
-    assert 'Cloudflare' not in message
-    assert 'Подробности доступны в первоисточнике' not in message
-    assert 'Важная новость крипторынка' in message
-    assert 'Проверенные подробности' in message
+    assert message is None
     assert provider is None
     assert score == 80
+
+
+def test_foreign_article_without_ai_translation_is_not_publishable():
+    cycle, _, _, _, _, article = make_cycle([True])
+    cycle.components.ai_handler = None
+
+    message, provider, score = asyncio.run(cycle._build_message(article))
+
+    assert message is None
+    assert provider is None
+    assert score is None
+
+
+def test_news_publication_requires_a_validated_image():
+    cycle, _, deduplicator, database, events, article = make_cycle([True])
+    article.pop('image_url')
+
+    published = asyncio.run(cycle._process_article(article))
+
+    assert published is False
+    assert 'summary' not in events
+    assert 'post' not in events
+    assert 'save' not in events
+    assert database.saved == []
+    assert deduplicator.is_duplicate(article) is False
 
 
 def test_monitor_runs_news_processor_through_periodic_runner(monkeypatch):
