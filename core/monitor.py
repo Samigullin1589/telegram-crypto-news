@@ -427,13 +427,17 @@ class MonitorInfrastructure:
         """
         try:
             logger.info("[TRADING] Starting system...")
-            
-            if hasattr(system, 'run'):
-                await system.run()
-            elif hasattr(system, 'start'):
-                await system.start()
-            else:
-                logger.warning("[TRADING] No run/start method found")
+
+            from core.tasks.trading_runner import TradingSystemRunner
+
+            runner = TradingSystemRunner(
+                system,
+                self.core.health_monitor,
+                self.core.resource_monitor,
+                self.core.statistics,
+                self.shutdown_event
+            )
+            await runner.run()
         
         except asyncio.CancelledError:
             logger.info("[TRADING] Task cancelled")
@@ -449,15 +453,32 @@ class MonitorInfrastructure:
         Args:
             bot_app: Bot application instance
         """
+        initialized = False
+        started = False
+        polling_started = False
+
         try:
             logger.info("[BOT] Starting application...")
-            
-            if hasattr(bot_app, 'run_polling'):
-                await bot_app.run_polling()
-            elif hasattr(bot_app, 'run'):
-                await bot_app.run()
-            else:
-                logger.warning("[BOT] No run_polling/run method found")
+
+            updater = getattr(bot_app, 'updater', None)
+            if updater is None:
+                raise RuntimeError("Bot application has no updater")
+
+            await bot_app.initialize()
+            initialized = True
+
+            post_init = getattr(bot_app, 'post_init', None)
+            if post_init is not None:
+                await post_init(bot_app)
+
+            await updater.start_polling()
+            polling_started = True
+
+            await bot_app.start()
+            started = True
+
+            logger.info("[BOT] ✅ Polling started")
+            await self.shutdown_event.wait()
         
         except asyncio.CancelledError:
             logger.info("[BOT] Task cancelled")
@@ -465,6 +486,35 @@ class MonitorInfrastructure:
         except Exception as e:
             logger.error(f"[BOT] Task error: {e}", exc_info=True)
             self.core.statistics.increment_errors()
+            raise
+        finally:
+            updater = getattr(bot_app, 'updater', None)
+
+            if polling_started and updater is not None:
+                try:
+                    await updater.stop()
+                except Exception as e:
+                    logger.warning(f"[BOT] Polling stop error: {e}")
+
+            if started:
+                try:
+                    await bot_app.stop()
+
+                    post_stop = getattr(bot_app, 'post_stop', None)
+                    if post_stop is not None:
+                        await post_stop(bot_app)
+                except Exception as e:
+                    logger.warning(f"[BOT] Application stop error: {e}")
+
+            if initialized:
+                try:
+                    await bot_app.shutdown()
+
+                    post_shutdown = getattr(bot_app, 'post_shutdown', None)
+                    if post_shutdown is not None:
+                        await post_shutdown(bot_app)
+                except Exception as e:
+                    logger.warning(f"[BOT] Application shutdown error: {e}")
     
     async def stop_business_tasks(self) -> None:
         """Остановка всех business задач"""
@@ -486,10 +536,9 @@ class MonitorInfrastructure:
         """
         Ожидание завершения задач или shutdown signal
         
-        ИСПРАВЛЕНО v5.2:
-        - Создаем shutdown_task ДО wait()
-        - Правильная проверка завершенных задач
-        - Корректная отмена pending задач
+        Штатное завершение одной необязательной задачи не должно останавливать
+        остальные. Shutdown инициируется внешним сигналом, необработанным
+        исключением или завершением всех business задач.
         """
         logger.info("[INFRA] Waiting for completion or shutdown signal...")
         
@@ -500,53 +549,49 @@ class MonitorInfrastructure:
                 await self.shutdown_event.wait()
                 return
             
-            # Создаем shutdown task ДО wait() чтобы иметь на него ссылку
             shutdown_task = asyncio.create_task(
                 self.shutdown_event.wait(),
                 name="ShutdownWaiter"
             )
-            
-            # Ждем пока завершится ЛЮБАЯ задача или shutdown
-            all_tasks = self._running_tasks + [shutdown_task]
-            
-            done, pending = await asyncio.wait(
-                all_tasks,
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            
-            # Проверяем что завершилось
-            shutdown_triggered = False
-            
-            for task in done:
-                task_name = task.get_name()
-                
-                if task_name == "ShutdownWaiter":
-                    # Shutdown event был установлен
+
+            active_tasks = set(self._running_tasks)
+
+            while active_tasks and not self.shutdown_event.is_set():
+                done, _ = await asyncio.wait(
+                    active_tasks | {shutdown_task},
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if shutdown_task in done:
                     logger.info("[INFRA] ⏹️ Shutdown signal received")
-                    shutdown_triggered = True
-                else:
-                    # Business задача завершилась
-                    logger.warning(f"[INFRA] ⚠️ Task {task_name} completed unexpectedly")
-                    
-                    # Проверяем exception
-                    try:
-                        exc = task.exception()
-                        if exc:
-                            logger.error(f"[INFRA] Task {task_name} failed: {exc}")
-                    except asyncio.CancelledError:
-                        pass
-                    
-                    # Устанавливаем shutdown
-                    shutdown_triggered = True
-            
-            # Если shutdown триггернулся - устанавливаем event
-            if shutdown_triggered and not self.shutdown_event.is_set():
+                    break
+
+                for task in done:
+                    active_tasks.discard(task)
+                    task_name = task.get_name()
+
+                    if task.cancelled():
+                        logger.info(f"[INFRA] Task {task_name} was cancelled")
+                        continue
+
+                    exc = task.exception()
+                    if exc is not None:
+                        logger.error(f"[INFRA] Task {task_name} failed: {exc}")
+                        self.shutdown_event.set()
+                        break
+
+                    logger.warning(
+                        f"[INFRA] ⚠️ Task {task_name} completed; "
+                        "continuing with remaining tasks"
+                    )
+
+            if not active_tasks and not self.shutdown_event.is_set():
+                logger.error("[INFRA] All business tasks completed unexpectedly")
                 self.shutdown_event.set()
-            
-            # Отменяем pending задачи
-            for task in pending:
-                if not task.done():
-                    task.cancel()
+
+            if not shutdown_task.done():
+                shutdown_task.cancel()
+                await asyncio.gather(shutdown_task, return_exceptions=True)
         
         except Exception as e:
             logger.error(f"[INFRA] ❌ Wait error: {e}", exc_info=True)

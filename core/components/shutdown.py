@@ -60,6 +60,11 @@ class ComponentShutdownManager:
             if not hasattr(component, cleanup_method):
                 logger.debug(f"   {name} не имеет метода {cleanup_method}")
                 return
+
+            if cleanup_method == 'stop' and hasattr(component, 'running'):
+                if not component.running:
+                    logger.debug(f"   {name} уже остановлен")
+                    return
             
             cleanup_func = getattr(component, cleanup_method)
             await asyncio.wait_for(cleanup_func(), timeout=self.timeout)
