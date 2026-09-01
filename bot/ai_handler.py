@@ -63,7 +63,7 @@ except ImportError:
             AI_MAX_TOKENS = 500
             AI_TRANSLATION_MAX_TOKENS = 800
             AI_TEMPERATURE = 0.3
-            ai_prompt_template = """Создай краткое саммари этой новости для crypto-канала.
+            ai_prompt_template = """Создай самодостаточное саммари этой новости для crypto-канала. Включи конкретные факты из текста. Не отправляй читателя за подробностями по ссылке или на сайт.
             
 Формат ответа:
 {emoji} **{title}**

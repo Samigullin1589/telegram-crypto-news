@@ -367,6 +367,7 @@ class TelegramPoster:
         text: Optional[str] = None,
         image_data: Optional[bytes] = None,
         require_image: bool = False,
+        show_source_button: bool = True,
         **kwargs
     ) -> bool:
         
@@ -415,8 +416,12 @@ class TelegramPoster:
             print("❌ [POST] Публикация отменена: обязательное изображение недоступно")
             return False
         
-        keyboard = [[InlineKeyboardButton("🔗 Читать первоисточник", url=final_link)]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = None
+        if show_source_button:
+            keyboard = [[
+                InlineKeyboardButton("🔗 Читать первоисточник", url=final_link)
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
         
         is_caption = bool(final_image_data)
         prepared_message = self.sanitizer.prepare_message(final_message, is_caption=is_caption)
@@ -468,7 +473,7 @@ class TelegramPoster:
         self,
         message: str,
         image_data: Optional[bytes],
-        reply_markup: InlineKeyboardMarkup
+        reply_markup: Optional[InlineKeyboardMarkup]
     ) -> bool:
         if not image_data:
             return False
@@ -501,7 +506,7 @@ class TelegramPoster:
         self,
         message: str,
         image_data: Optional[bytes],
-        reply_markup: InlineKeyboardMarkup
+        reply_markup: Optional[InlineKeyboardMarkup]
     ) -> bool:
         try:
             await self._send_with_retry(
@@ -531,7 +536,7 @@ class TelegramPoster:
         self,
         message: str,
         image_data: Optional[bytes],
-        reply_markup: InlineKeyboardMarkup
+        reply_markup: Optional[InlineKeyboardMarkup]
     ) -> bool:
         if not image_data:
             return False
@@ -561,7 +566,7 @@ class TelegramPoster:
         self,
         message: str,
         image_data: Optional[bytes],
-        reply_markup: InlineKeyboardMarkup
+        reply_markup: Optional[InlineKeyboardMarkup]
     ) -> bool:
         try:
             plain_message = self.sanitizer.strip_markdown(message)

@@ -28,6 +28,19 @@ class NewsCycleProcessor:
     - Безопасный доступ к конфигурации
     - Лучшая обработка ошибок
     """
+
+    _EXTERNAL_REDIRECT_PATTERNS = (
+        r'(?:https?://|www\.)\S+',
+        r'\b(?:подробност|детал)\w*.{0,60}\b(?:ссылк|первоисточник|сайт)\w*',
+        r'\b(?:перейд|переход|читай|прочитай|узнай|смотр)\w*'
+        r'.{0,60}\b(?:ссылк|первоисточник|сайт)\w*',
+        r'\b(?:ссылк|первоисточник|сайт)\w*'
+        r'.{0,60}\b(?:подробност|детал)\w*',
+    )
+    _GENERIC_PLACEHOLDER_PATTERNS = (
+        r'\bпоявил\w*\s+(?:нов\w+\s+)?сообщени\w*\s+о\s+событи\w*',
+        r'\bважн\w+\s+новост\w+\s+крипторынк\w*',
+    )
     
     def __init__(
         self,
@@ -307,7 +320,11 @@ class NewsCycleProcessor:
             return False
 
         if not message:
-            self.logger.log_warning("Could not build publication message")
+            self.state.total_filtered_quality += 1
+            self.logger.log_warning(
+                "Article has no self-contained publication message; skipping"
+            )
+            self.deduplicator.mark_as_seen(prepared)
             return False
 
         telegram = self.components.telegram
@@ -320,6 +337,7 @@ class NewsCycleProcessor:
             link=link,
             image_url=prepared.get('image_url'),
             require_image=True,
+            show_source_button=False,
         )
         if not sent:
             self.logger.log_warning("Telegram publication failed; article will be retried")
@@ -449,11 +467,16 @@ class NewsCycleProcessor:
             )
             return None, ai_provider, ai_score
         message = f"📰 **{russian_title}**\n\n{fallback_text}\n\n#крипто #новости"
+        if not self._is_publishable_russian_message(message):
+            logger.warning(
+                "Russian source fallback is not self-contained; skipping publication"
+            )
+            return None, ai_provider, ai_score
         return message, ai_provider, ai_score
 
     @classmethod
     def _build_russian_fallback(cls, text: str) -> str:
-        """Построить нейтральный русский fallback без машинного перевода."""
+        """Построить самодостаточный русский fallback без внешних CTA."""
         cleaned = html.unescape(re.sub(r'<[^>]+>', ' ', text or ''))
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         if cls._is_error_page(cleaned):
@@ -463,6 +486,8 @@ class NewsCycleProcessor:
             sentence.strip()
             for sentence in re.split(r'(?<=[.!?])\s+', cleaned)
             if cls._has_cyrillic(sentence)
+            and not cls._contains_external_redirect(sentence)
+            and not cls._is_generic_placeholder(sentence)
         ]
         fallback = ' '.join(russian_sentences[:3])[:900].strip()
         if fallback:
@@ -473,6 +498,11 @@ class NewsCycleProcessor:
     def _is_publishable_russian_message(cls, message: str) -> bool:
         if not message or cls._is_error_page(message):
             return False
+        if (
+            cls._contains_external_redirect(message)
+            or cls._is_generic_placeholder(message)
+        ):
+            return False
         first_line = next(
             (line.strip() for line in message.splitlines() if line.strip()),
             '',
@@ -481,7 +511,53 @@ class NewsCycleProcessor:
             return False
         cyrillic_count = len(re.findall(r'[А-Яа-яЁё]', message))
         latin_count = len(re.findall(r'[A-Za-z]', message))
-        return cyrillic_count >= 10 and cyrillic_count >= latin_count
+        body = cls._publication_body(message)
+        body_words = re.findall(r'[A-Za-zА-Яа-яЁё0-9]+', body)
+        body_cyrillic_count = len(re.findall(r'[А-Яа-яЁё]', body))
+        return (
+            cyrillic_count >= latin_count
+            and body_cyrillic_count >= 60
+            and len(body_words) >= 20
+        )
+
+    @classmethod
+    def _contains_external_redirect(cls, text: str) -> bool:
+        normalized = cls._normalize_message_text(text)
+        return any(
+            re.search(pattern, normalized, flags=re.IGNORECASE)
+            for pattern in cls._EXTERNAL_REDIRECT_PATTERNS
+        )
+
+    @classmethod
+    def _is_generic_placeholder(cls, text: str) -> bool:
+        normalized = cls._normalize_message_text(text)
+        return any(
+            re.search(pattern, normalized, flags=re.IGNORECASE)
+            for pattern in cls._GENERIC_PLACEHOLDER_PATTERNS
+        )
+
+    @classmethod
+    def _publication_body(cls, message: str) -> str:
+        lines = [line.strip() for line in message.splitlines() if line.strip()]
+        if lines:
+            lines = lines[1:]
+
+        body_lines = []
+        for line in lines:
+            plain_line = cls._normalize_message_text(line)
+            words = plain_line.split()
+            if words and all(word.startswith('#') for word in words):
+                continue
+            if plain_line.rstrip(':').lower() == 'детали':
+                continue
+            body_lines.append(plain_line)
+        return ' '.join(body_lines).strip()
+
+    @staticmethod
+    def _normalize_message_text(text: str) -> str:
+        normalized = html.unescape(re.sub(r'<[^>]+>', ' ', text or ''))
+        normalized = re.sub(r'[*_`~]+', '', normalized)
+        return re.sub(r'\s+', ' ', normalized).strip()
 
     @staticmethod
     def _has_cyrillic(text: str) -> bool:

@@ -146,6 +146,31 @@ def test_photo_plain_fallback_runs_before_text_only():
     assert poster.metrics.posts_without_images == 0
 
 
+def test_source_button_can_be_hidden_without_dropping_technical_link():
+    poster = TelegramPoster.__new__(TelegramPoster)
+    poster._initialized = True
+    poster.channel_id = '-1001234567890'
+    poster.metrics = PostingMetrics()
+    poster.sanitizer = MessageSanitizer()
+    poster._rate_limit = AsyncMock()
+    poster._post_with_markdown_and_image = AsyncMock(return_value=True)
+    poster._post_plain_with_image = AsyncMock(return_value=False)
+
+    result = asyncio.run(
+        poster.post(
+            message='📰 **Тестовая новость**\n\nПодробный русский текст.',
+            link='https://example.com/news',
+            image_data=b'image-bytes',
+            require_image=True,
+            show_source_button=False,
+        )
+    )
+
+    assert result is True
+    call = poster._post_with_markdown_and_image.await_args
+    assert call.args[2] is None
+
+
 def test_required_image_never_falls_back_to_text_only():
     poster = TelegramPoster.__new__(TelegramPoster)
     poster._initialized = True

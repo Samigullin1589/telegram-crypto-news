@@ -42,7 +42,15 @@ class FakeAIHandler:
 
     async def get_summary(self, title, text, category):
         self.events.append('summary')
-        return "📰 **Важная новость**\n\nКраткий разбор события на крипторынке.\n\n#крипто #новости", 'openai'
+        return (
+            "📰 **Компании расширяют использование биткоина**\n\n"
+            "Крупная платежная компания подключила расчеты в биткоине "
+            "для клиентов в нескольких странах. Новый сервис сокращает "
+            "срок международного перевода и расширяет практическое "
+            "использование криптовалюты в повседневных платежах.\n\n"
+            "#биткоин #платежи #криптовалюта",
+            'openai',
+        )
 
 
 class FakeTelegramPoster:
@@ -51,9 +59,11 @@ class FakeTelegramPoster:
     def __init__(self, events, outcomes):
         self.events = events
         self.outcomes = list(outcomes)
+        self.calls = []
 
     async def post(self, **kwargs):
         self.events.append('post')
+        self.calls.append(kwargs)
         return self.outcomes.pop(0)
 
 
@@ -134,6 +144,7 @@ def test_successful_publication_is_marked_and_saved_after_telegram():
     assert saved_article['ai_provider'] == 'openai'
     assert saved_article['ai_score'] == 91
     assert saved_article['normalized_link'] == 'https://example.com/news'
+    assert cycle.components.telegram.calls[0]['show_source_button'] is False
 
 
 def test_failed_telegram_post_is_not_marked_or_saved_and_can_retry():
@@ -282,6 +293,106 @@ def test_foreign_article_without_ai_translation_is_not_publishable():
     assert message is None
     assert provider is None
     assert score is None
+
+
+def test_generic_link_redirect_summary_is_not_publishable():
+    cycle, _, _, _, _, article = make_cycle([True])
+
+    class PlaceholderAI:
+        async def analyze_article(self, article):
+            return {'score': 91}
+
+        async def get_summary(self, title, text, category):
+            return (
+                "📰 **Важная новость крипторынка**\n\n"
+                "Появилось новое сообщение о событиях на крипторынке. "
+                "Проверенные подробности доступны по ссылке на "
+                "первоисточник.\n\n"
+                "#крипто #новости",
+                'openai',
+            )
+
+    cycle.components.ai_handler = PlaceholderAI()
+
+    message, provider, score = asyncio.run(cycle._build_message(article))
+
+    assert message is None
+    assert provider is None
+    assert score == 91
+
+
+def test_generic_link_redirect_source_fallback_is_not_publishable():
+    cycle, _, _, _, _, article = make_cycle([True])
+    cycle.components.ai_handler = None
+    article['title'] = 'Важная новость крипторынка'
+    article['description'] = (
+        'Появилось новое сообщение о событиях на крипторынке. '
+        'Проверенные подробности доступны по ссылке на первоисточник.'
+    )
+
+    message, provider, score = asyncio.run(cycle._build_message(article))
+
+    assert message is None
+    assert provider is None
+    assert score is None
+
+
+def test_summary_with_external_url_is_not_publishable():
+    cycle, _, _, _, _, article = make_cycle([True])
+
+    class ExternalURLAI:
+        async def analyze_article(self, article):
+            return {'score': 91}
+
+        async def get_summary(self, title, text, category):
+            return (
+                "📰 **Компания запустила расчеты в биткоине**\n\n"
+                "Платежная компания подключила расчеты в биткоине для "
+                "клиентов в нескольких странах. Новый сервис сокращает "
+                "срок международного перевода и расширяет использование "
+                "криптовалюты. https://example.com/source\n\n"
+                "#биткоин #платежи #криптовалюта",
+                'openai',
+            )
+
+    cycle.components.ai_handler = ExternalURLAI()
+
+    message, provider, score = asyncio.run(cycle._build_message(article))
+
+    assert message is None
+    assert provider is None
+    assert score == 91
+
+
+def test_generic_link_redirect_summary_is_skipped_without_telegram_post():
+    cycle, state, deduplicator, database, events, article = make_cycle([True])
+
+    class PlaceholderAI:
+        async def analyze_article(self, article):
+            events.append('analyze')
+            return {'score': 91}
+
+        async def get_summary(self, title, text, category):
+            events.append('summary')
+            return (
+                "📰 **Важная новость крипторынка**\n\n"
+                "Появилось новое сообщение о событиях на крипторынке. "
+                "Проверенные подробности доступны по ссылке на "
+                "первоисточник.\n\n"
+                "#крипто #новости",
+                'openai',
+            )
+
+    cycle.components.ai_handler = PlaceholderAI()
+
+    published = asyncio.run(cycle._process_article(article))
+
+    assert published is False
+    assert state.total_filtered_quality == 1
+    assert events == ['analyze', 'summary', 'seen']
+    assert cycle.components.telegram.calls == []
+    assert database.saved == []
+    assert deduplicator.is_duplicate(article) is True
 
 
 def test_news_publication_requires_a_validated_image():
