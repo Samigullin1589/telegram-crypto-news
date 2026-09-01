@@ -85,6 +85,30 @@ def test_active_trading_cycle_generates_and_confirms_publication():
     assert 'BTC' in system._published_at
 
 
+def test_facade_delegates_single_signal_to_internal_generator():
+    signal = make_signal()
+    internal_generator = SimpleNamespace(
+        generate_signal=AsyncMock(return_value=signal)
+    )
+    system = TradingSystem.__new__(TradingSystem)
+    system.enabled = True
+    system._initialized = True
+    system.signal_generator = internal_generator
+    price_data = object()
+    session = object()
+
+    result = asyncio.run(
+        system.generate_signal('BTC', price_data, session)
+    )
+
+    assert result is signal
+    internal_generator.generate_signal.assert_awaited_once_with(
+        asset='BTC',
+        price_data=price_data,
+        session=session,
+    )
+
+
 def test_unconfirmed_trading_publication_is_not_counted():
     system = make_system(make_signal())
     system._publish_signal.return_value = False
@@ -96,6 +120,17 @@ def test_unconfirmed_trading_publication_is_not_counted():
     assert result['errors'] == 1
     assert result['success'] is False
     assert system._published_at == {}
+
+
+def test_missing_generated_signal_marks_cycle_failed():
+    system = make_system(None)
+
+    result = asyncio.run(system.run_signal_cycle())
+
+    assert result['signals_generated'] == 0
+    assert result['signals_sent'] == 0
+    assert result['errors'] == 1
+    assert result['success'] is False
 
 
 def test_runner_rejects_legacy_noop_contract():

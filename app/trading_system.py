@@ -131,7 +131,7 @@ class TradingSystem:
         symbol: str,
         price_data: Any,
         session: Any
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[Any]:
         """
         Генерация торгового сигнала
         
@@ -145,6 +145,19 @@ class TradingSystem:
         """
         if not self.is_enabled():
             logger.debug(f"[TRADING] System not enabled, skipping signal for {symbol}")
+            return None
+
+        try:
+            return await self.signal_generator.generate_signal(
+                asset=symbol,
+                price_data=price_data,
+                session=session,
+            )
+        except Exception:
+            logger.exception(
+                "❌ [TRADING] Ошибка генерации сигнала для %s",
+                symbol,
+            )
             return None
 
     async def run_signal_cycle(self) -> Dict[str, Any]:
@@ -187,6 +200,11 @@ class TradingSystem:
                         ),
                     )
                     if signal is None:
+                        result['errors'] += 1
+                        logger.error(
+                            "❌ [TRADING] Генератор не вернул сигнал для %s",
+                            asset,
+                        )
                         continue
 
                     result['signals_generated'] += 1
