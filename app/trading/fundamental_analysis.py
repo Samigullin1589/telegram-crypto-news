@@ -190,7 +190,6 @@ class FundamentalAnalyzer:
             async with session.get(url, params=params, timeout=15) as resp:
                 if resp.status == 429:
                     print(f"⚠️ [FUNDAMENTAL] CoinGecko rate limit для {asset}")
-                    await asyncio.sleep(60)
                     return None
                 
                 if resp.status != 200:

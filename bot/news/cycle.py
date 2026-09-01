@@ -5,7 +5,9 @@ News Processing Cycle v2.0
 """
 
 import asyncio
+import html
 import logging
+import re
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
@@ -314,16 +316,69 @@ class NewsCycleProcessor:
 
                 if hasattr(ai_handler, 'get_summary'):
                     summary = await ai_handler.get_summary(title, text, category)
-                    if summary:
+                    if summary and self._is_publishable_russian_message(summary[0]):
                         message, ai_provider = summary
                         return message, ai_provider, ai_score
+                    if summary:
+                        logger.warning(
+                            "AI returned a non-Russian or error-page response; using local fallback"
+                        )
             except Exception as e:
                 logger.warning("AI processing failed, using fallback: %s", e)
 
-        fallback_text = text or "Подробности доступны в первоисточнике."
-        fallback_text = fallback_text[:900].strip()
-        message = f"📰 **{title}**\n\n{fallback_text}\n\n#crypto #news"
+        russian_title = title if self._has_cyrillic(title) else "Важная новость крипторынка"
+        fallback_text = self._build_russian_fallback(text)
+        message = f"📰 **{russian_title}**\n\n{fallback_text}\n\n#крипто #новости"
         return message, ai_provider, ai_score
+
+    @classmethod
+    def _build_russian_fallback(cls, text: str) -> str:
+        """Построить нейтральный русский fallback без машинного перевода."""
+        cleaned = html.unescape(re.sub(r'<[^>]+>', ' ', text or ''))
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        if cls._is_error_page(cleaned):
+            cleaned = ''
+
+        russian_sentences = [
+            sentence.strip()
+            for sentence in re.split(r'(?<=[.!?])\s+', cleaned)
+            if cls._has_cyrillic(sentence)
+        ]
+        fallback = ' '.join(russian_sentences[:3])[:900].strip()
+        if fallback:
+            return fallback
+        return (
+            "Появилось новое сообщение о событиях на крипторынке. "
+            "Проверенные подробности доступны по ссылке на первоисточник."
+        )
+
+    @classmethod
+    def _is_publishable_russian_message(cls, message: str) -> bool:
+        if not message or cls._is_error_page(message):
+            return False
+        first_line = next(
+            (line.strip() for line in message.splitlines() if line.strip()),
+            '',
+        )
+        if not cls._has_cyrillic(first_line):
+            return False
+        cyrillic_count = len(re.findall(r'[А-Яа-яЁё]', message))
+        latin_count = len(re.findall(r'[A-Za-z]', message))
+        return cyrillic_count >= 10 and cyrillic_count >= latin_count
+
+    @staticmethod
+    def _has_cyrillic(text: str) -> bool:
+        return bool(re.search(r'[А-Яа-яЁё]', text or ''))
+
+    @staticmethod
+    def _is_error_page(text: str) -> bool:
+        lowered = (text or '').lower()
+        markers = (
+            '<!doctype html', '<html', 'cloudflare ray id',
+            'web server is returning an unknown error', 'error code 520',
+            'bad gateway', 'service unavailable',
+        )
+        return any(marker in lowered for marker in markers)
 
     @staticmethod
     def _normalize_url(url: str) -> str:

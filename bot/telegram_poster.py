@@ -6,7 +6,7 @@ import aiohttp
 import io
 from typing import Optional, Dict
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageOps
 
 import telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -216,7 +216,11 @@ class ImageDownloader:
         self.max_size_mb = getattr(config, 'MAX_IMAGE_SIZE_MB', 10)
         self.max_size_bytes = self.max_size_mb * 1024 * 1024
     
-    async def download(self, image_url: str) -> Optional[bytes]:
+    async def download(
+        self,
+        image_url: str,
+        referer: Optional[str] = None,
+    ) -> Optional[bytes]:
         if not image_url:
             return None
         
@@ -227,7 +231,7 @@ class ImageDownloader:
                 'User-Agent': self.user_agent,
                 'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
                 'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Referer': image_url,
+                'Referer': referer or image_url,
                 'DNT': '1'
             }
             
@@ -266,11 +270,14 @@ class ImageDownloader:
                         return None
                     
                     try:
-                        img = Image.open(io.BytesIO(image_data))
-                        width, height = img.size
-                        
-                        print(f"✅ [TELEGRAM] Изображение скачано: {width}x{height}px, {len(image_data) // 1024}KB")
-                        return image_data
+                        prepared_data, width, height = self._prepare_for_telegram(
+                            image_data
+                        )
+                        print(
+                            f"✅ [TELEGRAM] Изображение подготовлено: "
+                            f"{width}x{height}px, {len(prepared_data) // 1024}KB"
+                        )
+                        return prepared_data
                         
                     except Exception as e:
                         print(f"⚠️  [TELEGRAM] Не удалось открыть изображение: {type(e).__name__}")
@@ -285,6 +292,34 @@ class ImageDownloader:
         except Exception as e:
             print(f"❌ [TELEGRAM] Ошибка скачивания: {e}")
             return None
+
+    def _prepare_for_telegram(self, image_data: bytes):
+        """Нормализовать изображение под ограничения Telegram sendPhoto."""
+        with Image.open(io.BytesIO(image_data)) as source:
+            image = ImageOps.exif_transpose(source)
+            if image.mode != 'RGB':
+                if 'A' in image.getbands():
+                    background = Image.new('RGB', image.size, 'white')
+                    background.paste(image, mask=image.getchannel('A'))
+                    image = background
+                else:
+                    image = image.convert('RGB')
+
+            max_dimension = 5000
+            if image.width + image.height > 10_000:
+                max_dimension = 4500
+            image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+
+            quality = 90
+            while quality >= 55:
+                output = io.BytesIO()
+                image.save(output, format='JPEG', quality=quality, optimize=True)
+                prepared = output.getvalue()
+                if len(prepared) <= self.max_size_bytes:
+                    return prepared, image.width, image.height
+                quality -= 10
+
+        raise ValueError('Image cannot be reduced to Telegram photo limits')
 
 
 class TelegramPoster:
@@ -360,7 +395,10 @@ class TelegramPoster:
         
         if image_url and not final_image_data:
             start_time = datetime.now()
-            final_image_data = await self.image_downloader.download(image_url)
+            final_image_data = await self.image_downloader.download(
+                image_url,
+                referer=final_link,
+            )
             download_time = (datetime.now() - start_time).total_seconds()
             
             if final_image_data:
@@ -377,12 +415,18 @@ class TelegramPoster:
         is_caption = bool(final_image_data)
         prepared_message = self.sanitizer.prepare_message(final_message, is_caption=is_caption)
         
-        strategies = [
-            ('markdown_with_image', self._post_with_markdown_and_image),
-            ('markdown_without_image', self._post_with_markdown_text_only),
-            ('plain_with_image', self._post_plain_with_image),
-            ('plain_text', self._post_plain_text_only),
-        ]
+        if final_image_data:
+            strategies = [
+                ('markdown_with_image', self._post_with_markdown_and_image),
+                ('plain_with_image', self._post_plain_with_image),
+                ('markdown_without_image', self._post_with_markdown_text_only),
+                ('plain_text', self._post_plain_text_only),
+            ]
+        else:
+            strategies = [
+                ('markdown_without_image', self._post_with_markdown_text_only),
+                ('plain_text', self._post_plain_text_only),
+            ]
         
         for strategy_name, strategy_func in strategies:
             success = await strategy_func(
@@ -395,7 +439,7 @@ class TelegramPoster:
                 self.metrics.successful_posts += 1
                 self.metrics.record_strategy(strategy_name)
                 
-                if final_image_data:
+                if strategy_name.endswith('with_image'):
                     self.metrics.posts_with_images += 1
                 else:
                     self.metrics.posts_without_images += 1

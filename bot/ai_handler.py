@@ -15,9 +15,12 @@ AI HANDLER v3.2 - Enhanced with Translation Support
 
 import asyncio
 import hashlib
+import logging
 import time
 from typing import Optional, Dict, Tuple
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 try:
     import google.generativeai as genai
@@ -435,6 +438,12 @@ class AIHandler:
             
         except Exception as e:
             self.stats.record_failure(provider)
+            logger.warning(
+                "AI translation provider %s failed: %s (HTTP %s)",
+                provider,
+                type(e).__name__,
+                getattr(e, 'status_code', 'unknown'),
+            )
             return None
     
     async def _translate_with_gemini(self, text: str, source_lang: str, target_lang: str) -> str:
@@ -659,6 +668,12 @@ Translation:"""
             
         except Exception as e:
             self.stats.record_failure(provider)
+            logger.warning(
+                "AI summary provider %s failed: %s (HTTP %s)",
+                provider,
+                type(e).__name__,
+                getattr(e, 'status_code', 'unknown'),
+            )
             return None
     
     async def _call_gemini(self, title: str, text: str, emoji: str) -> str:
@@ -770,7 +785,8 @@ Translation:"""
     @staticmethod
     def _is_transient_ai_error(error: Exception) -> bool:
         status_code = getattr(error, 'status_code', None)
-        if status_code in {408, 409, 425, 429, 500, 502, 503, 504}:
+        # 520 используется Cloudflare, когда origin провайдера временно не отвечает.
+        if status_code in {408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}:
             return True
 
         if isinstance(error, (ConnectionError, TimeoutError)):
@@ -780,7 +796,8 @@ Translation:"""
         transient_markers = (
             'timeout', 'timed out', 'rate limit',
             'connection', 'temporarily unavailable',
-            'service unavailable', 'gateway timeout'
+            'service unavailable', 'gateway timeout',
+            'web server is returning an unknown error', 'cloudflare 520'
         )
         return any(marker in error_text for marker in transient_markers)
     

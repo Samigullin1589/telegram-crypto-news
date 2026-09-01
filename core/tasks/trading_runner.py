@@ -255,7 +255,7 @@ class TradingCycleExecutor:
         # По умолчанию считаем включенной
         return True
     
-    async def execute_cycle(self) -> None:
+    async def execute_cycle(self) -> Dict[str, Any]:
         """
         Выполнение цикла trading анализа
         
@@ -266,51 +266,26 @@ class TradingCycleExecutor:
         """
         logger.debug("[TRADING-EXEC] Running analysis cycle...")
         
-        # Получение статистики
-        stats = await self._get_performance_stats()
-        
-        if stats:
-            logger.debug(
-                f"[TRADING-EXEC] Stats: "
-                f"signals={stats.get('total_signals', 0)}, "
-                f"trades={stats.get('total_trades', 0)}"
+        if not hasattr(self.trading_system, 'run_signal_cycle'):
+            raise RuntimeError(
+                'Trading system does not implement required run_signal_cycle contract'
             )
-        
-        # Выполнение анализа
-        await self._run_analysis()
-        
-        # Генерация сигналов
-        await self._generate_signals()
-        
-        logger.debug("[TRADING-EXEC] Cycle completed")
-    
-    async def _run_analysis(self) -> None:
-        """Выполнение анализа если метод доступен"""
-        if hasattr(self.trading_system, 'run_analysis'):
-            await self.trading_system.run_analysis()
-    
-    async def _generate_signals(self) -> None:
-        """Генерация сигналов если метод доступен"""
-        if hasattr(self.trading_system, 'generate_signals'):
-            await self.trading_system.generate_signals()
-    
-    async def _get_performance_stats(self) -> Dict[str, Any]:
-        """
-        Получение статистики производительности
-        
-        Returns:
-            Dict[str, Any]: Статистика или пустой dict
-        """
-        try:
-            if hasattr(self.trading_system, 'get_performance_stats'):
-                stats = await self.trading_system.get_performance_stats()
-                return stats if stats else {}
-            return {}
-        
-        except Exception as e:
-            logger.debug(f"[TRADING-EXEC] Could not get stats: {e}")
-            return {}
 
+        result = await self.trading_system.run_signal_cycle()
+        if not isinstance(result, dict):
+            raise RuntimeError('Trading signal cycle returned an invalid result')
+        if result.get('success') is False and result.get('reason') != 'disabled':
+            raise RuntimeError(
+                f"Trading signal cycle failed with {result.get('errors', 0)} errors"
+            )
+
+        logger.info(
+            "[TRADING-EXEC] Cycle result: generated=%d, sent=%d, errors=%d",
+            result.get('signals_generated', 0),
+            result.get('signals_sent', 0),
+            result.get('errors', 0),
+        )
+        return result
 
 class TradingSystemRunner:
     """
@@ -356,7 +331,12 @@ class TradingSystemRunner:
             shutdown_event: Event для остановки
             config: Конфигурация (опционально)
         """
-        self.config = config or TradingRunnerConfig()
+        if config is None:
+            trading_config = getattr(trading_system, 'trading_config', {})
+            config = TradingRunnerConfig(
+                check_interval=int(trading_config.get('check_interval', 300))
+            )
+        self.config = config
         self.resource_monitor = resource_monitor
         self.statistics = statistics
         self.shutdown_event = shutdown_event
@@ -403,14 +383,15 @@ class TradingSystemRunner:
                     continue
                 
                 # Выполнение цикла анализа
-                await self.cycle_executor.execute_cycle()
+                cycle_result = await self.cycle_executor.execute_cycle()
                 
                 # Сброс счетчика ошибок при успехе
                 self.error_handler.reset_error_counter()
                 
                 # Обновление статистики
                 if hasattr(self.statistics, 'increment_trading'):
-                    self.statistics.increment_trading()
+                    for _ in range(cycle_result.get('signals_sent', 0)):
+                        self.statistics.increment_trading()
                 
                 # Проверка памяти
                 await self._check_resources()

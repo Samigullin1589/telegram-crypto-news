@@ -170,43 +170,8 @@ class ImageURLProcessor:
                 url = re.sub(thumbnail_pattern, r'\1', url)
                 return url
             
-            size_params = ['?w=', '&w=', '?width=', '&width=', '?size=', '&size=', '?resize=', '&resize=']
-            if any(param in url.lower() for param in size_params):
-                url = re.sub(r'[?&]w=\d+', '', url)
-                url = re.sub(r'[?&]h=\d+', '', url)
-                url = re.sub(r'[?&]width=\d+', '', url)
-                url = re.sub(r'[?&]height=\d+', '', url)
-                url = re.sub(r'[?&]size=\d+', '', url)
-                url = re.sub(r'[?&]quality=\d+', '', url)
-                url = re.sub(r'[?&]q=\d+', '', url)
-                url = re.sub(r'[?&]fit=[^&]+', '', url)
-                url = re.sub(r'[?&]crop=[^&]+', '', url)
-                url = re.sub(r'[?&]resize=[^&]+', '', url)
-                
-                url = re.sub(r'\?&', '?', url)
-                url = re.sub(r'&&+', '&', url)
-                url = re.sub(r'[?&]$', '', url)
-                
-                return url
-            
-            cdn_services = [
-                'imagedelivery.net', 'imgix.net', 'images.unsplash.com',
-                'cdn-images', 'cloudinary.com', 'cloudfront.net',
-                'akamaized.net', 'fastly.net'
-            ]
-            
-            if any(service in url for service in cdn_services):
-                url = re.sub(r'/w_\d+', '/w_1920', url)
-                url = re.sub(r'/h_\d+', '/h_1080', url)
-                url = re.sub(r',w=\d+', ',w=1920', url)
-                url = re.sub(r',h=\d+', ',h=1080', url)
-                url = re.sub(r'\bw=\d+', 'w=1920', url)
-                url = re.sub(r'\bh=\d+', 'h=1080', url)
-                url = re.sub(r'/thumb/', '/full/', url)
-                url = re.sub(r'/small/', '/large/', url)
-                url = re.sub(r'/medium/', '/large/', url)
-                return url
-            
+            # Не переписываем CDN URL: query/path могут входить в подпись.
+            # Крупный вариант выбирается из srcset, если он доступен.
             return url
             
         except Exception:
@@ -457,7 +422,7 @@ class ImageExtractor:
             if article_tag:
                 first_img = article_tag.find('img')
                 if first_img:
-                    img_src = first_img.get('src') or first_img.get('data-src') or first_img.get('data-lazy-src')
+                    img_src = self._best_img_source(first_img)
                     if img_src:
                         url = self._process_url(img_src, base_url)
                         if url:
@@ -469,7 +434,7 @@ class ImageExtractor:
         try:
             main_img = soup.find('img', class_=lambda x: x and ('featured' in str(x).lower() or 'hero' in str(x).lower()))
             if main_img:
-                img_src = main_img.get('src') or main_img.get('data-src')
+                img_src = self._best_img_source(main_img)
                 if img_src:
                     url = self._process_url(img_src, base_url)
                     if url:
@@ -479,8 +444,9 @@ class ImageExtractor:
             pass
         
         try:
-            if hasattr(entry, 'media_content') and entry.media_content:
-                for idx, media in enumerate(entry.media_content[:5]):
+            media_content = self._entry_value(entry, 'media_content', [])
+            if media_content:
+                for idx, media in enumerate(media_content[:5]):
                     if url := media.get('url'):
                         url = self._process_url(url, base_url)
                         if url:
@@ -490,8 +456,9 @@ class ImageExtractor:
             pass
         
         try:
-            if hasattr(entry, 'enclosures') and entry.enclosures:
-                for idx, enc in enumerate(entry.enclosures[:3]):
+            enclosures = self._entry_value(entry, 'enclosures', [])
+            if enclosures:
+                for idx, enc in enumerate(enclosures[:3]):
                     if 'image' in enc.get('type', '') and enc.get('href'):
                         url = self._process_url(enc['href'], base_url)
                         if url:
@@ -503,7 +470,7 @@ class ImageExtractor:
         try:
             all_images = soup.find_all('img', limit=10)
             for img in all_images:
-                img_src = img.get('src') or img.get('data-src')
+                img_src = self._best_img_source(img)
                 if img_src:
                     url = self._process_url(img_src, base_url)
                     if url and not any(url == c[0] for c in candidates):
@@ -527,8 +494,9 @@ class ImageExtractor:
         candidates = []
         
         try:
-            if hasattr(entry, 'media_content') and entry.media_content:
-                for media in entry.media_content[:5]:
+            media_content = self._entry_value(entry, 'media_content', [])
+            if media_content:
+                for media in media_content[:5]:
                     if url := media.get('url'):
                         url = self._process_url(url, base_url)
                         if url:
@@ -537,8 +505,9 @@ class ImageExtractor:
             pass
         
         try:
-            if hasattr(entry, 'enclosures') and entry.enclosures:
-                for enc in entry.enclosures[:3]:
+            enclosures = self._entry_value(entry, 'enclosures', [])
+            if enclosures:
+                for enc in enclosures[:3]:
                     if 'image' in enc.get('type', '') and enc.get('href'):
                         url = self._process_url(enc['href'], base_url)
                         if url:
@@ -546,7 +515,47 @@ class ImageExtractor:
         except Exception:
             pass
         
-        return candidates
+        direct_image = self._entry_value(entry, 'image_url') or self._entry_value(entry, 'image')
+        if isinstance(direct_image, dict):
+            direct_image = direct_image.get('href') or direct_image.get('url')
+        if direct_image:
+            processed = self._process_url(str(direct_image), base_url)
+            if processed:
+                candidates.insert(0, processed)
+
+        return list(dict.fromkeys(candidates))
+
+    @staticmethod
+    def _entry_value(entry, key: str, default=None):
+        if isinstance(entry, dict):
+            return entry.get(key, default)
+        return getattr(entry, key, default)
+
+    @staticmethod
+    def _best_img_source(img) -> Optional[str]:
+        """Выбрать крупнейший вариант из lazy/srcset либо обычный src."""
+        srcset = img.get('srcset') or img.get('data-srcset')
+        if srcset:
+            variants = []
+            for item in srcset.split(','):
+                parts = item.strip().split()
+                if not parts:
+                    continue
+                width = 0
+                if len(parts) > 1 and parts[-1].lower().endswith('w'):
+                    try:
+                        width = int(parts[-1][:-1])
+                    except ValueError:
+                        pass
+                variants.append((width, parts[0]))
+            if variants:
+                return max(variants, key=lambda variant: variant[0])[1]
+        return (
+            img.get('data-src')
+            or img.get('data-lazy-src')
+            or img.get('data-original')
+            or img.get('src')
+        )
     
     def _process_url(self, url: str, base_url: str) -> Optional[str]:
         try:
@@ -595,7 +604,11 @@ class ContentParser:
             self.stats.record_text_extraction()
         
         candidates = self.image_extractor.extract_candidates(soup, entry, final_url)
-        image_url = await self._validate_image_candidates(candidates, session)
+        image_url = await self._validate_image_candidates(
+            candidates,
+            session,
+            referer=final_url,
+        )
         
         return {
             'text': article_text,
@@ -809,7 +822,8 @@ class ContentParser:
     async def _validate_image_candidates(
         self,
         candidates: List[Tuple[str, str, int]],
-        session: aiohttp.ClientSession
+        session: aiohttp.ClientSession,
+        referer: Optional[str] = None,
     ) -> Optional[str]:
         if not candidates:
             return None
@@ -821,7 +835,7 @@ class ContentParser:
                 headers = {
                     'User-Agent': self.user_agent,
                     'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-                    'Referer': url
+                    'Referer': referer or url
                 }
                 
                 async with session.get(
@@ -837,7 +851,11 @@ class ContentParser:
                     if not any(img_type in content_type for img_type in ['image/', 'octet-stream']):
                         continue
                     
-                    image_data = await response.content.read(config.IMAGE_PARTIAL_READ_BYTES)
+                    max_validation_bytes = max(
+                        int(config.IMAGE_PARTIAL_READ_BYTES),
+                        256 * 1024,
+                    )
+                    image_data = await response.content.read(max_validation_bytes)
                     if not image_data or len(image_data) < 100:
                         continue
                     

@@ -279,7 +279,6 @@ class HotWalletTracker:
         
         async with session.get(url, params=params, timeout=10) as resp:
             if resp.status == 429:
-                await asyncio.sleep(60)
                 return None
             
             if resp.status != 200:

@@ -39,7 +39,7 @@ class FakeAIHandler:
 
     async def get_summary(self, title, text, category):
         self.events.append('summary')
-        return f"📰 **{title}**\n\nAI analysis of the article.\n\n#crypto #news", 'openai'
+        return "📰 **Важная новость**\n\nКраткий разбор события на крипторынке.\n\n#крипто #новости", 'openai'
 
 
 class FakeTelegramPoster:
@@ -150,6 +150,38 @@ def test_failed_telegram_post_is_not_marked_or_saved_and_can_retry():
     assert second_result == 1
     assert deduplicator.is_duplicate(article) is True
     assert events == ['analyze', 'summary', 'post', 'seen', 'save']
+
+
+def test_english_ai_failure_uses_fully_russian_local_fallback():
+    cycle, _, _, _, _, article = make_cycle([True])
+
+    class EnglishOnlyAI:
+        async def analyze_article(self, article):
+            return {'score': 80}
+
+        async def get_summary(self, title, text, category):
+            return (
+                "📰 **English headline**\n\n"
+                "Web server is returning an unknown error. Error code 520.",
+                'cheapvibecode',
+            )
+
+    cycle.components.ai_handler = EnglishOnlyAI()
+    article['description'] = (
+        '<!DOCTYPE html><html>Cloudflare Ray ID: test. '
+        'Web server is returning an unknown error.</html>'
+    )
+
+    message, provider, score = asyncio.run(cycle._build_message(article))
+
+    assert 'English headline' not in message
+    assert 'Bitcoin adoption' not in message
+    assert 'Cloudflare' not in message
+    assert 'Подробности доступны в первоисточнике' not in message
+    assert 'Важная новость крипторынка' in message
+    assert 'Проверенные подробности' in message
+    assert provider is None
+    assert score == 80
 
 
 def test_monitor_runs_news_processor_through_periodic_runner(monkeypatch):

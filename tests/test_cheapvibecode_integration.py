@@ -279,6 +279,43 @@ def test_retry_policy_retries_only_transient_errors(monkeypatch):
     assert permanent.calls == 1
 
 
+def test_retry_policy_treats_cloudflare_520_as_transient(monkeypatch):
+    runtime_config = make_runtime_config(AI_MAX_RETRIES=3, AI_BACKOFF_FACTOR=0)
+    monkeypatch.setattr(ai_module, 'config', runtime_config)
+    handler = ai_module.AIHandler.__new__(ai_module.AIHandler)
+
+    class CloudflareError(RuntimeError):
+        status_code = 520
+
+    class Completions:
+        calls = 0
+
+        @classmethod
+        def create(cls, **kwargs):
+            cls.calls += 1
+            if cls.calls == 1:
+                raise CloudflareError(
+                    'Web server is returning an unknown error'
+                )
+            return SimpleNamespace(choices=[])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=Completions),
+    )
+
+    asyncio.run(
+        handler._create_openai_chat_completion(
+            client,
+            'model',
+            [],
+            0.1,
+            10,
+        )
+    )
+
+    assert Completions.calls == 2
+
+
 def test_secure_helper_transfers_key_only_through_stdin(monkeypatch, tmp_path):
     captured = {}
 

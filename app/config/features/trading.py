@@ -4,6 +4,7 @@ Trading features module
 """
 
 import logging
+import os
 from typing import Dict, Any
 from .base import BaseFeatureConfig
 
@@ -59,6 +60,9 @@ class TradingFeatures(BaseFeatureConfig):
         self.check_interval = self.get_int_env('TRADING_CHECK_INTERVAL', 300)
         self.position_update_interval = self.get_int_env('POSITION_UPDATE_INTERVAL', 60)
         self.risk_check_interval = self.get_int_env('RISK_CHECK_INTERVAL', 120)
+        self.signal_interval_hours = self.get_float_env('TRADING_SIGNAL_INTERVAL_HOURS', 1.0)
+        self.asset_timeout = self.get_int_env('TRADING_ASSET_TIMEOUT', 45)
+        self.monitored_assets = self._parse_monitored_assets()
         
         # Стратегии
         self.strategies_enabled = self._parse_strategies()
@@ -110,6 +114,20 @@ class TradingFeatures(BaseFeatureConfig):
             bool: True если стратегия включена
         """
         return strategy_name.lower() in self.strategies_enabled
+
+    @staticmethod
+    def _parse_monitored_assets() -> list:
+        """Получить уникальный безопасный список тикеров из окружения."""
+        raw_value = os.getenv(
+            'TRADING_MONITORED_ASSETS',
+            'BTC,ETH,SOL,BNB,XRP,ADA,AVAX,DOT,LINK'
+        )
+        assets = []
+        for value in raw_value.split(','):
+            asset = value.strip().upper()
+            if asset and asset.isalnum() and asset not in assets:
+                assets.append(asset)
+        return assets or ['BTC', 'ETH']
     
     def validate_position_size(self, size: float) -> bool:
         """
@@ -178,6 +196,9 @@ class TradingFeatures(BaseFeatureConfig):
             'min_confidence': self.min_confidence,
             'min_signal_strength': self.min_signal_strength,
             'check_interval': self.check_interval,
+            'signal_interval_hours': self.signal_interval_hours,
+            'asset_timeout': self.asset_timeout,
+            'monitored_assets': list(self.monitored_assets),
             'strategies': self.strategies_enabled,
             'default_strategy': self.default_strategy,
             'data_sources': self.get_data_sources()

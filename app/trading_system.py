@@ -4,8 +4,16 @@ Trading System Facade v5.0
 Унифицированный интерфейс для Trading System с улучшенной архитектурой
 """
 
+import asyncio
+import html
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
+
+import aiohttp
+import pandas as pd
+import telegram
 
 from app.config import config
 
@@ -38,6 +46,8 @@ class TradingSystem:
         self.positions = None
         self.performance = None
         self._initialized = False
+        self._published_at: Dict[str, datetime] = {}
+        self._daily_publications: List[datetime] = []
         
         # Попытка инициализации компонентов
         if self.enabled:
@@ -136,6 +146,190 @@ class TradingSystem:
         if not self.is_enabled():
             logger.debug(f"[TRADING] System not enabled, skipping signal for {symbol}")
             return None
+
+    async def run_signal_cycle(self) -> Dict[str, Any]:
+        """Получить рыночные данные, сгенерировать и опубликовать сигналы."""
+        result = {
+            'success': False,
+            'assets_checked': 0,
+            'signals_generated': 0,
+            'signals_sent': 0,
+            'errors': 0,
+        }
+        if not self.is_enabled():
+            result['reason'] = 'disabled'
+            return result
+
+        assets = self.trading_config.get('monitored_assets') or ['BTC', 'ETH']
+        logger.info(
+            "📈 [TRADING] Запуск сигнального цикла для %d активов",
+            len(assets),
+        )
+
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for asset in assets:
+                result['assets_checked'] += 1
+                try:
+                    price_data = await self._fetch_ohlcv(asset, session)
+                    if price_data is None or len(price_data) < 50:
+                        logger.warning(
+                            "⚠️ [TRADING] Недостаточно OHLCV данных для %s",
+                            asset,
+                        )
+                        continue
+
+                    signal = await asyncio.wait_for(
+                        self.generate_signal(asset, price_data, session),
+                        timeout=max(
+                            5,
+                            int(self.trading_config.get('asset_timeout', 45)),
+                        ),
+                    )
+                    if signal is None:
+                        continue
+
+                    result['signals_generated'] += 1
+                    if not self._should_publish_signal(signal):
+                        logger.info(
+                            "⏸️ [TRADING] %s: %s, confidence=%.1f — не публикуем",
+                            asset,
+                            getattr(signal, 'signal', 'UNKNOWN'),
+                            float(getattr(signal, 'confidence', 0)),
+                        )
+                        continue
+
+                    if await self._publish_signal(signal):
+                        self._record_publication(signal)
+                        result['signals_sent'] += 1
+                    else:
+                        result['errors'] += 1
+                except asyncio.TimeoutError:
+                    result['errors'] += 1
+                    logger.error(
+                        "❌ [TRADING] Анализ %s превысил допустимое время",
+                        asset,
+                    )
+                except Exception:
+                    result['errors'] += 1
+                    logger.exception("❌ [TRADING] Ошибка обработки %s", asset)
+
+        result['success'] = result['errors'] < result['assets_checked']
+        logger.info(
+            "✅ [TRADING] Цикл завершён: проверено=%d, сгенерировано=%d, опубликовано=%d, ошибок=%d",
+            result['assets_checked'],
+            result['signals_generated'],
+            result['signals_sent'],
+            result['errors'],
+        )
+        return result
+
+    async def _fetch_ohlcv(
+        self,
+        asset: str,
+        session: aiohttp.ClientSession,
+    ) -> Optional[pd.DataFrame]:
+        """Загрузить последние часовые свечи Binance."""
+        params = {
+            'symbol': f'{asset.upper()}USDT',
+            'interval': '1h',
+            'limit': 200,
+        }
+        async with session.get(
+            'https://api.binance.com/api/v3/klines',
+            params=params,
+        ) as response:
+            if response.status != 200:
+                logger.warning(
+                    "⚠️ [TRADING] Binance OHLCV для %s вернул HTTP %s",
+                    asset,
+                    response.status,
+                )
+                return None
+
+            data = await response.json()
+            if not isinstance(data, list) or not data:
+                return None
+
+        frame = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+            'taker_buy_quote', 'ignore',
+        ])
+        frame['timestamp'] = pd.to_datetime(frame['timestamp'], unit='ms', utc=True)
+        numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+        frame[numeric_columns] = frame[numeric_columns].apply(
+            pd.to_numeric,
+            errors='coerce',
+        )
+        frame = frame.dropna(subset=numeric_columns)
+        return frame[['timestamp', *numeric_columns]]
+
+    def _should_publish_signal(self, signal: Any) -> bool:
+        direction = getattr(signal, 'signal', '')
+        if direction not in {'STRONG_BUY', 'BUY', 'SELL', 'STRONG_SELL'}:
+            return False
+
+        min_confidence = float(self.trading_config.get('min_confidence', 75))
+        if float(getattr(signal, 'confidence', 0)) < min_confidence:
+            return False
+
+        if hasattr(signal, 'is_tradeable') and not signal.is_tradeable():
+            return False
+
+        now = datetime.now(timezone.utc)
+        self._daily_publications = [
+            published for published in self._daily_publications
+            if published.date() == now.date()
+        ]
+        max_per_day = int(self.trading_config.get('max_signals_per_day', 10))
+        if len(self._daily_publications) >= max_per_day:
+            return False
+
+        hour_ago = now - timedelta(hours=1)
+        max_per_hour = int(self.trading_config.get('max_signals_per_hour', 5))
+        if sum(published >= hour_ago for published in self._daily_publications) >= max_per_hour:
+            return False
+
+        asset = str(getattr(signal, 'asset', '')).upper()
+        last_published = self._published_at.get(asset)
+        cooldown = timedelta(
+            hours=float(self.trading_config.get('signal_interval_hours', 1.0))
+        )
+        return last_published is None or now - last_published >= cooldown
+
+    def _record_publication(self, signal: Any) -> None:
+        published_at = datetime.now(timezone.utc)
+        asset = str(getattr(signal, 'asset', '')).upper()
+        self._published_at[asset] = published_at
+        self._daily_publications.append(published_at)
+
+    async def _publish_signal(self, signal: Any) -> bool:
+        """Опубликовать информационный сигнал и подтвердить ответ Telegram."""
+        message = self.format_signal_for_telegram(signal)
+        if not message:
+            return False
+
+        try:
+            async with telegram.Bot(token=config.telegram.bot_token) as bot:
+                await bot.send_message(
+                    chat_id=config.telegram.channel_id,
+                    text=message,
+                    parse_mode='HTML',
+                    disable_web_page_preview=True,
+                )
+            logger.info(
+                "✅ [TRADING] Сигнал опубликован: %s — %s",
+                getattr(signal, 'asset', 'UNKNOWN'),
+                getattr(signal, 'signal', 'UNKNOWN'),
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "❌ [TRADING] Telegram не принял сигнал %s",
+                getattr(signal, 'asset', 'UNKNOWN'),
+            )
+            return False
         
         try:
             # Генерация сигнала
@@ -260,7 +454,7 @@ class TradingSystem:
             logger.error(f"❌ [TRADING] Error updating positions: {e}")
             return []
     
-    def format_signal_for_telegram(self, signal: Dict[str, Any]) -> str:
+    def format_signal_for_telegram(self, signal: Any) -> str:
         """
         Форматирование сигнала для Telegram
         
@@ -274,18 +468,63 @@ class TradingSystem:
             return ""
         
         try:
-            # Если объект TradingSignal
-            if hasattr(signal, 'format_signal_message'):
-                return signal.format_signal_message()
-            
-            # Если dict - используем signal_generator
-            if self.signal_generator:
-                return self.signal_generator.format_signal_message(signal)
-        
-        except Exception as e:
-            logger.error(f"❌ [TRADING] Error formatting signal: {e}")
-        
-        return ""
+            value = lambda name, default=None: (
+                signal.get(name, default)
+                if isinstance(signal, dict)
+                else getattr(signal, name, default)
+            )
+            direction = value('signal', '')
+            labels = {
+                'STRONG_BUY': ('🟢🔥', 'СИЛЬНАЯ ПОКУПКА'),
+                'BUY': ('🟢', 'ПОКУПКА'),
+                'SELL': ('🔴', 'ПРОДАЖА'),
+                'STRONG_SELL': ('🔴🔥', 'СИЛЬНАЯ ПРОДАЖА'),
+            }
+            emoji, label = labels.get(direction, ('⚪', 'НАБЛЮДЕНИЕ'))
+            asset = html.escape(str(value('asset', 'UNKNOWN')))
+            confidence = float(value('confidence', 0))
+            entry_price = float(value('entry_price', 0))
+            stop_loss = value('stop_loss')
+            take_profit = value('take_profit')
+            risk_reward = float(value('risk_reward_ratio', 0))
+            reasons = [
+                str(reason)
+                for reason in (value('reasons', []) or [])
+                if re.search(r'[А-Яа-яЁё]', str(reason))
+            ][:3]
+            if not reasons:
+                reasons = [
+                    'Сигнал подтверждён совокупностью доступных рыночных индикаторов.'
+                ]
+
+            lines = [
+                f"{emoji} <b>Торговый сигнал: {asset}</b>",
+                '',
+                f"<b>Направление:</b> {label}",
+                f"<b>Уверенность:</b> {confidence:.1f}%",
+                f"<b>Цена входа:</b> ${entry_price:,.4f}",
+            ]
+            if stop_loss:
+                lines.append(f"<b>Стоп-лосс:</b> ${float(stop_loss):,.4f}")
+            if take_profit:
+                lines.append(f"<b>Тейк-профит:</b> ${float(take_profit):,.4f}")
+            if risk_reward:
+                lines.append(f"<b>Риск/прибыль:</b> 1:{risk_reward:.2f}")
+            if reasons:
+                lines.extend(['', '<b>Ключевые факторы:</b>'])
+                lines.extend(
+                    f"• {html.escape(str(reason))}"
+                    for reason in reasons
+                )
+            lines.extend([
+                '',
+                '⚠️ Не является индивидуальной инвестиционной рекомендацией.',
+                '#крипто #трейдинг',
+            ])
+            return '\n'.join(lines)
+        except Exception:
+            logger.exception("❌ [TRADING] Ошибка форматирования сигнала")
+            return ""
     
     def get_config(self) -> Dict[str, Any]:
         """
