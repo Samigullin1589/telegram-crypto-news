@@ -179,8 +179,11 @@ def test_signal_message_is_russian_and_contains_disclaimer():
 
     message = system.format_signal_for_telegram(make_signal())
 
-    assert 'Торговый сигнал' in message
-    assert 'ПОКУПКА' in message
+    assert 'BTC — сигнал на рост' in message
+    assert 'ПОКУПКА / LONG' in message
+    assert 'Простыми словами' in message
+    assert 'Оценка модели' in message
+    assert 'не вероятность прибыли' in message
     assert 'инвестиционной рекомендацией' in message
     assert 'TRADING SIGNAL' not in message
 
@@ -194,3 +197,28 @@ def test_english_internal_reasons_are_not_published():
 
     assert 'Component weights' not in message
     assert 'Сигнал подтверждён совокупностью' in message
+
+
+def test_sell_signal_message_explains_trade_to_a_beginner():
+    system = make_system(make_signal())
+
+    message = system.format_signal_for_telegram(make_signal(
+        asset='LINK',
+        signal='STRONG_SELL',
+        confidence=81.2,
+        entry_price=11.3390,
+        stop_loss=11.5658,
+        take_profit=10.9308,
+        risk_reward_ratio=1.8,
+        reasons=['[TECH] MACD медвежий кроссовер'],
+    ))
+
+    assert 'LINK — сильный сигнал на снижение' in message
+    assert '<b>Сценарий:</b> ПРОДАЖА / SHORT' in message
+    assert 'SHORT — сделка с расчётом на снижение цены' in message
+    assert '<b>Оценка модели:</b> 81 из 100' in message
+    assert '🛑 <b>Стоп:</b> $11.5658 <i>(2.0% от входа)</i>' in message
+    assert '🏁 <b>Цель:</b> $10.9308 <i>(3.6% от входа)</i>' in message
+    assert 'На каждый $1 риска — до $1.80 потенциальной прибыли' in message
+    assert 'MACD развернулся вниз — признак возможного снижения' in message
+    assert '[TECH]' not in message

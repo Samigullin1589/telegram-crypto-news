@@ -510,22 +510,47 @@ class TradingSystem:
             )
             direction = value('signal', '')
             labels = {
-                'STRONG_BUY': ('🟢🔥', 'СИЛЬНАЯ ПОКУПКА'),
-                'BUY': ('🟢', 'ПОКУПКА'),
-                'SELL': ('🔴', 'ПРОДАЖА'),
-                'STRONG_SELL': ('🔴🔥', 'СИЛЬНАЯ ПРОДАЖА'),
+                'STRONG_BUY': (
+                    '🟢',
+                    'сильный сигнал на рост',
+                    'ПОКУПКА / LONG',
+                    'Ожидается заметный рост цены. LONG — обычная покупка с расчётом на рост.',
+                ),
+                'BUY': (
+                    '🟢',
+                    'сигнал на рост',
+                    'ПОКУПКА / LONG',
+                    'Ожидается рост цены. LONG — обычная покупка с расчётом на рост.',
+                ),
+                'SELL': (
+                    '🔴',
+                    'сигнал на снижение',
+                    'ПРОДАЖА / SHORT',
+                    'Ожидается снижение цены. SHORT — сделка с расчётом на снижение цены.',
+                ),
+                'STRONG_SELL': (
+                    '🔴',
+                    'сильный сигнал на снижение',
+                    'ПРОДАЖА / SHORT',
+                    'Ожидается заметное снижение цены. SHORT — сделка с расчётом на снижение цены.',
+                ),
             }
-            emoji, label = labels.get(direction, ('⚪', 'НАБЛЮДЕНИЕ'))
+            emoji, title, scenario, explanation = labels.get(
+                direction,
+                ('⚪', 'наблюдение', 'ПОКА БЕЗ СДЕЛКИ', 'Ясного направления пока нет.'),
+            )
             asset = html.escape(str(value('asset', 'UNKNOWN')))
             confidence = float(value('confidence', 0))
             entry_price = float(value('entry_price', 0))
             stop_loss = value('stop_loss')
             take_profit = value('take_profit')
             risk_reward = float(value('risk_reward_ratio', 0))
+            stop_loss_value = float(stop_loss) if stop_loss else None
+            take_profit_value = float(take_profit) if take_profit else None
             reasons = [
-                str(reason)
+                formatted
                 for reason in (value('reasons', []) or [])
-                if re.search(r'[А-Яа-яЁё]', str(reason))
+                if (formatted := self._format_signal_reason(reason)) is not None
             ][:3]
             if not reasons:
                 reasons = [
@@ -533,33 +558,99 @@ class TradingSystem:
                 ]
 
             lines = [
-                f"{emoji} <b>Торговый сигнал: {asset}</b>",
+                f"{emoji} <b>{asset} — {title}</b>",
                 '',
-                f"<b>Направление:</b> {label}",
-                f"<b>Уверенность:</b> {confidence:.1f}%",
-                f"<b>Цена входа:</b> ${entry_price:,.4f}",
+                f"📌 <b>Сценарий:</b> {scenario}",
+                f"💡 <b>Простыми словами:</b> {explanation}",
+                '',
+                f"📊 <b>Оценка модели:</b> {confidence:.0f} из 100",
+                '<i>Это совпадение индикаторов, а не вероятность прибыли.</i>',
+                '',
+                '<b>🎯 Уровни сделки</b>',
+                f"💵 <b>Вход:</b> ${entry_price:,.4f}",
             ]
-            if stop_loss:
-                lines.append(f"<b>Стоп-лосс:</b> ${float(stop_loss):,.4f}")
-            if take_profit:
-                lines.append(f"<b>Тейк-профит:</b> ${float(take_profit):,.4f}")
+            if stop_loss_value is not None:
+                risk_pct = (
+                    abs(stop_loss_value - entry_price) / entry_price * 100
+                    if entry_price > 0
+                    else 0
+                )
+                lines.append(
+                    f"🛑 <b>Стоп:</b> ${stop_loss_value:,.4f} "
+                    f"<i>({risk_pct:.1f}% от входа)</i>"
+                )
+            if take_profit_value is not None:
+                potential_pct = (
+                    abs(take_profit_value - entry_price) / entry_price * 100
+                    if entry_price > 0
+                    else 0
+                )
+                lines.append(
+                    f"🏁 <b>Цель:</b> ${take_profit_value:,.4f} "
+                    f"<i>({potential_pct:.1f}% от входа)</i>"
+                )
             if risk_reward:
-                lines.append(f"<b>Риск/прибыль:</b> 1:{risk_reward:.2f}")
+                lines.append(
+                    f"⚖️ На каждый $1 риска — до ${risk_reward:.2f} потенциальной прибыли."
+                )
             if reasons:
-                lines.extend(['', '<b>Ключевые факторы:</b>'])
+                lines.extend(['', '<b>🔎 Почему такой сигнал</b>'])
                 lines.extend(
                     f"• {html.escape(str(reason))}"
                     for reason in reasons
                 )
             lines.extend([
                 '',
-                '⚠️ Не является индивидуальной инвестиционной рекомендацией.',
+                '<b>⚠️ Важно:</b> рынок может пойти против сценария. '
+                'Сигнал не гарантирует прибыль и не является индивидуальной '
+                'инвестиционной рекомендацией.',
                 '#крипто #трейдинг',
             ])
             return '\n'.join(lines)
         except Exception:
             logger.exception("❌ [TRADING] Ошибка форматирования сигнала")
             return ""
+
+    @staticmethod
+    def _format_signal_reason(reason: Any) -> Optional[str]:
+        """Убрать внутренние теги и объяснить техническую причину простым языком."""
+        cleaned = re.sub(r'^\[[A-Z_]+\]\s*', '', str(reason)).strip()
+        if not re.search(r'[А-Яа-яЁё]', cleaned):
+            return None
+
+        explanations = {
+            'MACD бычий кроссовер': 'MACD развернулся вверх — признак возможного роста',
+            'MACD медвежий кроссовер': 'MACD развернулся вниз — признак возможного снижения',
+            'Цена у нижней полосы Боллинджера': (
+                'Цена у нижней границы обычного диапазона — возможен отскок вверх'
+            ),
+            'Цена у верхней полосы Боллинджера': (
+                'Цена у верхней границы обычного диапазона — возможен откат вниз'
+            ),
+            'Объем растет (подтверждение)': 'Рост торгового объёма подтверждает движение вверх',
+            'Объем растет (давление продаж)': 'Рост торгового объёма подтверждает давление продавцов',
+            'Бычье выравнивание MA': 'Средние цены выстроились в пользу дальнейшего роста',
+            'Медвежье выравнивание MA': 'Средние цены выстроились в пользу дальнейшего снижения',
+            'Тренд: strong_uptrend': 'На рынке устойчивый восходящий тренд',
+            'Тренд: uptrend': 'На рынке восходящий тренд',
+            'Тренд: strong_downtrend': 'На рынке устойчивый нисходящий тренд',
+            'Тренд: downtrend': 'На рынке нисходящий тренд',
+        }
+        if cleaned in explanations:
+            return explanations[cleaned]
+
+        prefix_explanations = {
+            'RSI экстремально перепродан': 'RSI показывает очень активные продажи — возможен отскок вверх',
+            'RSI перепродан': 'RSI показывает активные продажи — возможен отскок вверх',
+            'RSI экстремально перекуплен': 'RSI показывает очень активные покупки — возможен откат вниз',
+            'RSI перекуплен': 'RSI показывает активные покупки — возможен откат вниз',
+            'Stochastic перепродан': 'Осциллятор показывает активные продажи — возможен отскок вверх',
+            'Stochastic перекуплен': 'Осциллятор показывает активные покупки — возможен откат вниз',
+        }
+        for prefix, explanation in prefix_explanations.items():
+            if cleaned.startswith(prefix):
+                return explanation
+        return cleaned
     
     def get_config(self) -> Dict[str, Any]:
         """
