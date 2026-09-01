@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,7 @@ os.environ.setdefault('TELEGRAM_CHANNEL_ID', '-1001234567890')
 from bot.news.components import ProcessorComponents
 from bot.news.cycle import NewsCycleProcessor
 from bot.news.deduplicator import ArticleDeduplicator
+from bot.news.lifecycle import ProcessorLifecycle
 from bot.news.state import ProcessorState
 from core.app_lifecycle.lifecycle import ApplicationLifecycle
 from core.components.news_loader import NewsLoader
@@ -30,12 +32,13 @@ class TrackingDeduplicator(ArticleDeduplicator):
 
 
 class FakeAIHandler:
-    def __init__(self, events):
+    def __init__(self, events, score=91):
         self.events = events
+        self.score = score
 
     async def analyze_article(self, article):
         self.events.append('analyze')
-        return {'score': 91}
+        return {'score': self.score}
 
     async def get_summary(self, title, text, category):
         self.events.append('summary')
@@ -151,6 +154,96 @@ def test_failed_telegram_post_is_not_marked_or_saved_and_can_retry():
     assert second_result == 1
     assert deduplicator.is_duplicate(article) is True
     assert events == ['analyze', 'summary', 'post', 'seen', 'save']
+
+
+def test_strict_quality_gate_rejects_low_score_without_posting():
+    cycle, state, deduplicator, database, events, article = make_cycle([True])
+    cycle.components.ai_handler = FakeAIHandler(events, score=84)
+
+    posted = asyncio.run(cycle._process_articles([article]))
+
+    assert posted == 0
+    assert state.total_filtered_quality == 1
+    assert 'post' not in events
+    assert 'summary' not in events
+    assert 'save' not in events
+    assert deduplicator.is_duplicate(article) is True
+    assert database.saved == []
+
+
+def test_strict_quality_gate_fails_closed_without_score():
+    cycle, state, deduplicator, _, events, article = make_cycle([True])
+    cycle.components.ai_handler = FakeAIHandler(events, score=None)
+
+    posted = asyncio.run(cycle._process_articles([article]))
+
+    assert posted == 0
+    assert state.total_filtered_quality == 1
+    assert 'post' not in events
+    assert 'summary' not in events
+    assert deduplicator.is_duplicate(article) is True
+
+
+def test_news_cooldown_discards_queue_without_processing():
+    cycle, state, deduplicator, _, events, article = make_cycle([True])
+    state.last_post_time = datetime.now(timezone.utc) - timedelta(hours=1)
+    second = {**article, 'url': 'https://example.com/second', 'title': 'Second'}
+
+    posted = asyncio.run(cycle._process_articles([article, second]))
+
+    assert posted == 0
+    assert state.total_filtered_cooldown == 2
+    assert 'analyze' not in events
+    assert 'post' not in events
+    assert deduplicator.is_duplicate(article) is True
+    assert deduplicator.is_duplicate(second) is True
+
+
+def test_news_batch_publishes_only_one_and_discards_remainder():
+    cycle, state, deduplicator, database, events, article = make_cycle([True])
+    article['source_metadata'] = {'priority': 2}
+    second = {
+        **article,
+        'url': 'https://example.com/second',
+        'title': 'Second',
+        'source_metadata': {'priority': 9},
+    }
+
+    posted = asyncio.run(cycle._process_articles([article, second]))
+
+    assert posted == 1
+    assert events.count('post') == 1
+    assert state.total_filtered_batch_limit == 1
+    assert database.saved[0]['article']['url'] == second['url']
+    assert deduplicator.is_duplicate(article) is True
+    assert deduplicator.is_duplicate(second) is True
+
+
+def test_news_lifecycle_restores_last_successful_post_time():
+    published_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    database = SimpleNamespace(
+        get_all_links=AsyncMock(return_value=set()),
+        get_recent_articles=AsyncMock(return_value=[{
+            'published_at': published_at.isoformat(),
+        }]),
+    )
+    state = ProcessorState(core_initialized=True, database_initialized=True)
+    lifecycle = ProcessorLifecycle(
+        state,
+        ProcessorComponents(database=database),
+    )
+    fetcher = SimpleNamespace(fetch_source=AsyncMock(return_value=[]))
+
+    loaded = asyncio.run(
+        lifecycle.load_baseline(fetcher, ArticleDeduplicator())
+    )
+
+    assert loaded is True
+    assert state.last_post_time == published_at
+    database.get_recent_articles.assert_awaited_once_with(
+        limit=1,
+        status='success',
+    )
 
 
 def test_english_ai_failure_uses_fully_russian_local_fallback():

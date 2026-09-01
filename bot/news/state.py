@@ -6,7 +6,7 @@ News Processor State Management
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 @dataclass
@@ -23,7 +23,11 @@ class ProcessorState:
     hour_start_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     total_articles_fetched: int = 0
     total_articles_posted: int = 0
+    total_filtered_quality: int = 0
+    total_filtered_cooldown: int = 0
+    total_filtered_batch_limit: int = 0
     total_cycles: int = 0
+    last_post_time: Optional[datetime] = None
     
     # Контроль
     shutdown_requested: bool = False
@@ -70,6 +74,12 @@ class ProcessorState:
             'total_cycles': self.total_cycles,
             'total_articles_fetched': self.total_articles_fetched,
             'total_articles_posted': self.total_articles_posted,
+            'total_filtered_quality': self.total_filtered_quality,
+            'total_filtered_cooldown': self.total_filtered_cooldown,
+            'total_filtered_batch_limit': self.total_filtered_batch_limit,
+            'last_post_time': (
+                self.last_post_time.isoformat() if self.last_post_time else None
+            ),
             'consecutive_errors': self.consecutive_errors,
             'is_ready': self.is_ready()
         }

@@ -94,10 +94,10 @@ class NewsSystemRunner:
         try:
             from app.config import config
             self.normal_interval = int(
-                getattr(config.features, 'news_check_interval', 300)
+                getattr(config.features, 'news_check_interval', 900)
             )
         except Exception:
-            self.normal_interval = 300  # 5 минут
+            self.normal_interval = 900  # 15 минут
         
         logger.debug("NewsSystemRunner initialized")
     

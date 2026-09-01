@@ -6,6 +6,7 @@ News Processor Lifecycle Management v2.0
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.config import config
@@ -92,9 +93,28 @@ class ProcessorLifecycle:
                 for link in stored_links:
                     deduplicator.mark_as_seen({'url': link})
 
+                if hasattr(self.components.database, 'get_recent_articles'):
+                    recent_posts = await self.components.database.get_recent_articles(
+                        limit=1,
+                        status='success'
+                    )
+                    if recent_posts:
+                        published_at = recent_posts[0].get('published_at')
+                        if isinstance(published_at, str):
+                            published_at = datetime.fromisoformat(
+                                published_at.replace('Z', '+00:00')
+                            )
+                        if isinstance(published_at, datetime):
+                            if published_at.tzinfo is None:
+                                published_at = published_at.replace(
+                                    tzinfo=timezone.utc
+                                )
+                            self.state.last_post_time = published_at.astimezone(
+                                timezone.utc
+                            )
+
             # Безопасное получение источников
-            enabled_feeds = config.feeds.get_enabled_feeds()
-            sources = list(enabled_feeds.items())[:5]  # Первые 5 источников
+            sources = config.feeds.get_sorted_feeds()[:5]
             
             if not sources:
                 self.logger.log_warning("No sources available for baseline")

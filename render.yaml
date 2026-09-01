@@ -81,13 +81,22 @@ services:
         value: "true"
       
       - key: POSTS_PER_HOUR_CAP
-        value: "5"
+        value: "1"
+
+      - key: NEWS_POSTS_PER_HOUR
+        value: "1"
       
       - key: FETCH_INTERVAL
-        value: "300"
+        value: "900"
       
       - key: NEWS_CHECK_INTERVAL
-        value: "300"
+        value: "900"
+
+      - key: MIN_NEWS_CONFIDENCE
+        value: "85"
+
+      - key: NEWS_PUBLISH_COOLDOWN_SECONDS
+        value: "14400"
       
       - key: POLL_SECONDS
         value: "120"

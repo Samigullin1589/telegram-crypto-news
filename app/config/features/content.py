@@ -25,9 +25,9 @@ class ContentLimits(BaseFeatureConfig):
         """Инициализация лимитов контента"""
         
         # Лимиты публикаций (в час)
-        self.posts_per_hour_cap = self.get_int_env('POSTS_PER_HOUR_CAP', 10)
+        self.posts_per_hour_cap = self.get_int_env('POSTS_PER_HOUR_CAP', 1)
         self.whale_posts_per_hour = self.get_int_env('WHALE_POSTS_PER_HOUR', 20)
-        self.news_posts_per_hour = self.get_int_env('NEWS_POSTS_PER_HOUR', 15)
+        self.news_posts_per_hour = self.get_int_env('NEWS_POSTS_PER_HOUR', 1)
         self.trading_signals_per_hour = self.get_int_env('TRADING_SIGNALS_PER_HOUR', 5)
         self.analytics_posts_per_hour = self.get_int_env('ANALYTICS_POSTS_PER_HOUR', 8)
         
@@ -35,7 +35,11 @@ class ContentLimits(BaseFeatureConfig):
         self.min_confidence_score = self.get_int_env('MIN_CONFIDENCE_SCORE', 70)
         self.min_trading_confidence = self.get_int_env('MIN_TRADING_CONFIDENCE', 75)
         self.min_whale_confidence = self.get_int_env('MIN_WHALE_CONFIDENCE', 60)
-        self.min_news_confidence = self.get_int_env('MIN_NEWS_CONFIDENCE', 65)
+        self.min_news_confidence = self.get_int_env('MIN_NEWS_CONFIDENCE', 85)
+        self.news_publish_cooldown_seconds = self.get_int_env(
+            'NEWS_PUBLISH_COOLDOWN_SECONDS',
+            14400
+        )
         self.min_analytics_confidence = self.get_int_env('MIN_ANALYTICS_CONFIDENCE', 70)
         
         # Ограничения текста
@@ -138,6 +142,7 @@ class ContentLimits(BaseFeatureConfig):
             'min_trading_confidence': self.min_trading_confidence,
             'min_whale_confidence': self.min_whale_confidence,
             'min_news_confidence': self.min_news_confidence,
+            'news_publish_cooldown_seconds': self.news_publish_cooldown_seconds,
             'min_analytics_confidence': self.min_analytics_confidence,
             'article_length': self.max_article_text_length,
             'summary_length': self.max_summary_length,

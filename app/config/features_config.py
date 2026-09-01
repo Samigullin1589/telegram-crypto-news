@@ -78,6 +78,10 @@ class FeaturesConfig:
         self.whale_posts_per_hour = self.content.whale_posts_per_hour
         self.trading_signals_per_hour = self.content.trading_signals_per_hour
         self.min_confidence_score = self.content.min_confidence_score
+        self.min_news_confidence = self.content.min_news_confidence
+        self.news_publish_cooldown_seconds = (
+            self.content.news_publish_cooldown_seconds
+        )
         self.min_trading_confidence = self.content.min_trading_confidence
         self.min_whale_confidence = self.content.min_whale_confidence
         self.max_article_text_length = self.content.max_article_text_length

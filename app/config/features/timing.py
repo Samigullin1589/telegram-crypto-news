@@ -25,7 +25,7 @@ class TimingConfig(BaseFeatureConfig):
         """Инициализация таймингов"""
         
         # Интервалы проверок (секунды)
-        self.fetch_interval = self.get_int_env('FETCH_INTERVAL', 300)
+        self.fetch_interval = self.get_int_env('FETCH_INTERVAL', 900)
         self.news_check_interval = self.get_int_env('NEWS_CHECK_INTERVAL', self.fetch_interval)
         self.whale_check_interval = self.get_int_env('WHALE_CHECK_INTERVAL', 60)
         self.trading_check_interval = self.get_int_env('TRADING_CHECK_INTERVAL', 300)

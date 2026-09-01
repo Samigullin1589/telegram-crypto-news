@@ -114,8 +114,7 @@ class NewsCycleProcessor:
         
         # Безопасное получение источников из config.feeds
         try:
-            enabled_feeds = config.feeds.get_enabled_feeds()
-            sources = list(enabled_feeds.items())[:5]  # Первые 5 источников
+            sources = config.feeds.get_sorted_feeds()[:5]
             
             if not sources:
                 self.logger.log_warning("No enabled feeds found")
@@ -171,23 +170,46 @@ class NewsCycleProcessor:
             Количество опубликованных статей
         """
         posted = 0
+        articles = sorted(
+            articles,
+            key=self._article_sort_key,
+            reverse=True,
+        )
+
+        cooldown_remaining = self._cooldown_remaining_seconds()
+        if cooldown_remaining > 0:
+            self._mark_articles_seen(articles)
+            self.state.total_filtered_cooldown += len(articles)
+            self.logger.log_info(
+                "News publication cooldown active: "
+                f"{cooldown_remaining // 60 + 1} minutes remaining; "
+                f"discarded {len(articles)} queued articles"
+            )
+            return 0
         
         # Безопасное получение лимитов
         try:
             posts_per_hour_cap = int(
-                getattr(config.features, 'posts_per_hour_cap', 3)
+                getattr(config.features, 'posts_per_hour_cap', 1)
             )
         except (AttributeError, TypeError, ValueError):
-            posts_per_hour_cap = 3
+            posts_per_hour_cap = 1
         
         max_posts = max(0, min(
             len(articles),
             posts_per_hour_cap - self.state.posts_this_hour,
-            3  # Не более 3 за один цикл
+            1  # Только одна лучшая подходящая новость за цикл
         ))
+
+        if max_posts == 0:
+            self._mark_articles_seen(articles)
+            self.state.total_filtered_batch_limit += len(articles)
+            return 0
         
-        for article in articles:
+        for index, article in enumerate(articles):
             if posted >= max_posts:
+                self._mark_articles_seen(articles[index:])
+                self.state.total_filtered_batch_limit += len(articles[index:])
                 break
             try:
                 title = article.get('title', 'No title')[:50]
@@ -197,6 +219,7 @@ class NewsCycleProcessor:
                     posted += 1
                     self.state.posts_this_hour += 1
                     self.state.total_articles_posted += 1
+                    self.state.last_post_time = datetime.now(timezone.utc)
                 
             except Exception as e:
                 self.logger.log_warning(f"Article processing error: {e}")
@@ -204,6 +227,53 @@ class NewsCycleProcessor:
                 continue
         
         return posted
+
+    def _cooldown_remaining_seconds(self) -> int:
+        """Вернуть остаток строгого интервала между успешными news-постами."""
+        if self.state.last_post_time is None:
+            return 0
+        try:
+            cooldown = int(getattr(
+                config.features,
+                'news_publish_cooldown_seconds',
+                14400
+            ))
+        except (AttributeError, TypeError, ValueError):
+            cooldown = 14400
+        elapsed = (
+            datetime.now(timezone.utc) - self.state.last_post_time
+        ).total_seconds()
+        return max(0, int(cooldown - elapsed))
+
+    def _mark_articles_seen(self, articles: List[Dict]) -> None:
+        """Не переносить непубликуемый хвост RSS-пачки в будущие циклы."""
+        for article in articles:
+            self.deduplicator.mark_as_seen(article)
+
+    @staticmethod
+    def _article_sort_key(article: Dict) -> Tuple[int, float]:
+        """Сначала надёжность источника, затем свежесть внутри приоритета."""
+        metadata = article.get('source_metadata') or {}
+        try:
+            priority = int(metadata.get('priority', 0))
+        except (TypeError, ValueError):
+            priority = 0
+
+        published = article.get('published')
+        if isinstance(published, str):
+            try:
+                published = datetime.fromisoformat(
+                    published.replace('Z', '+00:00')
+                )
+            except ValueError:
+                published = None
+        if isinstance(published, datetime):
+            if published.tzinfo is None:
+                published = published.replace(tzinfo=timezone.utc)
+            published_timestamp = published.timestamp()
+        else:
+            published_timestamp = 0.0
+        return priority, published_timestamp
 
     async def _process_article(self, article: Dict) -> bool:
         """Обработать и опубликовать статью как одну логическую операцию."""
@@ -227,6 +297,15 @@ class NewsCycleProcessor:
             return False
 
         message, ai_provider, ai_score = await self._build_message(prepared)
+        if not self._meets_quality_threshold(ai_score):
+            self.state.total_filtered_quality += 1
+            self.logger.log_info(
+                "Article skipped by strict quality gate: "
+                f"score={ai_score!r}, required={self._news_confidence_threshold()}"
+            )
+            self.deduplicator.mark_as_seen(prepared)
+            return False
+
         if not message:
             self.logger.log_warning("Could not build publication message")
             return False
@@ -264,6 +343,24 @@ class NewsCycleProcessor:
                 )
 
         return True
+
+    @staticmethod
+    def _news_confidence_threshold() -> int:
+        try:
+            return int(getattr(config.features, 'min_news_confidence', 85))
+        except (AttributeError, TypeError, ValueError):
+            return 85
+
+    @classmethod
+    def _meets_quality_threshold(cls, score) -> bool:
+        """Fail closed: без корректной AI-оценки новость не публикуется."""
+        if isinstance(score, bool):
+            return False
+        try:
+            numeric_score = float(score)
+        except (TypeError, ValueError):
+            return False
+        return numeric_score >= cls._news_confidence_threshold()
 
     async def _enrich_content(self, article: Dict) -> None:
         """Дополнить RSS-данные полным текстом и изображением, если возможно."""
@@ -322,6 +419,9 @@ class NewsCycleProcessor:
                     analysis = await ai_handler.analyze_article(article)
                     if analysis:
                         ai_score = analysis.get('score')
+
+                if not self._meets_quality_threshold(ai_score):
+                    return None, ai_provider, ai_score
 
                 if hasattr(ai_handler, 'get_summary'):
                     summary = await ai_handler.get_summary(title, text, category)
@@ -418,6 +518,9 @@ class NewsCycleProcessor:
             'total_cycles': self.state.total_cycles,
             'total_fetched': self.state.total_articles_fetched,
             'total_posted': self.state.total_articles_posted,
+            'filtered_quality': self.state.total_filtered_quality,
+            'filtered_cooldown': self.state.total_filtered_cooldown,
+            'filtered_batch_limit': self.state.total_filtered_batch_limit,
             'posts_this_hour': self.state.posts_this_hour,
             'deduplicator_stats': self.deduplicator.get_stats()
         }
