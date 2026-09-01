@@ -850,17 +850,28 @@ class ContentParser:
                     content_type = response.headers.get('Content-Type', '').lower()
                     if not any(img_type in content_type for img_type in ['image/', 'octet-stream']):
                         continue
-                    
-                    max_validation_bytes = max(
-                        int(config.IMAGE_PARTIAL_READ_BYTES),
-                        256 * 1024,
+
+                    max_validation_bytes = int(
+                        getattr(config, 'MAX_IMAGE_SIZE_MB', 10)
+                    ) * 1024 * 1024
+                    declared_length = response.headers.get('Content-Length')
+                    if (
+                        declared_length
+                        and declared_length.isdigit()
+                        and int(declared_length) > max_validation_bytes
+                    ):
+                        continue
+
+                    image_data = await self._read_limited_response(
+                        response,
+                        max_validation_bytes,
                     )
-                    image_data = await response.content.read(max_validation_bytes)
                     if not image_data or len(image_data) < 100:
                         continue
                     
                     try:
                         img = Image.open(io.BytesIO(image_data))
+                        img.load()
                         width, height = img.size
                         
                         if width >= config.MIN_IMAGE_WIDTH and height >= config.MIN_IMAGE_HEIGHT:
@@ -884,6 +895,18 @@ class ContentParser:
         
         print(f"⚠️  [IMG] Подходящее изображение не найдено")
         return None
+
+    @staticmethod
+    async def _read_limited_response(response, max_bytes: int) -> Optional[bytes]:
+        """Прочитать все сетевые chunks до EOF, не превышая лимит."""
+        chunks = []
+        total = 0
+        async for chunk in response.content.iter_chunked(64 * 1024):
+            total += len(chunk)
+            if total > max_bytes:
+                return None
+            chunks.append(chunk)
+        return b''.join(chunks)
     
     def get_stats(self) -> Dict:
         return self.stats.get_summary()

@@ -12,7 +12,7 @@ os.environ.setdefault('TELEGRAM_CHANNEL_ID', '-1001234567890')
 from bs4 import BeautifulSoup
 from PIL import Image
 
-from bot.content_parser import ImageExtractor, ImageURLProcessor
+from bot.content_parser import ContentParser, ImageExtractor, ImageURLProcessor
 from bot.telegram_poster import MessageSanitizer, PostingMetrics, TelegramPoster
 
 
@@ -83,6 +83,38 @@ def test_image_is_normalized_to_telegram_compatible_jpeg():
         assert result.format == 'JPEG'
         assert result.mode == 'RGB'
         assert result.size == (width, height) == (600, 400)
+
+
+def test_image_validation_reads_all_short_network_chunks():
+    class Content:
+        async def iter_chunked(self, size):
+            del size
+            for chunk in (b'first-', b'second-', b'third'):
+                yield chunk
+
+    response = type('Response', (), {'content': Content()})()
+
+    result = asyncio.run(
+        ContentParser._read_limited_response(response, max_bytes=100)
+    )
+
+    assert result == b'first-second-third'
+
+
+def test_image_validation_rejects_body_over_limit():
+    class Content:
+        async def iter_chunked(self, size):
+            del size
+            yield b'12345'
+            yield b'67890'
+
+    response = type('Response', (), {'content': Content()})()
+
+    result = asyncio.run(
+        ContentParser._read_limited_response(response, max_bytes=9)
+    )
+
+    assert result is None
 
 
 def test_photo_plain_fallback_runs_before_text_only():
