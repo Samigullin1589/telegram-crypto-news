@@ -54,16 +54,39 @@ class Config:
         self.GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
         self.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
         self.ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+        self.CHEAPVIBECODE_API_KEY = os.getenv('CHEAPVIBECODE_API_KEY', '')
         
-        self.GEMINI_MODEL = 'gemini-1.5-flash'
-        self.OPENAI_MODEL = 'gpt-4o-mini'
-        self.ANTHROPIC_MODEL = 'claude-3-haiku-20240307'
-        
-        self.AI_MAX_RETRIES = 3
-        self.AI_BACKOFF_FACTOR = 2
-        self.AI_TIMEOUT = 60
-        self.AI_MAX_TOKENS = 1000
-        self.AI_TEMPERATURE = 0.3
+        self.GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+        self.OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+        self.ANTHROPIC_MODEL = os.getenv(
+            'ANTHROPIC_MODEL',
+            'claude-3-haiku-20240307'
+        )
+        self.CHEAPVIBECODE_BASE_URL = os.getenv(
+            'CHEAPVIBECODE_BASE_URL',
+            'https://cheapvibecode.ru/v1'
+        ).rstrip('/')
+        self.CHEAPVIBECODE_MODEL = os.getenv('CHEAPVIBECODE_MODEL', '')
+
+        self.AI_MAX_RETRIES = self._get_int_env('AI_MAX_RETRIES', 3, minimum=1)
+        self.AI_BACKOFF_FACTOR = self._get_float_env(
+            'AI_BACKOFF_FACTOR',
+            2.0,
+            minimum=0.1
+        )
+        self.AI_TIMEOUT = self._get_float_env('AI_TIMEOUT', 60.0, minimum=1.0)
+        self.AI_MAX_TOKENS = self._get_int_env('AI_MAX_TOKENS', 500, minimum=1)
+        self.AI_TRANSLATION_MAX_TOKENS = self._get_int_env(
+            'AI_TRANSLATION_MAX_TOKENS',
+            800,
+            minimum=1
+        )
+        self.AI_TEMPERATURE = self._get_float_env(
+            'AI_TEMPERATURE',
+            0.3,
+            minimum=0.0,
+            maximum=2.0
+        )
         
         self.ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
         self.BSCSCAN_API_KEY = os.getenv('BSCSCAN_API_KEY', '')
@@ -459,6 +482,45 @@ class Config:
     
     def _get_optional_env(self, key: str, default: Optional[str] = None) -> Optional[str]:
         return os.getenv(key, default)
+
+    @staticmethod
+    def _get_int_env(
+        name: str,
+        default: int,
+        minimum: Optional[int] = None,
+        maximum: Optional[int] = None
+    ) -> int:
+        try:
+            value = int(os.getenv(name, str(default)))
+        except (TypeError, ValueError):
+            value = default
+
+        if minimum is not None:
+            value = max(minimum, value)
+        if maximum is not None:
+            value = min(maximum, value)
+        return value
+
+    @staticmethod
+    def _get_float_env(
+        name: str,
+        default: float,
+        minimum: Optional[float] = None,
+        maximum: Optional[float] = None
+    ) -> float:
+        try:
+            value = float(os.getenv(name, str(default)))
+        except (TypeError, ValueError):
+            value = default
+
+        if minimum is not None:
+            value = max(minimum, value)
+        if maximum is not None:
+            value = min(maximum, value)
+        return value
+
+    def has_cheapvibecode_provider(self) -> bool:
+        return bool(self.CHEAPVIBECODE_API_KEY and self.CHEAPVIBECODE_MODEL)
     
     def has_scanner_api_key(self, chain: str) -> bool:
         key_mapping = {
@@ -501,9 +563,16 @@ class Config:
         return bool(self.COINMARKETCAP_API_KEY)
     
     def has_ai_provider(self) -> bool:
-        return bool(self.OPENAI_API_KEY or self.ANTHROPIC_API_KEY or self.GEMINI_API_KEY)
+        return bool(
+            self.has_cheapvibecode_provider()
+            or self.OPENAI_API_KEY
+            or self.ANTHROPIC_API_KEY
+            or self.GEMINI_API_KEY
+        )
     
     def get_ai_provider(self) -> Optional[str]:
+        if self.has_cheapvibecode_provider():
+            return 'cheapvibecode'
         if self.OPENAI_API_KEY:
             return 'openai'
         elif self.ANTHROPIC_API_KEY:
@@ -549,7 +618,7 @@ class Config:
             print("⚠️  [CONFIG] No active RSS feeds configured")
         
         if not self.has_ai_provider():
-            print("⚠️  [CONFIG] No AI provider configured (OpenAI/Anthropic/Gemini)")
+            print("⚠️  [CONFIG] No AI provider configured")
         
         missing_keys = self.get_missing_scanner_keys()
         if missing_keys:
@@ -618,6 +687,7 @@ class Config:
             },
             'ai': {
                 'provider': self.get_ai_provider(),
+                'cheapvibecode_configured': self.has_cheapvibecode_provider(),
                 'openai_configured': bool(self.OPENAI_API_KEY),
                 'anthropic_configured': bool(self.ANTHROPIC_API_KEY),
                 'gemini_configured': bool(self.GEMINI_API_KEY)
@@ -694,6 +764,7 @@ ADMIN_CHAT_ID = config.ADMIN_CHAT_ID
 GEMINI_API_KEY = config.GEMINI_API_KEY
 OPENAI_API_KEY = config.OPENAI_API_KEY
 ANTHROPIC_API_KEY = config.ANTHROPIC_API_KEY
+CHEAPVIBECODE_API_KEY = config.CHEAPVIBECODE_API_KEY
 
 ETHERSCAN_API_KEY = config.ETHERSCAN_API_KEY
 BSCSCAN_API_KEY = config.BSCSCAN_API_KEY
@@ -776,6 +847,7 @@ __all__ = [
     'GEMINI_API_KEY',
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
+    'CHEAPVIBECODE_API_KEY',
     'ETHERSCAN_API_KEY',
     'BSCSCAN_API_KEY',
     'POLYGONSCAN_API_KEY',

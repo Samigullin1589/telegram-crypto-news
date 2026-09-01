@@ -9,6 +9,33 @@ AI-powered crypto monitoring system with Telegram integration.
 2. Telegram Bot Token
 3. Telegram Chat ID
 
+## CheapVibeCode API
+
+The integration uses the provider's OpenAI-compatible API:
+
+- base URL: `https://cheapvibecode.ru/v1`
+- authorization: `Authorization: Bearer <API key>`
+- models endpoint: `GET /models`
+- chat endpoint: `POST /chat/completions`
+
+Never paste the API key into chat, Git, command arguments, or logs. To inspect
+the authenticated model catalog, run the helper locally and enter the key only
+at its hidden prompt:
+
+```powershell
+python scripts/configure_cheapvibecode.py --list-models
+```
+
+After selecting an exact model ID from that catalog, configure production with:
+
+```powershell
+python scripts/configure_cheapvibecode.py --configure --model "EXACT_MODEL_ID"
+```
+
+The helper performs a minimal connectivity check, atomically updates the VPS
+`.env` with mode `600`, restarts the service, verifies both health endpoints,
+and restores the previous environment if the health check fails.
+
 ### Step-by-Step Deploy
 
 #### 1. Prepare Files

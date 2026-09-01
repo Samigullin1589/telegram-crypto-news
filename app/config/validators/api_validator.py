@@ -57,13 +57,22 @@ class APIValidator(BaseValidator):
     def _validate_ai_providers(self) -> None:
         """Валидация AI провайдеров"""
         logger.debug("Проверка AI провайдеров...")
+
+        if (
+            getattr(self.config.api, 'cheapvibecode_api_key', '')
+            and not getattr(self.config.api, 'cheapvibecode_model', '')
+        ):
+            self._add_warning(
+                "CHEAPVIBECODE_API_KEY задан, но CHEAPVIBECODE_MODEL отсутствует. "
+                "CheapVibeCode не будет активирован без точного model ID."
+            )
         
         if not self.config.api.has_ai_provider():
             self._add_warning(
                 "AI провайдер не настроен. "
                 "AI-обработка новостей будет недоступна. "
                 "Новости будут публиковаться в сыром виде. "
-                "Установите одну из переменных: OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY"
+                "Установите CheapVibeCode или один из стандартных AI провайдеров."
             )
             return
         
@@ -72,7 +81,11 @@ class APIValidator(BaseValidator):
         self._add_info(f"AI провайдер: {provider}")
         
         # Валидация ключей для каждого провайдера
-        if provider == 'openai' and self.config.api.openai_api_key:
+        if provider == 'cheapvibecode':
+            self._add_info(
+                f"CheapVibeCode model: {self.config.api.cheapvibecode_model}"
+            )
+        elif provider == 'openai' and self.config.api.openai_api_key:
             self._validate_openai_key()
         elif provider == 'gemini' and self.config.api.gemini_api_key:
             self._validate_gemini_key()

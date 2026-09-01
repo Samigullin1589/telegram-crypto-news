@@ -198,7 +198,14 @@ class TradingSystem:
             }
         
         try:
-            return self.performance.get_summary_stats()
+            metrics = await self.performance.calculate_metrics()
+            return {
+                'total_signals': 0,
+                'total_trades': metrics.total_trades,
+                'win_rate': metrics.win_rate,
+                'avg_profit': metrics.avg_pnl_per_trade_pct,
+                'total_pnl': metrics.total_pnl_usd
+            }
         except Exception as e:
             logger.error(f"❌ [TRADING] Error getting stats: {e}")
             return {

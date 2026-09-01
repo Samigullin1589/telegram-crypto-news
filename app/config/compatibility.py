@@ -62,6 +62,7 @@ def setup_compatibility_properties(config_instance: 'Config') -> None:
         config_instance.GEMINI_API_KEY = config_instance.api.gemini_api_key
         config_instance.OPENAI_API_KEY = config_instance.api.openai_api_key
         config_instance.ANTHROPIC_API_KEY = config_instance.api.anthropic_api_key
+        config_instance.CHEAPVIBECODE_API_KEY = config_instance.api.cheapvibecode_api_key
         
         # ====================================================================
         # API KEYS - BLOCKCHAIN SCANNERS

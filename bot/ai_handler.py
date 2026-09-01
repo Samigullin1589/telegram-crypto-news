@@ -50,10 +50,16 @@ except ImportError:
             GEMINI_MODEL = "gemini-pro"
             OPENAI_API_KEY = ""
             OPENAI_MODEL = "gpt-3.5-turbo"
+            CHEAPVIBECODE_API_KEY = ""
+            CHEAPVIBECODE_BASE_URL = "https://cheapvibecode.ru/v1"
+            CHEAPVIBECODE_MODEL = ""
             MAX_ARTICLE_TEXT_LENGTH = 3000
             AI_MAX_RETRIES = 2
             AI_TIMEOUT = 30
             AI_BACKOFF_FACTOR = 2
+            AI_MAX_TOKENS = 500
+            AI_TRANSLATION_MAX_TOKENS = 800
+            AI_TEMPERATURE = 0.3
             ai_prompt_template = """Создай краткое саммари этой новости для crypto-канала.
             
 Формат ответа:
@@ -70,6 +76,7 @@ class AIProviderStats:
     
     def __init__(self):
         self.stats = {
+            'cheapvibecode': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None, 'translations': 0},
             'gemini': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None, 'translations': 0},
             'openai': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None, 'translations': 0},
             'dummy': {'success': 0, 'failures': 0, 'total_time': 0.0, 'last_success': None, 'translations': 0}
@@ -105,6 +112,15 @@ class AIProviderStats:
         return self.stats[provider]['total_time'] / self.stats[provider]['success']
     
     def get_preferred_provider(self) -> str:
+        if (
+            OPENAI_AVAILABLE
+            and getattr(config, 'CHEAPVIBECODE_API_KEY', '')
+            and getattr(config, 'CHEAPVIBECODE_MODEL', '')
+        ):
+            cheapvibecode_score = self.get_success_rate('cheapvibecode')
+            if cheapvibecode_score >= 0.7:
+                return 'cheapvibecode'
+
         if GEMINI_AVAILABLE and config.GEMINI_API_KEY:
             gemini_score = self.get_success_rate('gemini') * 1.2
             if gemini_score >= 0.7:
@@ -223,7 +239,10 @@ class AIHandler:
         if OPENAI_AVAILABLE and hasattr(config, 'OPENAI_API_KEY') and config.OPENAI_API_KEY:
             try:
                 http_client = httpx.Client(
-                    timeout=httpx.Timeout(60.0, connect=30.0),
+                    timeout=httpx.Timeout(
+                        float(config.AI_TIMEOUT),
+                        connect=min(30.0, float(config.AI_TIMEOUT))
+                    ),
                     follow_redirects=True,
                     limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
                 )
@@ -231,7 +250,7 @@ class AIHandler:
                 self.openai_client = OpenAI(
                     api_key=config.OPENAI_API_KEY,
                     http_client=http_client,
-                    timeout=60.0
+                    timeout=float(config.AI_TIMEOUT)
                 )
                 print("   ✅ OpenAI API доступен")
             except Exception as e:
@@ -241,6 +260,37 @@ class AIHandler:
                 print("   ⚠️ openai не установлен")
             else:
                 print("   ⚠️ OPENAI_API_KEY не установлен")
+
+        self.cheapvibecode_client = None
+        if (
+            OPENAI_AVAILABLE
+            and getattr(config, 'CHEAPVIBECODE_API_KEY', '')
+            and getattr(config, 'CHEAPVIBECODE_MODEL', '')
+        ):
+            try:
+                http_client = httpx.Client(
+                    timeout=httpx.Timeout(
+                        float(config.AI_TIMEOUT),
+                        connect=min(30.0, float(config.AI_TIMEOUT))
+                    ),
+                    follow_redirects=True,
+                    limits=httpx.Limits(
+                        max_keepalive_connections=5,
+                        max_connections=10
+                    )
+                )
+
+                self.cheapvibecode_client = OpenAI(
+                    api_key=config.CHEAPVIBECODE_API_KEY,
+                    base_url=config.CHEAPVIBECODE_BASE_URL,
+                    http_client=http_client,
+                    timeout=float(config.AI_TIMEOUT)
+                )
+                print("   ✅ CheapVibeCode API настроен")
+            except Exception as e:
+                print(f"   ⚠️ CheapVibeCode API недоступен: {type(e).__name__}")
+        elif OPENAI_AVAILABLE and getattr(config, 'CHEAPVIBECODE_API_KEY', ''):
+            print("   ⚠️ CHEAPVIBECODE_MODEL не установлен")
         
         self.stats = AIProviderStats()
         self.validator = ResponseValidator()
@@ -249,7 +299,7 @@ class AIHandler:
         self._last_request_time = 0
         self._min_request_interval = 1.0
         
-        if self.gemini_model or self.openai_client:
+        if self.gemini_model or self.openai_client or self.cheapvibecode_client:
             print("✅ [AI] Handler инициализирован (AI режим)")
             print("   • Translation: ✅ Enabled (EN→RU)")
         else:
@@ -317,27 +367,28 @@ class AIHandler:
         await self._rate_limit()
         
         provider = self.stats.get_preferred_provider()
-        
-        result = await self._try_translation(provider, text, source_lang, target_lang)
-        if result:
-            translated, elapsed = result
-            self.stats.record_success(provider, elapsed, is_translation=True)
-            self.cache.set('translate', source_lang, target_lang, text[:100], translated)
-            return translated
-        
-        if provider == 'gemini' and self.openai_client:
-            fallback = 'openai'
-        elif provider == 'openai' and self.gemini_model:
-            fallback = 'gemini'
-        else:
-            return None
-        
-        if fallback != 'dummy':
-            result = await self._try_translation(fallback, text, source_lang, target_lang)
+
+        for candidate in self._get_provider_order(provider, include_dummy=False):
+            result = await self._try_translation(
+                candidate,
+                text,
+                source_lang,
+                target_lang
+            )
             if result:
                 translated, elapsed = result
-                self.stats.record_success(fallback, elapsed, is_translation=True)
-                self.cache.set('translate', source_lang, target_lang, text[:100], translated)
+                self.stats.record_success(
+                    candidate,
+                    elapsed,
+                    is_translation=True
+                )
+                self.cache.set(
+                    'translate',
+                    source_lang,
+                    target_lang,
+                    text[:100],
+                    translated
+                )
                 return translated
         
         return None
@@ -352,10 +403,24 @@ class AIHandler:
         start_time = time.time()
         
         try:
-            if provider == 'gemini' and self.gemini_model:
+            if provider == 'cheapvibecode' and self.cheapvibecode_client:
+                translated = await self._translate_with_openai_compatible(
+                    self.cheapvibecode_client,
+                    config.CHEAPVIBECODE_MODEL,
+                    text,
+                    source_lang,
+                    target_lang
+                )
+            elif provider == 'gemini' and self.gemini_model:
                 translated = await self._translate_with_gemini(text, source_lang, target_lang)
             elif provider == 'openai' and self.openai_client:
-                translated = await self._translate_with_openai(text, source_lang, target_lang)
+                translated = await self._translate_with_openai_compatible(
+                    self.openai_client,
+                    config.OPENAI_MODEL,
+                    text,
+                    source_lang,
+                    target_lang
+                )
             else:
                 return None
             
@@ -432,6 +497,22 @@ Translation:"""
                     raise
     
     async def _translate_with_openai(self, text: str, source_lang: str, target_lang: str) -> str:
+        return await self._translate_with_openai_compatible(
+            self.openai_client,
+            config.OPENAI_MODEL,
+            text,
+            source_lang,
+            target_lang
+        )
+
+    async def _translate_with_openai_compatible(
+        self,
+        client,
+        model: str,
+        text: str,
+        source_lang: str,
+        target_lang: str
+    ) -> str:
         lang_names = {
             'en': 'English',
             'ru': 'Russian',
@@ -450,43 +531,22 @@ Translation:"""
         
         system_prompt = f"You are a professional translator. Translate text from {source_name} to {target_name}. Return ONLY the translation, nothing else."
         
-        loop = asyncio.get_event_loop()
-        
-        for attempt in range(config.AI_MAX_RETRIES):
-            try:
-                response = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: self.openai_client.chat.completions.create(
-                            model=config.OPENAI_MODEL,
-                            messages=[
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": text}
-                            ],
-                            temperature=0.1,
-                            max_tokens=2000
-                        )
-                    ),
-                    timeout=config.AI_TIMEOUT
-                )
-                
-                translated = response.choices[0].message.content
-                if not translated:
-                    raise ValueError("Empty response from OpenAI")
-                
-                return translated.strip()
-                
-            except asyncio.TimeoutError:
-                if attempt < config.AI_MAX_RETRIES - 1:
-                    await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
-                else:
-                    raise
-            
-            except Exception as e:
-                if attempt < config.AI_MAX_RETRIES - 1:
-                    await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
-                else:
-                    raise
+        response = await self._create_openai_chat_completion(
+            client=client,
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.1,
+            max_tokens=config.AI_TRANSLATION_MAX_TOKENS
+        )
+
+        translated = response.choices[0].message.content
+        if not translated:
+            raise ValueError("Empty response from OpenAI-compatible provider")
+
+        return translated.strip()
     
     async def get_summary(
         self,
@@ -511,36 +571,49 @@ Translation:"""
         
         category_emoji = category.split()[-1] if category else '📰'
         
-        result = await self._try_provider(provider, title, text, category_emoji)
-        if result:
-            summary, elapsed = result
-            self.stats.record_success(provider, elapsed, is_translation=False)
-            self.cache.set('summary', title, text[:100], summary)
-            return summary, provider
-        
-        if provider == 'gemini' and self.openai_client:
-            fallback = 'openai'
-        elif provider == 'openai' and self.gemini_model:
-            fallback = 'gemini'
-        else:
-            fallback = 'dummy'
-        
-        if fallback != 'dummy':
-            result = await self._try_provider(fallback, title, text, category_emoji)
+        for candidate in self._get_provider_order(provider, include_dummy=True):
+            result = await self._try_provider(
+                candidate,
+                title,
+                text,
+                category_emoji
+            )
             if result:
                 summary, elapsed = result
-                self.stats.record_success(fallback, elapsed, is_translation=False)
+                self.stats.record_success(
+                    candidate,
+                    elapsed,
+                    is_translation=False
+                )
                 self.cache.set('summary', title, text[:100], summary)
-                return summary, fallback
-        
-        result = await self._try_provider('dummy', title, text, category_emoji)
-        if result:
-            summary, elapsed = result
-            self.stats.record_success('dummy', elapsed, is_translation=False)
-            self.cache.set('summary', title, text[:100], summary)
-            return summary, 'dummy'
+                return summary, candidate
         
         return None
+
+    def _get_provider_order(
+        self,
+        preferred: str,
+        include_dummy: bool
+    ) -> list:
+        available = []
+        if self.cheapvibecode_client:
+            available.append('cheapvibecode')
+        if self.gemini_model:
+            available.append('gemini')
+        if self.openai_client:
+            available.append('openai')
+
+        ordered = []
+        if preferred == 'dummy' and include_dummy:
+            ordered.append('dummy')
+
+        for provider in [preferred, *available]:
+            if provider in available and provider not in ordered:
+                ordered.append(provider)
+
+        if include_dummy and 'dummy' not in ordered:
+            ordered.append('dummy')
+        return ordered
     
     async def _try_provider(
         self,
@@ -552,10 +625,24 @@ Translation:"""
         start_time = time.time()
         
         try:
-            if provider == 'gemini' and self.gemini_model:
+            if provider == 'cheapvibecode' and self.cheapvibecode_client:
+                summary = await self._call_openai_compatible(
+                    self.cheapvibecode_client,
+                    config.CHEAPVIBECODE_MODEL,
+                    title,
+                    text,
+                    emoji
+                )
+            elif provider == 'gemini' and self.gemini_model:
                 summary = await self._call_gemini(title, text, emoji)
             elif provider == 'openai' and self.openai_client:
-                summary = await self._call_openai(title, text, emoji)
+                summary = await self._call_openai_compatible(
+                    self.openai_client,
+                    config.OPENAI_MODEL,
+                    title,
+                    text,
+                    emoji
+                )
             elif provider == 'dummy':
                 summary = self._call_dummy(title, text, emoji)
             else:
@@ -608,46 +695,94 @@ Translation:"""
                     raise
     
     async def _call_openai(self, title: str, text: str, emoji: str) -> str:
+        return await self._call_openai_compatible(
+            self.openai_client,
+            config.OPENAI_MODEL,
+            title,
+            text,
+            emoji
+        )
+
+    async def _call_openai_compatible(
+        self,
+        client,
+        model: str,
+        title: str,
+        text: str,
+        emoji: str
+    ) -> str:
         prompt = config.ai_prompt_template.format(emoji=emoji, title=title)
         user_prompt = f"Заголовок: {title}\n\nПолный текст статьи:\n{text[:config.MAX_ARTICLE_TEXT_LENGTH]}"
-        
-        loop = asyncio.get_event_loop()
-        
+
+        response = await self._create_openai_chat_completion(
+            client=client,
+            model=model,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=config.AI_TEMPERATURE,
+            max_tokens=config.AI_MAX_TOKENS
+        )
+
+        summary = response.choices[0].message.content
+        if not summary:
+            raise ValueError("Empty response from OpenAI-compatible provider")
+
+        return self._sanitize_markdown(summary)
+
+    async def _create_openai_chat_completion(
+        self,
+        client,
+        model: str,
+        messages: list,
+        temperature: float,
+        max_tokens: int
+    ):
+        loop = asyncio.get_running_loop()
+
         for attempt in range(config.AI_MAX_RETRIES):
             try:
-                response = await asyncio.wait_for(
+                return await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
-                        lambda: self.openai_client.chat.completions.create(
-                            model=config.OPENAI_MODEL,
-                            messages=[
-                                {"role": "system", "content": prompt},
-                                {"role": "user", "content": user_prompt}
-                            ],
-                            temperature=0.7,
-                            max_tokens=1000
+                        lambda: client.chat.completions.create(
+                            model=model,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens
                         )
                     ),
                     timeout=config.AI_TIMEOUT
                 )
-                
-                summary = response.choices[0].message.content
-                if not summary:
-                    raise ValueError("Empty response from OpenAI")
-                
-                return self._sanitize_markdown(summary)
-                
             except asyncio.TimeoutError:
-                if attempt < config.AI_MAX_RETRIES - 1:
-                    await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
-                else:
+                if attempt >= config.AI_MAX_RETRIES - 1:
                     raise
-            
             except Exception as e:
-                if attempt < config.AI_MAX_RETRIES - 1:
-                    await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
-                else:
+                if (
+                    not self._is_transient_ai_error(e)
+                    or attempt >= config.AI_MAX_RETRIES - 1
+                ):
                     raise
+
+            await asyncio.sleep(config.AI_BACKOFF_FACTOR * (2 ** attempt))
+
+    @staticmethod
+    def _is_transient_ai_error(error: Exception) -> bool:
+        status_code = getattr(error, 'status_code', None)
+        if status_code in {408, 409, 425, 429, 500, 502, 503, 504}:
+            return True
+
+        if isinstance(error, (ConnectionError, TimeoutError)):
+            return True
+
+        error_text = str(error).lower()
+        transient_markers = (
+            'timeout', 'timed out', 'rate limit',
+            'connection', 'temporarily unavailable',
+            'service unavailable', 'gateway timeout'
+        )
+        return any(marker in error_text for marker in transient_markers)
     
     def _call_dummy(self, title: str, text: str, emoji: str) -> str:
         sentences = text.split('.')[:3]
@@ -698,17 +833,17 @@ Translation:"""
     def get_stats(self) -> Dict:
         total_requests = sum(
             self.stats.stats[p]['success'] + self.stats.stats[p]['failures']
-            for p in ['gemini', 'openai', 'dummy']
+            for p in ['cheapvibecode', 'gemini', 'openai', 'dummy']
         )
         
         successful_requests = sum(
             self.stats.stats[p]['success']
-            for p in ['gemini', 'openai', 'dummy']
+            for p in ['cheapvibecode', 'gemini', 'openai', 'dummy']
         )
         
         total_translations = sum(
             self.stats.stats[p]['translations']
-            for p in ['gemini', 'openai', 'dummy']
+            for p in ['cheapvibecode', 'gemini', 'openai', 'dummy']
         )
         
         return {
@@ -722,6 +857,13 @@ Translation:"""
     
     def get_stats_summary(self) -> Dict:
         return {
+            'cheapvibecode': {
+                'available': self.cheapvibecode_client is not None,
+                'success_rate': f"{self.stats.get_success_rate('cheapvibecode') * 100:.1f}%",
+                'avg_time': f"{self.stats.get_avg_time('cheapvibecode'):.2f}s",
+                'total_requests': self.stats.stats['cheapvibecode']['success'] + self.stats.stats['cheapvibecode']['failures'],
+                'translations': self.stats.stats['cheapvibecode']['translations']
+            },
             'gemini': {
                 'available': self.gemini_model is not None,
                 'success_rate': f"{self.stats.get_success_rate('gemini') * 100:.1f}%",
