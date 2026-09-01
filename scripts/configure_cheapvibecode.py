@@ -16,6 +16,8 @@ from typing import Any, Dict, List
 
 
 DEFAULT_BASE_URL = "https://cheapvibecode.ru/v1"
+DEFAULT_MODEL = "qwen3.8-max"
+PUBLIC_PRICING_URL = "https://ru.cheapvibecode.ru/api/public/pricing"
 DEFAULT_HOST = "root@82.38.96.250"
 DEFAULT_IDENTITY = Path.home() / ".ssh" / "cline_pyaterochka_ed25519"
 DEFAULT_APP_PATH = "/opt/telegram-crypto-news"
@@ -104,6 +106,34 @@ print(json.dumps(safe_models, ensure_ascii=False))
     return sorted(models, key=lambda item: item["id"])
 
 
+def fetch_public_pricing() -> List[Dict[str, Any]]:
+    import urllib.request
+
+    request = urllib.request.Request(
+        PUBLIC_PRICING_URL,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "telegram-crypto-news-config/1.0",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        payload = json.load(response)
+
+    models = []
+    for item in payload.get("pricing_tiers", []):
+        if not isinstance(item, dict) or not item.get("model"):
+            continue
+        multiplier = float(item["multiplier"])
+        models.append({
+            "id": item["model"],
+            "multiplier": multiplier,
+            "cost_rub_per_1m_min_topup": round(multiplier * 3.2, 6),
+            "supports_vision": bool(item.get("supports_vision")),
+            "input_modalities": item.get("input_modalities", []),
+        })
+    return sorted(models, key=lambda item: (item["multiplier"], item["id"]))
+
+
 def print_models(models: List[Dict[str, Any]]) -> None:
     if not models:
         print("Провайдер вернул пустой список моделей.")
@@ -120,6 +150,10 @@ def print_models(models: List[Dict[str, Any]]) -> None:
             "input_price",
             "output_price",
             "pricing",
+            "multiplier",
+            "cost_rub_per_1m_min_topup",
+            "supports_vision",
+            "input_modalities",
         ):
             if key in model:
                 details.append(f"{key}={model[key]}")
@@ -309,20 +343,26 @@ def parse_args() -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--list-models", action="store_true")
     mode.add_argument("--configure", action="store_true")
-    parser.add_argument("--model", help="Exact model ID from --list-models")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help=f"Exact model ID (default: {DEFAULT_MODEL})",
+    )
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--identity-file", type=Path, default=DEFAULT_IDENTITY)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--app-path", default=DEFAULT_APP_PATH)
     parser.add_argument("--service", default=DEFAULT_SERVICE)
     args = parser.parse_args()
-    if args.configure and not args.model:
-        parser.error("--configure requires --model")
     return args
 
 
 def main() -> int:
     args = parse_args()
+    if args.list_models:
+        print_models(fetch_public_pricing())
+        return 0
+
     if not args.identity_file.is_file():
         raise RuntimeError(f"SSH identity file not found: {args.identity_file}")
 
@@ -331,9 +371,6 @@ def main() -> int:
         raise RuntimeError("API key is empty")
 
     models = fetch_models(args, api_key)
-    print_models(models)
-    if args.list_models:
-        return 0
 
     model_ids = {item["id"] for item in models}
     if args.model not in model_ids:

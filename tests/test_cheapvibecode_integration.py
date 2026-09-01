@@ -78,12 +78,23 @@ def test_api_config_selects_complete_cheapvibecode_configuration(monkeypatch):
 def test_api_config_does_not_activate_key_without_model(monkeypatch):
     clear_ai_environment(monkeypatch)
     monkeypatch.setenv('CHEAPVIBECODE_API_KEY', 'secret-value')
+    monkeypatch.setenv('CHEAPVIBECODE_MODEL', '')
 
     config = APIConfig()
 
     assert config.has_cheapvibecode_provider() is False
     assert config.has_ai_provider() is False
     assert config.get_ai_provider() is None
+
+
+def test_api_config_uses_cost_efficient_default_model(monkeypatch):
+    clear_ai_environment(monkeypatch)
+    monkeypatch.setenv('CHEAPVIBECODE_API_KEY', 'secret-value')
+
+    config = APIConfig()
+
+    assert config.cheapvibecode_model == 'qwen3.8-max'
+    assert config.get_ai_provider() == 'cheapvibecode'
 
 
 def test_api_config_clamps_invalid_token_and_temperature_values(monkeypatch):

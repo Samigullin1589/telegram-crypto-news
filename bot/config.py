@@ -66,7 +66,10 @@ class Config:
             'CHEAPVIBECODE_BASE_URL',
             'https://cheapvibecode.ru/v1'
         ).rstrip('/')
-        self.CHEAPVIBECODE_MODEL = os.getenv('CHEAPVIBECODE_MODEL', '')
+        self.CHEAPVIBECODE_MODEL = os.getenv(
+            'CHEAPVIBECODE_MODEL',
+            'qwen3.8-max'
+        )
 
         self.AI_MAX_RETRIES = self._get_int_env('AI_MAX_RETRIES', 3, minimum=1)
         self.AI_BACKOFF_FACTOR = self._get_float_env(

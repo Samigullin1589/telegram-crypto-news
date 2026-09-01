@@ -19,17 +19,19 @@ The integration uses the provider's OpenAI-compatible API:
 - chat endpoint: `POST /chat/completions`
 
 Never paste the API key into chat, Git, command arguments, or logs. To inspect
-the authenticated model catalog, run the helper locally and enter the key only
-at its hidden prompt:
+the provider's public pricing catalog, run:
 
 ```powershell
 python scripts/configure_cheapvibecode.py --list-models
 ```
 
-After selecting an exact model ID from that catalog, configure production with:
+The default model is `qwen3.8-max`: it has the minimum public pricing multiplier
+of `0.05` (about `0.16 ₽ / 1M` weighted tokens at the minimum top-up tier) and
+is suitable for multilingual text summaries. Configure production with one
+hidden key prompt:
 
 ```powershell
-python scripts/configure_cheapvibecode.py --configure --model "EXACT_MODEL_ID"
+python scripts/configure_cheapvibecode.py --configure
 ```
 
 The helper performs a minimal connectivity check, atomically updates the VPS
