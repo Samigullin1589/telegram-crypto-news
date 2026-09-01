@@ -234,7 +234,9 @@ backup_path = os.path.join(
     backup_dir,
     ".env.pre-cheapvibecode-" + str(int(time.time())),
 )
+original_stat = os.stat(env_path, follow_symlinks=False)
 shutil.copy2(env_path, backup_path)
+os.chown(backup_path, original_stat.st_uid, original_stat.st_gid)
 os.chmod(backup_path, 0o600)
 updates = {
     "CHEAPVIBECODE_API_KEY": payload["api_key"],
@@ -270,12 +272,14 @@ for key, value in updates.items():
 directory = os.path.dirname(env_path)
 fd, temporary_path = tempfile.mkstemp(prefix=".env.", dir=directory, text=True)
 try:
+    os.fchown(fd, original_stat.st_uid, original_stat.st_gid)
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write("\n".join(result) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary_path, env_path)
+    os.chown(env_path, original_stat.st_uid, original_stat.st_gid)
     os.chmod(env_path, 0o600)
 finally:
     if os.path.exists(temporary_path):
@@ -322,7 +326,7 @@ def restart_and_check(args: argparse.Namespace, backup_path: str) -> None:
 
     rollback = (
         "set -e; "
-        f"cp {shlex.quote(backup_path)} "
+        f"cp -p -- {shlex.quote(backup_path)} "
         f"{shlex.quote(args.app_path + '/.env')}; "
         f"chmod 600 {shlex.quote(args.app_path + '/.env')}; "
         f"systemctl restart {shlex.quote(args.service)}; "

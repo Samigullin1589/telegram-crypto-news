@@ -304,6 +304,40 @@ def test_secure_helper_transfers_key_only_through_stdin(monkeypatch, tmp_path):
     assert all('stdin-only-secret' not in argument for argument in captured['command'])
 
 
+def test_secure_helper_preserves_environment_ownership(monkeypatch):
+    captured = {}
+
+    def fake_run_remote_python(args, source, payload):
+        captured['source'] = source
+        captured['payload'] = payload
+        return '{"status": "ENV_UPDATED", "backup_path": "/safe/backup"}'
+
+    monkeypatch.setattr(
+        configure_cheapvibecode,
+        'run_remote_python',
+        fake_run_remote_python,
+    )
+    args = argparse.Namespace(
+        app_path='/opt/example',
+        base_url='https://cheapvibecode.ru/v1',
+    )
+
+    backup_path = configure_cheapvibecode.update_remote_environment(
+        args,
+        'stdin-only-secret',
+        'qwen3.8-max',
+    )
+
+    source = captured['source']
+    assert backup_path == '/safe/backup'
+    assert 'os.stat(env_path, follow_symlinks=False)' in source
+    assert 'os.chown(backup_path, original_stat.st_uid, original_stat.st_gid)' in source
+    assert 'os.fchown(fd, original_stat.st_uid, original_stat.st_gid)' in source
+    assert 'os.chown(env_path, original_stat.st_uid, original_stat.st_gid)' in source
+    assert 'stdin-only-secret' not in source
+    assert captured['payload']['api_key'] == 'stdin-only-secret'
+
+
 def test_trading_system_uses_async_performance_metrics():
     from app.trading_system import TradingSystem
 
